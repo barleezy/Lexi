@@ -52,6 +52,15 @@ AFFECT AND DECAY
 ${affectAndDecay}`;
 }
 
+/** Stub until a memory store exists. Do not invent salience numbers. */
+function getDecayStateForTurn() {
+  return "no active decay tags";
+}
+
+function buildDecayState() {
+  return `CURRENT DECAY STATE: ${getDecayStateForTurn()}`;
+}
+
 function buildSessionUpdate() {
   return {
     type: "session.update",
@@ -98,6 +107,7 @@ export class VoiceSession {
   private outBytes = 0;
   private inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0 };
   private by = "client";
+  private decaySentForTurn = false;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -185,7 +195,7 @@ export class VoiceSession {
 
     ws.addEventListener("open", () => {
       this.logger.log("ws.open", { ms: Date.now() - opened });
-      this.refreshSession();
+      this.send(buildSessionUpdate());
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
         for (const audio of this.pending) {
@@ -287,6 +297,7 @@ export class VoiceSession {
 
     switch (type) {
       case "input_audio_buffer.speech_started":
+        this.decaySentForTurn = false;
         if (this.phase === "speaking") {
           const dropped = this.player?.stop() ?? 0;
           this.logger.log("play.stop", { reason: "barge-in", dropped_ms: dropped });
@@ -295,13 +306,13 @@ export class VoiceSession {
         break;
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
-        this.refreshSession();
+        this.refreshDecayState();
         this.setPhase("thinking");
         break;
       case "input_audio_buffer.committed": {
         const itemId = typeof event.item_id === "string" ? event.item_id : crypto.randomUUID();
         this.upsert({ id: itemId, role: "user", text: "" });
-        this.refreshSession();
+        this.refreshDecayState();
         break;
       }
       case "conversation.item.input_audio_transcription.updated": {
@@ -349,6 +360,7 @@ export class VoiceSession {
           underruns: this.player?.underruns ?? 0,
           drain_ms_max: this.player?.drainMsMax ?? 0,
         });
+        this.decaySentForTurn = false;
         this.setPhase("listening");
         break;
       }
@@ -384,12 +396,30 @@ export class VoiceSession {
     this.player.play(bytes);
   }
 
-  private refreshSession() {
-    this.send(buildSessionUpdate());
+  private refreshDecayState() {
+    if (this.stopped || this.decaySentForTurn) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.decaySentForTurn = true;
+    const text = buildDecayState();
+    this.logger.log("decay.refresh", { text });
+    // Per-turn payload is decay only. session.update would replace instructions
+    // wholesale and resend the persona; attach a small context item instead.
+    this.send(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      },
+      true,
+    );
   }
 
   private emitText(text: string) {
-    this.refreshSession();
+    this.decaySentForTurn = false;
+    this.refreshDecayState();
     this.send({
       type: "conversation.item.create",
       item: {
@@ -406,7 +436,8 @@ export class VoiceSession {
     if (!this.pendingText.length) return false;
     const queued = this.pendingText.splice(0);
     this.logger.log("text.flush", { messages: queued.length });
-    this.refreshSession();
+    this.decaySentForTurn = false;
+    this.refreshDecayState();
     for (const text of queued) {
       this.send({
         type: "conversation.item.create",
