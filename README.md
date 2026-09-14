@@ -4,7 +4,15 @@ Lexi is a voice-first companion. The homepage composer talks to Grok Speech-to-S
 
 1. Copy `.env.example` to `.env.local`.
 2. Set `XAI_API_KEY` on the **server only**. The Next.js route `POST /api/realtime/session` exchanges it for a short-lived xAI client secret. The browser never sees the long-lived key.
-3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key).
+3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key). Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
+
+## Memory (Neon)
+
+1. Create a Neon Postgres database and copy the connection string.
+2. Set `DATABASE_URL` (or `NEON_DATABASE_URL`) in `.env.local` and in Vercel env — server-only, never `NEXT_PUBLIC_`.
+3. Create the table: `POST /api/memory/migrate` (safe `IF NOT EXISTS`), or run `db/migrations/001_memories.sql`. The store also creates the table on first use.
+4. Upsert: `POST /api/memory` with `{ userId, memoryKey, rawText, startSalience }` (`startSalience` 1–10). Recall + decay write-back: `GET /api/memory?userId=ian`. Compact voice lines: `GET /api/memory/decay-state`.
+5. Decay (locked): band from **start** salience — low 1–3 rate 0.08, medium 4–6 rate 0.02, high 7–10 rate 0.005. `new = start × (1 − rate)^days`, `days = (recall − t0) / 86400`, floor 1. Clock is `t0`.
 
 First human test should use **headphones**. Speaker echo is the mic hearing Lexi, not a loop bug.
 

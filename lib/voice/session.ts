@@ -52,13 +52,30 @@ AFFECT AND DECAY
 ${affectAndDecay}`;
 }
 
-/** Stub until a memory store exists. Do not invent salience numbers. */
-function getDecayStateForTurn() {
-  return "no active decay tags";
+const DEFAULT_USER_ID = "ian";
+
+function clientUserId() {
+  if (typeof document === "undefined") return DEFAULT_USER_ID;
+  const match = document.cookie.match(/(?:^|;\s*)lexi_user_id=([^;]+)/);
+  return match?.[1] ? decodeURIComponent(match[1]) : DEFAULT_USER_ID;
 }
 
-function buildDecayState() {
-  return `CURRENT DECAY STATE: ${getDecayStateForTurn()}`;
+async function fetchDecayStateForTurn() {
+  try {
+    const userId = clientUserId();
+    const response = await fetch(`/api/memory/decay-state?userId=${encodeURIComponent(userId)}`, {
+      headers: {
+        "x-lexi-user-id": userId,
+        "ngrok-skip-browser-warning": "1",
+      },
+    });
+    const body = (await response.json()) as { state?: string };
+    return typeof body.state === "string" && body.state.trim()
+      ? body.state
+      : "no active decay tags";
+  } catch {
+    return "no active decay tags";
+  }
 }
 
 function buildSessionUpdate() {
@@ -206,8 +223,9 @@ export class VoiceSession {
         }
         this.pending = [];
       }
-      const sentText = this.flushPendingText();
-      if (!sentText) this.setPhase("listening");
+      void this.flushPendingText().then((sentText) => {
+        if (!sentText) this.setPhase("listening");
+      });
     });
 
     ws.addEventListener("message", (event) => {
@@ -247,7 +265,7 @@ export class VoiceSession {
       this.pendingText.push(trimmed);
       return;
     }
-    this.emitText(trimmed);
+    void this.emitText(trimmed);
   }
 
   stop(by: "client" | "error" = "client") {
@@ -310,13 +328,13 @@ export class VoiceSession {
       }
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
-        this.refreshDecayState();
+        void this.refreshDecayState();
         this.setPhase("thinking");
         break;
       case "input_audio_buffer.committed": {
         const itemId = typeof event.item_id === "string" ? event.item_id : crypto.randomUUID();
         this.upsert({ id: itemId, role: "user", text: "" });
-        this.refreshDecayState();
+        void this.refreshDecayState();
         break;
       }
       case "conversation.item.input_audio_transcription.updated": {
@@ -408,11 +426,13 @@ export class VoiceSession {
     this.player.play(bytes);
   }
 
-  private refreshDecayState() {
+  private async refreshDecayState() {
     if (this.stopped || this.decaySentForTurn) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.decaySentForTurn = true;
-    const text = buildDecayState();
+    const state = await fetchDecayStateForTurn();
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const text = `CURRENT DECAY STATE: ${state}`;
     this.logger.log("decay.refresh", { text });
     // Per-turn payload is decay only. session.update would replace instructions
     // wholesale and resend the persona; attach a small context item instead.
@@ -429,9 +449,9 @@ export class VoiceSession {
     );
   }
 
-  private emitText(text: string) {
+  private async emitText(text: string) {
     this.decaySentForTurn = false;
-    this.refreshDecayState();
+    await this.refreshDecayState();
     this.send({
       type: "conversation.item.create",
       item: {
@@ -444,12 +464,12 @@ export class VoiceSession {
     this.setPhase("thinking");
   }
 
-  private flushPendingText() {
+  private async flushPendingText() {
     if (!this.pendingText.length) return false;
     const queued = this.pendingText.splice(0);
     this.logger.log("text.flush", { messages: queued.length });
     this.decaySentForTurn = false;
-    this.refreshDecayState();
+    await this.refreshDecayState();
     for (const text of queued) {
       this.send({
         type: "conversation.item.create",
