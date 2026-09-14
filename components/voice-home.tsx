@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   VoiceSession,
   type TranscriptRow,
@@ -8,14 +8,47 @@ import {
 } from "@/lib/voice/session";
 
 const HINTS: Record<VoicePhase, string> = {
-  idle: "Tap to talk",
+  idle: "Talk to Lexi",
   connecting: "Connecting…",
   listening: "Listening…",
   thinking: "Thinking…",
   speaking: "Speaking…",
 };
 
-function Waveform({ live, phase }: { live: boolean; phase: VoicePhase }) {
+function StrokedWaveformIcon() {
+  return (
+    <svg
+      viewBox="0 0 256 256"
+      className="h-4 w-4"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M48 96v64M88 32v192M128 64v128M168 96v64M208 80v96"
+        stroke="currentColor"
+        strokeWidth="24"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SendArrowIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden>
+      <path
+        d="M5 12h14M13 6l6 6-6 6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function LiveWaveform({ phase }: { phase: VoicePhase }) {
   const tempo =
     phase === "speaking" ? "0.28s" : phase === "listening" ? "0.9s" : "1.4s";
   const dimmed = phase === "connecting" || phase === "thinking";
@@ -32,13 +65,26 @@ function Waveform({ live, phase }: { live: boolean; phase: VoicePhase }) {
           className="w-[3px] origin-bottom rounded-full bg-current motion-reduce:animate-none"
           style={{
             height: 16,
-            transform: live ? undefined : "scaleY(0.4)",
-            animation: live ? `lexi-wave ${tempo} ease-in-out ${index * 0.12}s infinite` : undefined,
+            animation: `lexi-wave ${tempo} ease-in-out ${index * 0.12}s infinite`,
           }}
         />
       ))}
     </span>
   );
+}
+
+function ComposerButton({
+  live,
+  hasText,
+  phase,
+}: {
+  live: boolean;
+  hasText: boolean;
+  phase: VoicePhase;
+}) {
+  if (hasText) return <SendArrowIcon />;
+  if (live) return <LiveWaveform phase={phase} />;
+  return <StrokedWaveformIcon />;
 }
 
 export function VoiceHome() {
@@ -47,6 +93,7 @@ export function VoiceHome() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<TranscriptRow[]>([]);
+  const [draft, setDraft] = useState("");
 
   useEffect(() => {
     return () => {
@@ -54,38 +101,80 @@ export function VoiceHome() {
     };
   }, []);
 
-  async function toggle() {
-    if (sessionRef.current) {
-      sessionRef.current.stop();
-      sessionRef.current = null;
-      setPhase("idle");
-      setSessionId(null);
-      return;
-    }
-
+  function attach(session: VoiceSession) {
+    sessionRef.current = session;
+    setSessionId(session.id);
     setError(null);
-    setRows([]);
+  }
+
+  function clearSession() {
+    sessionRef.current = null;
+    setPhase("idle");
+    setSessionId(null);
+  }
+
+  async function startSession() {
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: setRows,
       onError: (message) => {
         setError(message);
-        sessionRef.current = null;
-        setPhase("idle");
+        clearSession();
       },
     });
-    sessionRef.current = session;
-    setSessionId(session.id);
+    attach(session);
     await session.start();
+    return session;
+  }
+
+  async function stopSession() {
+    sessionRef.current?.stop();
+    clearSession();
+  }
+
+  async function onComposerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+
+    if (text) {
+      setDraft("");
+      setError(null);
+      let session = sessionRef.current;
+      if (!session) {
+        setRows([]);
+        session = await startSession();
+      }
+      session.sendText(text);
+      return;
+    }
+
+    if (sessionRef.current) {
+      await stopSession();
+      return;
+    }
+
+    setRows([]);
+    await startSession();
   }
 
   const live = phase !== "idle";
+  const hasText = draft.trim().length > 0;
   const latest = [...rows].reverse().find((row) => row.text.trim());
-  const status = live
-    ? sessionId
-      ? `${HINTS[phase]} · session ${sessionId}`
-      : HINTS[phase]
-    : HINTS.idle;
+  const placeholder = live ? HINTS[phase] : HINTS.idle;
+  const status = error
+    ? error
+    : live
+      ? sessionId
+        ? `${HINTS[phase]} · session ${sessionId}`
+        : HINTS[phase]
+      : HINTS.idle;
+  const buttonLabel = hasText
+    ? live
+      ? "Send to Lexi"
+      : "Send and start talking"
+    : live
+      ? "Stop talking"
+      : "Start talking";
 
   return (
     <div className="flex flex-1 flex-col bg-background font-sans text-foreground">
@@ -98,31 +187,43 @@ export function VoiceHome() {
       <header className="flex items-center justify-between px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
       </header>
-      <main className="flex flex-1 flex-col items-center justify-center px-6 pb-28">
+      <main className="flex flex-1 flex-col items-center justify-center px-6 pb-36">
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
         <h1 className="text-6xl font-semibold tracking-tight sm:text-7xl">Lexi</h1>
-        <p
-          className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
-          aria-live="polite"
-        >
-          {error ?? (latest && live ? latest.text : status)}
-        </p>
-        <p className="sr-only" role="status">
-          {error ?? status}
+        <p className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400">
+          {error ?? (latest ? latest.text : "A voice-first companion.")}
         </p>
       </main>
-      <div className="fixed inset-x-0 bottom-0 flex justify-center px-6 pb-10 pt-6">
-        <button
-          type="button"
-          onClick={() => void toggle()}
-          aria-pressed={live}
-          aria-label={live ? "Stop talking" : "Start talking"}
-          className="flex h-14 w-14 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
+      <div className="fixed inset-x-0 bottom-0 px-4 pb-8 pt-6 sm:px-6">
+        <form
+          onSubmit={(event) => void onComposerSubmit(event)}
+          className="mx-auto flex w-full max-w-xl items-center gap-2 rounded-full border border-zinc-200 bg-background px-3 py-2 shadow-sm dark:border-zinc-800"
         >
-          <Waveform live={live} phase={phase} />
-        </button>
+          <label className="sr-only" htmlFor="lexi-composer">
+            Message Lexi
+          </label>
+          <input
+            id="lexi-composer"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={placeholder}
+            autoComplete="off"
+            className="min-w-0 flex-1 bg-transparent px-2 py-1.5 text-base outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+          />
+          <p className="sr-only" role="status">
+            {status}
+          </p>
+          <button
+            type="submit"
+            aria-pressed={live && !hasText}
+            aria-label={buttonLabel}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            <ComposerButton live={live} hasText={hasText} phase={phase} />
+          </button>
+        </form>
       </div>
     </div>
   );

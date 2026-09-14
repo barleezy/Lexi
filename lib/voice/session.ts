@@ -62,6 +62,7 @@ export class VoiceSession {
   private player: PcmPlayer | null = null;
   private logger: VoiceLogger;
   private pending: string[] = [];
+  private pendingText: string[] = [];
   private rows: TranscriptRow[] = [];
   private stopped = false;
   private speechStoppedT = 0;
@@ -166,7 +167,8 @@ export class VoiceSession {
         }
         this.pending = [];
       }
-      this.setPhase("listening");
+      const sentText = this.flushPendingText();
+      if (!sentText) this.setPhase("listening");
     });
 
     ws.addEventListener("message", (event) => {
@@ -196,6 +198,17 @@ export class VoiceSession {
         this.fail(new Error(`Voice closed (${event.code}).`));
       }
     });
+  }
+
+  sendText(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || this.stopped) return;
+    this.upsert({ id: crypto.randomUUID(), role: "user", text: trimmed });
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.pendingText.push(trimmed);
+      return;
+    }
+    this.emitText(trimmed);
   }
 
   stop(by: "client" | "error" = "client") {
@@ -341,6 +354,38 @@ export class VoiceSession {
       this.setPhase("speaking");
     }
     this.player.play(bytes);
+  }
+
+  private emitText(text: string) {
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+      },
+    });
+    this.send({ type: "response.create" });
+    this.setPhase("thinking");
+  }
+
+  private flushPendingText() {
+    if (!this.pendingText.length) return false;
+    const queued = this.pendingText.splice(0);
+    this.logger.log("text.flush", { messages: queued.length });
+    for (const text of queued) {
+      this.send({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      });
+    }
+    this.send({ type: "response.create" });
+    this.setPhase("thinking");
+    return true;
   }
 
   private send(event: Record<string, unknown>, silent = false) {

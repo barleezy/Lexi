@@ -1,4 +1,18 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+Lexi is a voice-first companion. The homepage composer talks to Grok Speech-to-Speech (`grok-voice-latest`) over a duplex WebSocket.
+
+## Voice setup
+
+1. Copy `.env.example` to `.env.local`.
+2. Set `XAI_API_KEY` on the **server only**. The Next.js route `POST /api/realtime/session` exchanges it for a short-lived xAI client secret. The browser never sees the long-lived key.
+3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session.
+
+First human test should use **headphones**. Speaker echo is the mic hearing Lexi, not a loop bug.
+
+Dev-only voice logs land in `.voice-logs/<sessionId>.ndjson`. Summarize a run with:
+
+```bash
+npm run voice:logs -- .voice-logs/<sessionId>.ndjson
+```
 
 ## Getting Started
 
