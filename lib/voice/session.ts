@@ -69,6 +69,8 @@ function buildSessionUpdate() {
       instructions: buildInstructions(),
       reasoning: { effort: "none" },
       turn_detection: { type: "server_vad" },
+      // Server-side web search; no client tool loop.
+      tools: [{ type: "web_search" }],
       audio: {
         input: {
           format: { type: "audio/pcm", rate: TARGET_RATE },

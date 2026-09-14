@@ -4,7 +4,7 @@ Lexi is a voice-first companion. The homepage composer talks to Grok Speech-to-S
 
 1. Copy `.env.example` to `.env.local`.
 2. Set `XAI_API_KEY` on the **server only**. The Next.js route `POST /api/realtime/session` exchanges it for a short-lived xAI client secret. The browser never sees the long-lived key.
-3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session.
+3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key).
 
 First human test should use **headphones**. Speaker echo is the mic hearing Lexi, not a loop bug.
 
