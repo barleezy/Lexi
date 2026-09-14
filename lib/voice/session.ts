@@ -65,7 +65,7 @@ function buildSessionUpdate() {
   return {
     type: "session.update",
     session: {
-      voice: "eve",
+      voice: "aria",
       instructions: buildInstructions(),
       reasoning: { effort: "none" },
       turn_detection: { type: "server_vad" },
