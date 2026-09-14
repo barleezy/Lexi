@@ -177,7 +177,7 @@ export function VoiceHome() {
       : "Start talking";
 
   return (
-    <div className="flex flex-1 flex-col bg-background font-sans text-foreground">
+    <div className="flex min-h-dvh flex-1 flex-col bg-background font-sans text-foreground">
       <style>{`
         @keyframes lexi-wave {
           0%, 100% { transform: scaleY(0.4); }
@@ -187,7 +187,7 @@ export function VoiceHome() {
       <header className="flex items-center justify-between px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
       </header>
-      <main className="flex flex-1 flex-col items-center justify-center px-6 pb-36">
+      <main className="flex flex-1 flex-col items-center justify-center px-6">
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
@@ -196,21 +196,22 @@ export function VoiceHome() {
           {error ?? (latest ? latest.text : "A voice-first companion.")}
         </p>
       </main>
-      <div className="fixed inset-x-0 bottom-0 px-4 pb-8 pt-6 sm:px-6">
+      <div className="w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <form
           onSubmit={(event) => void onComposerSubmit(event)}
-          className="mx-auto flex w-full max-w-xl items-center gap-2 rounded-full border border-zinc-200 bg-background px-3 py-2 shadow-sm dark:border-zinc-800"
+          className="mx-auto flex min-h-14 w-full max-w-xl items-center gap-2 rounded-full border border-zinc-400 bg-background px-4 py-2 shadow-md dark:border-zinc-500"
         >
           <label className="sr-only" htmlFor="lexi-composer">
             Message Lexi
           </label>
           <input
             id="lexi-composer"
+            type="text"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={placeholder}
             autoComplete="off"
-            className="min-w-0 flex-1 bg-transparent px-2 py-1.5 text-base outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+            className="min-h-11 min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-zinc-600 dark:placeholder:text-zinc-300"
           />
           <p className="sr-only" role="status">
             {status}
@@ -219,7 +220,7 @@ export function VoiceHome() {
             type="submit"
             aria-pressed={live && !hasText}
             aria-label={buttonLabel}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
           >
             <ComposerButton live={live} hasText={hasText} phase={phase} />
           </button>
