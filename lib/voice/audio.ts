@@ -157,16 +157,26 @@ export class PcmPlayer {
     };
   }
 
+  flush() {
+    return this.stop();
+  }
+
   stop() {
     const droppedMs = Math.max(0, (this.next - this.ctx.currentTime) * 1000);
-    for (const source of this.sources) {
+    const sources = this.sources.splice(0);
+    for (const source of sources) {
+      source.onended = null;
       try {
-        source.stop();
+        source.stop(0);
       } catch {
-        // already stopped
+        // already stopped or not started
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // already disconnected
       }
     }
-    this.sources = [];
     this.started = false;
     this.next = 0;
     this.lastScheduled = 0;

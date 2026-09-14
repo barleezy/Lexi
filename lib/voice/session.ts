@@ -110,6 +110,7 @@ export class VoiceSession {
   private inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0 };
   private by = "client";
   private decaySentForTurn = false;
+  private ignoreOutputAudio = false;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -298,14 +299,15 @@ export class VoiceSession {
     this.logger.server(event, { phase: this.phase });
 
     switch (type) {
-      case "input_audio_buffer.speech_started":
+      case "input_audio_buffer.speech_started": {
         this.decaySentForTurn = false;
-        if (this.phase === "speaking") {
-          const dropped = this.player?.stop() ?? 0;
-          this.logger.log("play.stop", { reason: "barge-in", dropped_ms: dropped });
-        }
+        this.ignoreOutputAudio = true;
+        const dropped = this.player?.flush() ?? 0;
+        this.send({ type: "response.cancel" });
+        this.logger.log("play.stop", { reason: "barge-in", dropped_ms: dropped });
         this.setPhase("listening");
         break;
+      }
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
         this.refreshDecayState();
@@ -324,6 +326,7 @@ export class VoiceSession {
         break;
       }
       case "response.created":
+        this.ignoreOutputAudio = false;
         this.createdT = Date.now();
         this.firstAudio = false;
         this.outDeltas = 0;
@@ -367,8 +370,14 @@ export class VoiceSession {
         break;
       }
       case "error": {
+        const nested = event.error as Record<string, unknown> | undefined;
         const message =
-          typeof event.message === "string" ? event.message : "Voice session error.";
+          typeof event.message === "string"
+            ? event.message
+            : typeof nested?.message === "string"
+              ? nested.message
+              : "Voice session error.";
+        if (this.ignoreOutputAudio && /cancel/i.test(message)) break;
         this.fail(new Error(message));
         break;
       }
@@ -378,6 +387,7 @@ export class VoiceSession {
   }
 
   private onAudioDelta(event: Record<string, unknown>) {
+    if (this.ignoreOutputAudio) return;
     const raw = typeof event.delta === "string" ? event.delta : typeof event.audio === "string" ? event.audio : "";
     if (!raw || !this.player) return;
     const bytes = base64ToBytes(raw);
