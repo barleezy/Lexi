@@ -1,4 +1,4 @@
-export const TARGET_RATE = 24_000;
+export const TARGET_RATE = 48_000;
 
 const WORKLET = `
 class PcmCaptureProcessor extends AudioWorkletProcessor {

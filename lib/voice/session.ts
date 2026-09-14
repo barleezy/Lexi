@@ -151,7 +151,7 @@ export class VoiceSession {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: TARGET_RATE,
+          sampleRate: { ideal: TARGET_RATE },
           channelCount: 1,
         },
       });
