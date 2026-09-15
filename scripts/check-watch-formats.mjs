@@ -14,10 +14,19 @@ import {
 } from "../lib/voice/watch-formats.ts";
 import { looksLikeVideoContentType } from "../lib/voice/video-proxy.ts";
 import {
+  adultEmbedCanFrame,
   adultEmbedUrl,
+  ashemaletubeVideoPageUrl,
   extractAdultMediaFromHtml,
   isAdultPageUrl,
+  isCloudflareChallenge,
+  isDirectWatchMediaUrl,
+  isWatchHlsUrl,
+  normalizeAdultWatchInput,
   proxiedWatchMedia,
+  shouldProxyWatchMedia,
+  watchMediaReferer,
+  watchStreamKind,
 } from "../lib/voice/watch-adult.ts";
 
 function expect(condition, label) {
@@ -114,6 +123,32 @@ expectEqual(
   "https://www.ashemaletube.com/embed/12345",
   "ashemaletube embed",
 );
+expectEqual(
+  adultEmbedUrl("https://www.ashemaletube.com/embed/12345"),
+  "https://www.ashemaletube.com/embed/12345",
+  "ashemaletube embed url stays embed",
+);
+expect(
+  !adultEmbedCanFrame("https://www.ashemaletube.com/embed/12345"),
+  "ashemaletube embed is not iframesable",
+);
+expectEqual(
+  normalizeAdultWatchInput('<iframe src="https://www.ashemaletube.com/embed/12345"></iframe>'),
+  "https://www.ashemaletube.com/embed/12345",
+  "iframe snippet",
+);
+expectEqual(
+  ashemaletubeVideoPageUrl("https://www.ashemaletube.com/embed/461627"),
+  "https://www.ashemaletube.com/videos/461627/",
+  "embed maps to video page",
+);
+expect(isCloudflareChallenge("<title>Just a moment...</title>"), "cf challenge html");
+const kvs = extractAdultMediaFromHtml(
+  `var flashvars = { "license_code": "$abc$", "video_url": "function/0/https://cdn.example/get_file/1/deadbeefdeadbeefdeadbeefdeadbeef/0/0/9.mp4/", "video_alt_url": "https://cdn.example/get_file/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/0/0/9_480p.mp4/" };`,
+  "https://www.ashemaletube.com/videos/9/clip/",
+);
+expect(kvs.media?.href.includes("get_file"), "kvs get_file extracted");
+expect(kvs.media?.href.includes("function/0/") === false, "kvs prefix stripped");
 expect(isAdultPageUrl("https://www.transangels.com/en/video/clip/12345"), "transangels www");
 expect(isAdultPageUrl("https://transangels.com/en/video/clip/12345"), "transangels apex");
 expect(isAdultPageUrl("https://m.transangels.com/en/video/clip/12345"), "transangels mobile");
@@ -156,5 +191,42 @@ expectEqual(extracted.embedUrl, "https://www.xvideos.com/embedframe/123", "xvide
 
 expect(looksLikeVideoContentType("application/vnd.apple.mpegurl"), "hls mime");
 expect(looksLikeVideoContentType("text/plain", "https://cdn.example/a.m3u8"), "plain m3u8");
+
+expect(isDirectWatchMediaUrl("https://cdn.example/a.mp4"), "mp4 is direct");
+expect(isDirectWatchMediaUrl("https://cdn.example/a.webm?dl=1"), "webm is direct");
+expect(isDirectWatchMediaUrl("https://cdn.example/live/index.m3u8"), "m3u8 is direct");
+expect(
+  isDirectWatchMediaUrl("https://www.ashemaletube.com/get_file/1/deadbeefdeadbeefdeadbeefdeadbeef/0/0/9.mp4/"),
+  "ashemaletube get_file is direct",
+);
+expect(
+  isDirectWatchMediaUrl("https://cdn.ashemaletube.com/get_file/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/0/0/9_480p.mp4/"),
+  "cdn get_file is direct",
+);
+expect(!isDirectWatchMediaUrl("https://www.ashemaletube.com/videos/12345/clip/"), "page is not direct");
+expect(!isDirectWatchMediaUrl("https://www.ashemaletube.com/embed/12345"), "embed is not direct");
+expect(!isAdultPageUrl("https://cdn.ashemaletube.com/get_file/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/0/0/9.mp4/"), "direct not adult page");
+expect(isAdultPageUrl("https://www.ashemaletube.com/videos/12345/clip/"), "page still adult");
+expect(isWatchHlsUrl("https://cdn.example/a.m3u8?token=1"), "hls detect");
+expect(!isWatchHlsUrl("https://cdn.example/a.mp4"), "mp4 is not hls");
+expectEqual(watchStreamKind("https://cdn.example/a.m3u8"), "hls", "kind hls");
+expectEqual(watchStreamKind("https://cdn.example/a.mp4"), "mp4", "kind mp4");
+expect(shouldProxyWatchMedia("https://cdn.ashemaletube.com/get_file/1/aa/0/0/9.mp4/"), "proxy adult cdn");
+expect(shouldProxyWatchMedia("https://cdn.example/a.m3u8"), "proxy hls");
+expect(!shouldProxyWatchMedia("https://cdn.example/a.mp4"), "generic mp4 tries direct first");
+expectEqual(
+  watchMediaReferer("https://cdn.ashemaletube.com/get_file/1/aa/0/0/9.mp4/"),
+  "https://www.ashemaletube.com/",
+  "infer adult referer",
+);
+expect(
+  proxiedWatchMedia("https://cdn.ashemaletube.com/get_file/1/aa/0/0/9.mp4/").includes("referer="),
+  "proxy adds inferred referer",
+);
+expectEqual(
+  normalizeAdultWatchInput("function/0/https://cdn.example/get_file/1/aa/0/0/9.mp4/"),
+  "https://cdn.example/get_file/1/aa/0/0/9.mp4/",
+  "kvs function prefix unwrap",
+);
 
 console.log("watch format checks ok");

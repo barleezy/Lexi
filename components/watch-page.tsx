@@ -20,7 +20,19 @@ import {
   watchShouldRemuxOnNativeError,
   watchSizeError,
 } from "@/lib/voice/watch-formats";
-import { isAdultPageUrl, proxiedWatchMedia } from "@/lib/voice/watch-adult";
+import {
+  adultEmbedCanFrame,
+  CLOUDFLARE_DIRECT_HINT,
+  DIRECT_STREAM_HINT,
+  extractAdultMediaFromHtml,
+  isAdultPageUrl,
+  isCloudflareChallenge,
+  isDirectWatchMediaUrl,
+  isWatchHlsUrl,
+  normalizeAdultWatchInput,
+  proxiedWatchMedia,
+  shouldProxyWatchMedia,
+} from "@/lib/voice/watch-adult";
 import { iosLacksMsePlayback } from "@/lib/voice/watch-mpegts";
 import {
   openWatchChannel,
@@ -221,6 +233,10 @@ export function WatchPage() {
     const file = { name: source.kind === "file" ? source.file.name : source.raw, type: source.kind === "file" ? source.file.type : "" };
     const kind = watchPlaybackKind(file);
     const origin = source.kind === "file" ? "file" : "url";
+    if (source.kind === "url" && isWatchHlsUrl(source.raw)) {
+      showHls(href, source.title, origin);
+      return;
+    }
     if (kind === "mpegts" && !iosLacksMsePlayback()) {
       showMpegts(href, mpegtsMediaType(file), source.title, origin);
       return;
@@ -230,6 +246,31 @@ export function WatchPage() {
       return;
     }
     showNative(href, source.title, origin);
+  }
+
+  function playResolvedMedia(raw: string, media: string, kind: string, nextTitle: string, pageUrl: string) {
+    const playable = proxiedWatchMedia(media, pageUrl) || playableVideoSrc(media) || media;
+    const source: WatchSource = { kind: "url", raw, playable, title: nextTitle };
+    sourceRef.current = source;
+    if (kind === "hls" || isWatchHlsUrl(media)) {
+      urlStage.current = "proxy";
+      showHls(playable, nextTitle, "url");
+      return;
+    }
+    if (shouldProxyWatchMedia(media)) {
+      urlStage.current = "proxy";
+      playIdentified(source, playable);
+      return;
+    }
+    urlStage.current = "direct";
+    playIdentified(source, media);
+  }
+
+  function playDirectStream(raw: string) {
+    const href = directVideoHref(raw);
+    if (!href) return false;
+    playResolvedMedia(raw, href, isWatchHlsUrl(href) ? "hls" : "mp4", titleFromVideoUrl(raw), raw);
+    return true;
   }
 
   function showHls(url: string, nextTitle: string, source: VideoSourceKind) {
@@ -258,6 +299,29 @@ export function WatchPage() {
     );
   }
 
+  async function tryBrowserExtract(pageUrl: string) {
+    try {
+      const response = await fetch(pageUrl, {
+        mode: "cors",
+        credentials: "omit",
+        headers: { Accept: "text/html,application/xhtml+xml" },
+      });
+      if (!response.ok) return null;
+      const html = (await response.text()).slice(0, 1_500_000);
+      if (!html || isCloudflareChallenge(html)) return null;
+      const extracted = extractAdultMediaFromHtml(html, response.url || pageUrl);
+      if (!extracted.media) return null;
+      return {
+        title: extracted.title || titleFromVideoUrl(pageUrl),
+        mediaUrl: extracted.media.href,
+        kind: extracted.media.kind,
+        pageUrl: response.url || pageUrl,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async function loadAdultPage(raw: string) {
     const gen = loadGen.current + 1;
     loadGen.current = gen;
@@ -284,72 +348,71 @@ export function WatchPage() {
         body = {};
       }
       if (gen !== loadGen.current) return;
-      if (!response.ok) {
-        if (body.embedUrl) {
-          const title = body.title || titleFromVideoUrl(raw);
-          sourceRef.current = { kind: "url", raw, playable: "", title };
-          showEmbed(body.embedUrl, title, true);
-          return;
-        }
-        setBusy(false);
-        setHint(typeof body.error === "string" ? body.error : "Could not open that adult video page.");
-        return;
-      }
       const title = body.title || titleFromVideoUrl(raw);
       const media = typeof body.mediaUrl === "string" ? body.mediaUrl : "";
       const pageUrl = body.pageUrl || raw;
-      const playable = media ? proxiedWatchMedia(media, pageUrl) : "";
-      sourceRef.current = { kind: "url", raw, playable: playable || media, title };
-      if (playable && body.kind === "hls") {
-        showHls(playable, title, "url");
+      if (response.ok && media) {
+        playResolvedMedia(raw, media, body.kind || "mp4", title, pageUrl);
         return;
       }
-      if (playable) {
-        showNative(playable, title, "url");
+      if (response.ok && body.embedUrl && adultEmbedCanFrame(body.embedUrl)) {
+        sourceRef.current = { kind: "url", raw, playable: "", title };
+        showEmbed(body.embedUrl, title, true);
         return;
       }
-      if (body.embedUrl) {
+      setHint("Trying this browser…");
+      const extracted = await tryBrowserExtract(raw);
+      if (gen !== loadGen.current) return;
+      if (extracted) {
+        playResolvedMedia(raw, extracted.mediaUrl, extracted.kind, extracted.title, extracted.pageUrl);
+        return;
+      }
+      if (body.embedUrl && adultEmbedCanFrame(body.embedUrl)) {
+        sourceRef.current = { kind: "url", raw, playable: "", title };
         showEmbed(body.embedUrl, title, true);
         return;
       }
       setBusy(false);
-      setHint("Could not find a playable stream. Upload a file or try another video.");
+      setHint(
+        typeof body.error === "string" && body.error.trim()
+          ? body.error
+          : `${CLOUDFLARE_DIRECT_HINT}`,
+      );
     } catch {
       if (gen !== loadGen.current) return;
+      const extracted = await tryBrowserExtract(raw);
+      if (gen !== loadGen.current) return;
+      if (extracted) {
+        playResolvedMedia(raw, extracted.mediaUrl, extracted.kind, extracted.title, extracted.pageUrl);
+        return;
+      }
       setBusy(false);
-      setHint("Could not open that adult video page.");
+      setHint(CLOUDFLARE_DIRECT_HINT);
     }
   }
 
   function loadUrl(raw: string) {
-    const trimmed = raw.trim();
+    const trimmed = normalizeAdultWatchInput(raw);
     if (isPageLikeVideoUrl(trimmed)) {
       setHint("YouTube and similar pages will not play here. Upload a file or paste a direct video URL.");
+      return;
+    }
+    if (isDirectWatchMediaUrl(trimmed) || (!isAdultPageUrl(trimmed) && directVideoHref(trimmed))) {
+      loadGen.current += 1;
+      stopCapture.current?.();
+      revokeLocals();
+      copiedRemux.current = false;
+      remuxAttempted.current = false;
+      if (!playDirectStream(trimmed)) {
+        setHint(DIRECT_STREAM_HINT);
+      }
       return;
     }
     if (isAdultPageUrl(trimmed)) {
       void loadAdultPage(trimmed);
       return;
     }
-    const direct = directVideoHref(trimmed);
-    if (!direct) {
-      setHint("Paste a direct video URL (mp4, webm, mov, mkv, avi, flv, wmv, mpeg, and similar).");
-      return;
-    }
-    loadGen.current += 1;
-    stopCapture.current?.();
-    revokeLocals();
-    copiedRemux.current = false;
-    remuxAttempted.current = false;
-    urlStage.current = "direct";
-    const source: WatchSource = {
-      kind: "url",
-      raw: trimmed,
-      playable: playableVideoSrc(direct) || direct,
-      title: titleFromVideoUrl(trimmed),
-    };
-    sourceRef.current = source;
-    playIdentified(source, direct);
+    setHint(DIRECT_STREAM_HINT);
   }
 
   async function playUrlBlob(source: Extract<WatchSource, { kind: "url" }>) {
@@ -432,7 +495,7 @@ export function WatchPage() {
       return;
     }
     setHint(
-      "Could not play that video. Try another file, or a direct mp4/webm URL. YouTube pages will not play here.",
+      "Could not play that video. Paste a direct mp4, webm, or m3u8 URL, or upload a file. YouTube pages will not play here.",
     );
   }
 
@@ -510,10 +573,7 @@ export function WatchPage() {
       if (dead || !videoRef.current) return;
       return attachHlsPlayer(videoRef.current, hlsSrc, () => {
         if (dead) return;
-        const source = sourceRef.current;
-        if (source?.kind === "url") {
-          setHint("Could not play that stream. Trying the site embed — Lexi may not see frames.");
-        }
+        setHint("Could not play that stream. Paste another direct m3u8/mp4 URL or upload the file.");
       }).then((next) => {
         if (dead) {
           next.destroy();
@@ -597,8 +657,9 @@ export function WatchPage() {
           <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
             <p className="text-lg font-medium">Play a video for Lexi</p>
             <p className="mt-2 max-w-sm text-sm text-zinc-400">
-              Keep talktolexi.app open in the other tab. She sees stills from this player. Soundtrack
-              stays here — she does not hear it as you.
+              Paste a direct file or stream URL (mp4, webm, m3u8, get_file) — it plays in this feed,
+              not an embed. Upload a file, or a page URL if we can open it. Keep talktolexi.app open
+              in the other tab. She sees stills; soundtrack stays here.
             </p>
           </div>
         )}
@@ -637,7 +698,7 @@ export function WatchPage() {
               inputMode="url"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Video or adult site URL"
+              placeholder="mp4, m3u8, get_file, or page URL"
               autoComplete="off"
               className="min-w-0 flex-1 bg-transparent px-1 text-base text-white outline-none placeholder:text-zinc-500"
             />

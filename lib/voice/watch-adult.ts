@@ -41,14 +41,49 @@ function hostMatchesList(host: string) {
   return KNOWN_ADULT_HOSTS.some((known) => host === known || host.endsWith(`.${known}`));
 }
 
+const DIRECT_MEDIA_EXT =
+  /\.(?:mp4|webm|m3u8|mov|m4v|mkv|avi|flv|wmv|asf|mpeg|mpg|mpe|ogv|ogg|3gp|3g2|ts|m2ts|mts)(?:$|[/?#])/i;
+const DIRECT_MEDIA_PATH = /\/(?:get_file|get_media|video_redirect|get_video)\b/i;
+
+export const DIRECT_STREAM_HINT =
+  "Paste a direct video file or stream URL (mp4, webm, m3u8, or get_file). It plays in this feed — no embed.";
+
+export const CLOUDFLARE_DIRECT_HINT =
+  "That site is blocking our server (Cloudflare). Official embeds will not play inside Lexi. Paste the direct mp4, webm, m3u8, or get_file URL into this box — it plays in the watch feed. If this browser cannot read the page (CORS), the site page will not work; you need the file/stream URL.";
+
 export function isAdultPageHost(hostname: string) {
   const host = hostname.trim().toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
   if (!host) return false;
   return hostMatchesList(host) || ADULT_HOST_HINT.test(host);
 }
 
+export type WatchResolveKind = "mp4" | "hls";
+
+export function isWatchHlsUrl(raw: string) {
+  return /\.m3u8(?:$|[/?#])/i.test(raw.trim());
+}
+
+export function watchStreamKind(raw: string): WatchResolveKind {
+  return isWatchHlsUrl(raw) ? "hls" : "mp4";
+}
+
+export function isDirectWatchMediaUrl(raw: string) {
+  try {
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") return false;
+    if (DIRECT_MEDIA_EXT.test(parsed.pathname) || DIRECT_MEDIA_EXT.test(parsed.href)) return true;
+    if (DIRECT_MEDIA_PATH.test(parsed.pathname + parsed.search)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function isAdultPageUrl(raw: string) {
   try {
+    if (isDirectWatchMediaUrl(raw)) return false;
     const parsed = new URL(raw.trim());
     const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
     if (host === "youtube.com" || host === "youtu.be" || host.endsWith(".youtube.com") || host === "vimeo.com") {
@@ -96,7 +131,8 @@ export function adultEmbedUrl(raw: string) {
       return id ? `https://www.youporn.com/embed/${id}` : "";
     }
     if (host.includes("ashemaletube")) {
-      const id = /\/(?:videos|embed)\/(\d+)/i.exec(path)?.[1];
+      const id =
+        /\/(?:videos|video|embed)\/(\d+)/i.exec(path)?.[1] || parsed.searchParams.get("id");
       return id ? `https://www.ashemaletube.com/embed/${id}` : "";
     }
     if (host.includes("transangels") || host.includes("adulttime")) {
@@ -124,7 +160,53 @@ export function adultPageHost(raw: string) {
   return pageHost(raw);
 }
 
-export type WatchResolveKind = "mp4" | "hls";
+/** Official AShemaleTube embeds send X-Frame-Options: SAMEORIGIN — iframe is always blank. */
+export function adultEmbedCanFrame(raw: string) {
+  const host = pageHost(raw);
+  if (!host) return false;
+  if (host === "ashemaletube.com" || host.endsWith(".ashemaletube.com")) return false;
+  return Boolean(adultEmbedUrl(raw) || /\/embed\//i.test(raw));
+}
+
+export function normalizeAdultWatchInput(raw: string) {
+  const trimmed = raw.trim();
+  const iframeSrc = /<iframe\b[^>]*\bsrc=["']([^"']+)/i.exec(trimmed)?.[1];
+  if (iframeSrc) return iframeSrc.trim();
+  if (/^function\/\d+\//i.test(trimmed)) {
+    return kvsRealUrl(trimmed) || trimmed;
+  }
+  return trimmed;
+}
+
+export function isCloudflareChallenge(html: string) {
+  return /cf-mitigated|challenge-platform|cdn-cgi\/challenge|Just a moment/i.test(html);
+}
+
+export function ashemaletubeVideoPageUrl(raw: string) {
+  try {
+    const parsed = new URL(raw.trim());
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (!host.includes("ashemaletube")) return "";
+    const id = /\/(?:videos|video|embed)\/(\d+)/i.exec(parsed.pathname)?.[1] || parsed.searchParams.get("id");
+    return id ? `https://www.ashemaletube.com/videos/${id}/` : "";
+  } catch {
+    return "";
+  }
+}
+
+export function kvsRealUrl(videoUrl: string, licenseCode = "", baseUrl = "") {
+  let href = videoUrl.trim().replace(/^function\/\d+\//, "");
+  if (href.startsWith("//")) href = `https:${href}`;
+  if (href.startsWith("/") && baseUrl) {
+    try {
+      href = new URL(href, baseUrl).href;
+    } catch {
+      return "";
+    }
+  }
+  if (!href.startsWith("http://") && !href.startsWith("https://")) return "";
+  return unescapeJsonUrl(href);
+}
 
 function decodeEntities(value: string) {
   return value
@@ -146,16 +228,14 @@ function unescapeJsonUrl(value: string) {
 }
 
 function isMediaHref(href: string) {
-  if (!href.startsWith("http://") && !href.startsWith("https://")) return false;
+  if (isDirectWatchMediaUrl(href)) return true;
   try {
-    const host = new URL(href).hostname;
-    if (host === "localhost" || host === "127.0.0.1") return false;
+    const parsed = new URL(href);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    return /\/(?:hls|mp4)\b/i.test(parsed.pathname);
   } catch {
     return false;
   }
-  const lower = href.toLowerCase();
-  if (lower.includes(".m3u8") || lower.includes(".mp4")) return true;
-  return /\/(?:get_media|video_redirect|hls|mp4)\b/i.test(lower);
 }
 
 function qualityScore(href: string) {
@@ -190,9 +270,27 @@ function readTitle(html: string) {
   return decodeEntities(title?.[1] ?? "").replace(/\s+[|-]\s+.*$/, "").trim();
 }
 
+function extractKvsUrls(html: string, pageUrl: string) {
+  const license = /['"]license_code['"]\s*:\s*['"]([^'"]+)['"]/i.exec(html)?.[1] ?? "";
+  const found: string[] = [];
+  const keys = /['"](video_url|video_alt_url\d*)['"]\s*:\s*['"]([^'"]+)['"]/gi;
+  let match: RegExpExecArray | null;
+  while ((match = keys.exec(html))) {
+    const real = kvsRealUrl(match[2], license, pageUrl);
+    if (real) found.push(real);
+  }
+  found.push(
+    ...collectQuotedUrls(html, /function\/\d+\/(https?:\\?\/\\?\/[^'"]+)/gi).map((url) =>
+      kvsRealUrl(`function/0/${url}`, license, pageUrl),
+    ),
+  );
+  return found;
+}
+
 export function extractAdultMediaFromHtml(html: string, pageUrl: string) {
   const urls: string[] = [];
   urls.push(
+    ...extractKvsUrls(html, pageUrl),
     ...collectQuotedUrls(html, /html5player\.setVideo(?:UrlHigh|UrlLow|HLS)\(['"]([^'"]+)/gi),
     ...collectQuotedUrls(html, /"videoUrl"\s*:\s*"([^"]+)"/gi),
     ...collectQuotedUrls(html, /"contentUrl"\s*:\s*"([^"]+)"/gi),
@@ -209,20 +307,44 @@ export function extractAdultMediaFromHtml(html: string, pageUrl: string) {
   return { title: readTitle(html), media: pickMedia(urls), embedUrl: adultEmbedUrl(pageUrl) };
 }
 
-export function proxiedWatchMedia(mediaUrl: string, pageUrl: string) {
+export function watchMediaReferer(mediaUrl: string, pageUrl = "") {
+  try {
+    if (pageUrl.trim()) {
+      const page = new URL(pageUrl);
+      if ((page.protocol === "http:" || page.protocol === "https:") && page.href !== mediaUrl) {
+        return page.href;
+      }
+    }
+  } catch {
+    // Use the media host below.
+  }
+  try {
+    const host = new URL(mediaUrl).hostname.replace(/^www\./, "").toLowerCase();
+    const known = KNOWN_ADULT_HOSTS.find((name) => host === name || host.endsWith(`.${name}`));
+    if (known) return `https://www.${known}/`;
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+export function shouldProxyWatchMedia(mediaUrl: string) {
+  if (isWatchHlsUrl(mediaUrl)) return true;
+  if (DIRECT_MEDIA_PATH.test(mediaUrl)) return true;
+  try {
+    return isAdultPageHost(new URL(mediaUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function proxiedWatchMedia(mediaUrl: string, pageUrl = "") {
   try {
     const media = new URL(mediaUrl);
     if (media.protocol !== "http:" && media.protocol !== "https:") return "";
     const base = `/api/video/proxy?url=${encodeURIComponent(media.href)}`;
-    try {
-      const page = new URL(pageUrl);
-      if (page.protocol === "http:" || page.protocol === "https:") {
-        return `${base}&referer=${encodeURIComponent(page.href)}`;
-      }
-    } catch {
-      return base;
-    }
-    return base;
+    const referer = watchMediaReferer(media.href, pageUrl);
+    return referer ? `${base}&referer=${encodeURIComponent(referer)}` : base;
   } catch {
     return "";
   }

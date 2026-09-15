@@ -35,7 +35,7 @@ import {
   watchPlaysInHomeTab,
   type VideoSourceKind,
 } from "@/lib/voice/video";
-import { isAdultPageUrl } from "@/lib/voice/watch-adult";
+import { isAdultPageUrl, isDirectWatchMediaUrl, isWatchHlsUrl, shouldProxyWatchMedia } from "@/lib/voice/watch-adult";
 import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
   canShareScreen,
@@ -723,13 +723,21 @@ export function VoiceHome() {
       setVideoHint("YouTube will not play here. Open the watch tab and upload a file, or paste a direct video URL.");
       return;
     }
+    if (
+      isWatchHlsUrl(trimmed) ||
+      (isDirectWatchMediaUrl(trimmed) &&
+        (shouldProxyWatchMedia(trimmed) || !watchPlaysInHomeTab({ name: trimmed, type: "" })))
+    ) {
+      setVideoHint("This stream plays in the watch tab. Open watch tab — paste the same URL there.");
+      return;
+    }
     if (isAdultPageUrl(trimmed)) {
-      setVideoHint("Adult site pages play in the watch tab so Lexi can see frames. Open watch tab.");
+      setVideoHint("Adult site pages play in the watch tab. Open watch tab, or paste a direct mp4/m3u8/get_file URL there.");
       return;
     }
     const src = directVideoHref(trimmed);
     if (!src) {
-      setVideoHint("Paste a direct video URL.");
+      setVideoHint("Paste a direct video URL (mp4, webm) here, or a stream URL in the watch tab.");
       return;
     }
     if (!watchPlaysInHomeTab({ name: trimmed, type: "" })) {
@@ -1210,7 +1218,7 @@ export function VoiceHome() {
                   type="url"
                   value={videoDraft}
                   onChange={(event) => setVideoDraft(event.target.value)}
-                  placeholder="Watch together — video URL"
+                  placeholder="Direct mp4/webm — streams in watch tab"
                   autoComplete="off"
                   className="min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground outline-none placeholder:text-zinc-500"
                 />

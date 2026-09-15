@@ -167,5 +167,14 @@ expect(
 );
 expect(persona.includes("configured channels"), "persona mentions channels");
 expect(persona.includes("send_message"), "persona has send_message");
+expect(persona.includes("BANTER PRIVACY"), "persona has banter privacy");
+expect(persona.includes("playful, fun, funny"), "public banter stays playful");
+expect(persona.includes("Innuendo is fine"), "public innuendo allowed");
+expect(persona.includes("No graphic sexual descriptions"), "no graphic public sex talk");
+expect(persona.includes("Nothing obscene"), "nothing obscene in public");
+expect(!/\bnon-sexual\b/.test(persona), "public banter is not fully non-sexual");
+expect(persona.includes("FORTNITE"), "fortnite section");
+expect(persona.includes("WATCH TOGETHER"), "watch section");
+expect(persona.includes("If this channel could be seen or heard"), "channel note has public banter");
 
 console.log("channels checks ok");
