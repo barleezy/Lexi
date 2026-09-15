@@ -31,7 +31,6 @@ import { newMemorySessionId, parseSessionId } from "@/lib/memory/session-id";
 import {
   parseChatTurns,
   turnsToTranscripts,
-  withoutLatestUserLine,
   type ChatTurn,
 } from "@/lib/memory/turns";
 import { DEFAULT_USER_ID, normalizeUserId } from "@/lib/memory/user";
@@ -810,6 +809,7 @@ export class VoiceSession {
   private micNoiseFloor = 0.02;
   private by = "client";
   private decaySentForTurn = false;
+  private expectSpokenResponse = false;
   private ignoreOutputAudio = false;
   private lastPersisted = "";
   private pendingPersist = false;
@@ -1392,6 +1392,7 @@ export class VoiceSession {
       this.flushPendingVision();
       this.flushPendingVideo();
       void this.refreshDecayState();
+      this.expectSpokenResponse = false;
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
         for (const audio of this.pending) {
@@ -1623,6 +1624,7 @@ export class VoiceSession {
     switch (type) {
       case "input_audio_buffer.speech_started": {
         this.decaySentForTurn = false;
+        this.expectSpokenResponse = true;
         this.ignoreOutputAudio = true;
         this.responseCreateInFlight = false;
         this.activeResponseId = null;
@@ -1636,8 +1638,18 @@ export class VoiceSession {
       }
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
+        this.expectSpokenResponse = true;
         this.refreshClock();
         this.setPhase("thinking");
+        break;
+      case "input_audio_buffer.timeout_triggered":
+        this.expectSpokenResponse = false;
+        this.ignoreOutputAudio = true;
+        this.send({ type: "response.cancel" });
+        this.player?.flush();
+        this.captionPacer.stop();
+        this.setPhase("listening");
+        this.logger.log("play.stop", { reason: "idle-timeout" });
         break;
       case "input_audio_buffer.committed": {
         const itemId = typeof event.item_id === "string" ? event.item_id : crypto.randomUUID();
@@ -1657,8 +1669,19 @@ export class VoiceSession {
         break;
       case "response.created": {
         const incomingId = readResponseId(event);
-        this.ignoreOutputAudio = false;
         this.responseCreateInFlight = false;
+        if (!this.expectSpokenResponse) {
+          this.ignoreOutputAudio = true;
+          this.send({ type: "response.cancel" });
+          this.player?.flush();
+          this.captionPacer.stop();
+          this.activeResponseId = null;
+          this.setPhase("listening");
+          this.logger.log("play.stop", { reason: "unprompted" });
+          break;
+        }
+        this.expectSpokenResponse = false;
+        this.ignoreOutputAudio = false;
         const claim = claimExclusiveSpeech(this.activeResponseId, incomingId ?? PENDING_SPEECH_ID);
         if (claim.takeFloor) {
           const dropped = this.player?.flush() ?? 0;
@@ -2002,6 +2025,7 @@ export class VoiceSession {
 
   private requestSpokenResponse() {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.expectSpokenResponse = true;
     const decision = decideResponseCreate({
       createInFlight: this.responseCreateInFlight,
       hasActiveResponse: this.activeResponseId !== null,
@@ -2021,8 +2045,11 @@ export class VoiceSession {
   }
 
   private sessionUpdate() {
+    const decay = this.lastDecayState.trim()
+      ? `${this.memoryInstructions}\n\nCURRENT DECAY STATE: ${this.lastDecayState}`
+      : this.memoryInstructions;
     return buildSessionUpdate(
-      this.memoryInstructions,
+      decay,
       this.priorChat,
       this.currentSessionId() ?? "",
       {
@@ -2542,19 +2569,8 @@ export class VoiceSession {
   private sendDecayItem(state: string) {
     const text = `CURRENT DECAY STATE: ${state}`;
     this.logger.log("decay.refresh", { text });
-    // Per-turn payload is decay only. session.update would replace instructions
-    // wholesale and resend the persona; attach a small context item instead.
-    this.send(
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text }],
-        },
-      },
-      true,
-    );
+    // Never send decay as a user message — the model treats that as a prompt.
+    this.pushSilentSessionUpdate();
   }
 
   private sendCachedDecay() {
@@ -2745,42 +2761,10 @@ export class VoiceSession {
   }
 
   private injectPriorChat() {
+    // Prior turns already sit in session instructions. Replaying them as
+    // user items makes the last line look like a new prompt.
     if (!this.priorTurns.length) return;
-    const pending = new Set(this.pendingText.map((text) => text.trim()).filter(Boolean));
-    let items = 0;
-    for (const turn of withoutLatestUserLine(this.priorTurns)) {
-      const user = turn.user_text.trim();
-      const assistant = turn.assistant_text.trim();
-      if (user && !pending.has(user)) {
-        this.send(
-          {
-            type: "conversation.item.create",
-            item: {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: user }],
-            },
-          },
-          true,
-        );
-        items += 1;
-      }
-      if (assistant) {
-        this.send(
-          {
-            type: "conversation.item.create",
-            item: {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "text", text: assistant }],
-            },
-          },
-          true,
-        );
-        items += 1;
-      }
-    }
-    this.logger.log("prior.chat", { turns: this.priorTurns.length, items });
+    this.logger.log("prior.chat", { turns: this.priorTurns.length, items: 0 });
   }
 
   private appendAssistantDelta(event: Record<string, unknown>, delta: string) {

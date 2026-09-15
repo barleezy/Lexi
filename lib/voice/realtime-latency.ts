@@ -43,6 +43,9 @@ export function buildTurnDetection() {
     threshold: VAD_THRESHOLD,
     silence_duration_ms: VAD_SILENCE_DURATION_MS,
     prefix_padding_ms: VAD_PREFIX_PADDING_MS,
+    // Omit / null = no proactive check-in. A set idle_timeout_ms makes
+    // xAI commit a silent user turn and speak without Ian prompting.
+    idle_timeout_ms: null as number | null,
   };
 }
 

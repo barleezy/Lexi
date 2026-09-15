@@ -35,6 +35,7 @@ expect(vad.type === "server_vad", "turn detection type");
 expect(vad.threshold === 0.4, "turn detection threshold");
 expect(vad.silence_duration_ms === 400, "turn detection silence");
 expect(vad.prefix_padding_ms === 350, "turn detection prefix");
+expect(vad.idle_timeout_ms == null, "no idle check-in — she must not speak unprompted");
 
 expect(shouldDeferLiveVision("thinking", false, ["watch"]) === true, "defer watch frames while thinking");
 expect(shouldDeferLiveVision("thinking", true, ["watch"]) === false, "user-asked frames still send");
