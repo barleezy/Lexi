@@ -558,6 +558,7 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   const lines: DecayLine[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
+    if (row.memory_key === "transexual") continue;
     if (!FACT_KEY_SET.has(row.memory_key) || !row.value.trim()) continue;
     if (seen.has(row.memory_key)) continue;
     seen.add(row.memory_key);

@@ -1,6 +1,5 @@
 export const FACT_KEYS = [
   "name",
-  "transexual",
   "pets",
   "location",
   "commitments",
@@ -29,7 +28,7 @@ export type FactKey = (typeof FACT_KEYS)[number];
 export const FACT_KEY_LIST = FACT_KEYS.join(", ");
 
 /** Stable self-identity. Always stored at affect 10; other keys use the scorer. */
-export const IDENTITY_KEYS = ["name", "transexual"] as const satisfies readonly FactKey[];
+export const IDENTITY_KEYS = ["name"] as const satisfies readonly FactKey[];
 export type IdentityKey = (typeof IDENTITY_KEYS)[number];
 
 export function isIdentityKey(key: string): key is IdentityKey {
@@ -465,21 +464,6 @@ function mentionsUnder21(text: string) {
   return /\b(?:1[0-9]|20)\s+years?\s+old\b/i.test(text);
 }
 
-export function extractTransexual(text: string) {
-  const t = text.trim();
-  if (mentionsUnder21(t)) return null;
-  const role = t.match(
-    /\bi(?:'m| am)\s+(?:a |an )?(trans(?:gender|sexual|exual)?)\s+(woman|man|female|male)\b/i,
-  );
-  if (role) {
-    const stem = /^(transexual|transsexual)$/i.test(role[1]) ? "transexual" : "trans";
-    return `${stem} ${role[2].toLowerCase()}`;
-  }
-  const ident = t.match(/\bi(?:'m| am)\s+(trans(?:gender|sexual|exual)?)\b/i);
-  if (!ident) return null;
-  return /^(transexual|transsexual)$/i.test(ident[1]) ? "transexual" : "trans";
-}
-
 export function extractPorn(text: string) {
   const t = text.trim();
   if (mentionsUnder21(t)) return null;
@@ -574,7 +558,6 @@ export function extractFacts(userText: string, _assistantText = ""): ExtractedFa
 
   const facts: ExtractedFact[] = [];
   pushFact(facts, "name", extractName(user));
-  pushFact(facts, "transexual", extractTransexual(user));
   pushFact(facts, "pets", extractPets(user));
   pushFact(facts, "location", extractLocation(user));
   pushFact(facts, "commitments", extractCommitments(user));
