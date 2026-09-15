@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { bandFromStart, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
+import { defaultUserId } from "@/lib/memory/user";
 
 export type MemoryRow = {
   id: string;
@@ -47,7 +48,19 @@ export async function migrateMemories() {
   return { ok: true as const };
 }
 
+let ensured: Promise<ReturnType<typeof sql>> | null = null;
+
 async function ensureTable() {
+  if (!ensured) {
+    ensured = migrateTable().catch((error) => {
+      ensured = null;
+      throw error;
+    });
+  }
+  return ensured;
+}
+
+async function migrateTable() {
   const db = sql();
   if (!db) return null;
   await db.query(`
@@ -68,6 +81,83 @@ async function ensureTable() {
       UNIQUE (user_id, memory_key)
     )
   `);
+  // Existing Neon tables predating user_id are a no-op above. Add missing
+  // columns, backfill, then index. Never DROP — keep legacy columns/rows.
+  await db.query(`
+    DO $$
+    BEGIN
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id text;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS memory_key text;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS raw_text text;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS weighted_text text;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS start_salience double precision;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS salience double precision;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS band text;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS rate double precision;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS t0 timestamptz;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_decay timestamptz;
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+      ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'raw_event'
+      ) THEN
+        UPDATE memories SET raw_text = raw_event WHERE raw_text IS NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'weighted_version'
+      ) THEN
+        UPDATE memories SET weighted_text = weighted_version WHERE weighted_text IS NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'affect'
+      ) THEN
+        UPDATE memories SET start_salience = affect::double precision WHERE start_salience IS NULL;
+        UPDATE memories SET salience = affect::double precision WHERE salience IS NULL;
+      END IF;
+
+      UPDATE memories SET memory_key = 'legacy-' || id::text WHERE memory_key IS NULL;
+      UPDATE memories SET raw_text = '' WHERE raw_text IS NULL;
+      UPDATE memories SET start_salience = 3 WHERE start_salience IS NULL;
+      UPDATE memories SET salience = start_salience WHERE salience IS NULL;
+      UPDATE memories SET band = CASE
+        WHEN start_salience <= 3 THEN 'low'
+        WHEN start_salience <= 6 THEN 'medium'
+        ELSE 'high'
+      END
+      WHERE band IS NULL OR band NOT IN ('low', 'medium', 'high');
+      UPDATE memories SET rate = CASE band
+        WHEN 'low' THEN 0.08
+        WHEN 'medium' THEN 0.02
+        ELSE 0.005
+      END
+      WHERE rate IS NULL;
+      UPDATE memories SET t0 = COALESCE(created_at, now()) WHERE t0 IS NULL;
+      UPDATE memories SET created_at = now() WHERE created_at IS NULL;
+      UPDATE memories SET updated_at = COALESCE(created_at, now()) WHERE updated_at IS NULL;
+
+      ALTER TABLE memories ALTER COLUMN memory_key SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN raw_text SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN start_salience SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN salience SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN band SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN rate SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN t0 SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN created_at SET NOT NULL;
+      ALTER TABLE memories ALTER COLUMN updated_at SET NOT NULL;
+    END $$;
+  `);
+  await db.query(`UPDATE memories SET user_id = $1 WHERE user_id IS NULL`, [defaultUserId()]);
+  await db.query(`
+    DO $$
+    BEGIN
+      ALTER TABLE memories ALTER COLUMN user_id SET NOT NULL;
+    END $$;
+  `);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS memories_user_id_memory_key_uidx ON memories (user_id, memory_key)`);
   await db.query(`CREATE INDEX IF NOT EXISTS memories_user_id_idx ON memories (user_id)`);
   return db;
 }
