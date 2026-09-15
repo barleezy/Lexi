@@ -2,7 +2,6 @@ import {
   TARGET_RATE,
   PcmPlayer,
   addCaptureWorklet,
-  applyMicConstraints,
   applyMicTrackHints,
   base64ToBytes,
   createAudioContext,
@@ -26,6 +25,19 @@ import {
   KEEPALIVE_SILENCE_MS,
   pageIsHidden,
 } from "@/lib/voice/keepalive";
+import {
+  MIC_MUTE_SETTLE_MS,
+  MIC_REACQUIRE_DEBOUNCE_MS,
+  classifyMicError,
+  micTrackNeedsReplace,
+  shouldAttemptMicOpen,
+  shouldDeferMicReacquire,
+  shouldForceMicReacquire,
+  shouldKillSessionForMicError,
+  shouldPromptMicGesture,
+  shouldStopRetryingMic,
+  type MicRecoveryReason,
+} from "@/lib/voice/mic-recovery";
 import { scoreSalience } from "@/lib/memory/decay";
 import { FACT_KEY_LIST, FACT_KEYS, isPinnedKey, PINNED_AFFECT } from "@/lib/memory/extract";
 import { newMemorySessionId, parseSessionId } from "@/lib/memory/session-id";
@@ -975,6 +987,13 @@ export class VoiceSession {
   private voiceOnlyRoute = false;
   private liveWatch = false;
   private liveVision = { camera: false, screen: false };
+  private micInFlight = false;
+  private lastMicAttemptMs = 0;
+  private micRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private micPendingReason: MicRecoveryReason | null = null;
+  private micPermissionDenied = false;
+  private micRouteChanged = false;
+  private audioWasInterrupted = false;
   private clientTimeZone = detectClientTimeZone();
   private deviceLocation: DeviceLocationState | null = null;
   private lastClockLine = "";
@@ -1088,12 +1107,23 @@ export class VoiceSession {
 
     this.keepAliveStop = installVoiceKeepAlive({
       resumeAudio: () => resumeAudioContext(this.ctx),
-      ensureMic: () => this.ensureMic(),
+      ensureMic: (opts) => this.ensureMic({ reason: (opts?.reason as MicRecoveryReason | undefined) ?? "tick", force: opts?.force }),
       ping: () => this.heartbeat(),
       reclaim: () => this.reclaim(),
       onUnload: () => this.stop("client"),
       audioContextState: () => this.ctx?.state,
+      onRouteChange: () => {
+        this.micRouteChanged = true;
+        this.logger.log("mic.route", {});
+      },
       onCoexist: (state) => {
+        if (state.interrupted) this.audioWasInterrupted = true;
+        if (state.hidden && this.ctx) {
+          const ctxState = this.ctx.state as string;
+          if (ctxState === "suspended" || ctxState === "interrupted") {
+            this.audioWasInterrupted = true;
+          }
+        }
         this.pageHidden = state.hidden;
         this.coexistDucked = state.ducked;
         this.applyVoiceOnlyPolicy();
@@ -1198,8 +1228,16 @@ export class VoiceSession {
     claimMediaSession();
     await resumeAudioContext(this.ctx);
     this.restartDestKeepAlive();
+    this.micPermissionDenied = false;
     const track = this.stream?.getAudioTracks()[0];
-    await this.ensureMic({ force: !micTrackUsable(track) });
+    const force = shouldForceMicReacquire({
+      reason: "foreground",
+      trackNeedsReplace: micTrackNeedsReplace(track) || !micTrackUsable(track),
+      routeChanged: this.micRouteChanged,
+      audioWasInterrupted: this.audioWasInterrupted,
+      ios: isIOSWebKit(),
+    });
+    await this.ensureMic({ force, reason: "foreground" });
     this.rebindCapture();
     this.heartbeat();
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -1479,6 +1517,12 @@ export class VoiceSession {
     this.voiceOnlyRoute = false;
     this.liveWatch = false;
     this.liveVision = { camera: false, screen: false };
+    this.clearMicRetry();
+    this.micInFlight = false;
+    this.micPendingReason = null;
+    this.micPermissionDenied = false;
+    this.micRouteChanged = false;
+    this.audioWasInterrupted = false;
     this.videoContextProvider = null;
     this.by = by;
     this.logger.log("stop", { by, phase: this.phase });
@@ -1755,18 +1799,18 @@ export class VoiceSession {
     applyMicTrackHints(track);
     track.onended = () => {
       this.logger.log("mic.ended", {});
-      if (!this.voiceAudioInterrupted()) void this.ensureMic({ force: true });
+      void this.ensureMic({ force: true, reason: "ended" });
     };
     track.onmute = () => {
       this.logger.log("mic.mute", {});
       window.setTimeout(() => {
-        if (this.stopped || this.voiceAudioInterrupted()) return;
-        void this.ensureMic({ force: isIOSWebKit() || !micTrackUsable(track) });
-      }, 400);
+        if (this.stopped) return;
+        if (!micTrackNeedsReplace(track) && micTrackUsable(track)) return;
+        void this.ensureMic({ reason: "mute" });
+      }, MIC_MUTE_SETTLE_MS);
     };
     track.onunmute = () => {
-      void applyMicConstraints(track);
-      this.handlers.onMicRecovered?.();
+      if (micTrackUsable(track)) this.handlers.onMicRecovered?.();
     };
   }
 
@@ -1776,18 +1820,82 @@ export class VoiceSession {
     });
   }
 
-  private async ensureMic(opts: { force?: boolean } = {}) {
+  private clearMicRetry() {
+    if (this.micRetryTimer) {
+      clearTimeout(this.micRetryTimer);
+      this.micRetryTimer = null;
+    }
+  }
+
+  private scheduleMicRetry(reason: MicRecoveryReason) {
+    this.micPendingReason = reason;
+    if (this.micRetryTimer || this.stopped) return;
+    this.micRetryTimer = setTimeout(() => {
+      this.micRetryTimer = null;
+      if (this.stopped || !this.micPendingReason) return;
+      const pending = this.micPendingReason;
+      void this.ensureMic({ reason: pending, force: pending !== "tick" });
+    }, MIC_REACQUIRE_DEBOUNCE_MS);
+  }
+
+  private async ensureMic(opts: { force?: boolean; reason?: MicRecoveryReason } = {}) {
+    const reason = opts.reason ?? (opts.force ? "manual" : "tick");
     if (this.stopped || !this.ctx) return;
-    if (this.voiceAudioInterrupted()) return;
+
+    if (shouldDeferMicReacquire({ pageHidden: pageIsHidden() || this.pageHidden, reason })) {
+      this.micPendingReason = reason;
+      this.logger.log("mic.defer", { reason, hidden: true });
+      return;
+    }
+
     const track = this.stream?.getAudioTracks()[0];
-    if (!opts.force && micTrackUsable(track)) {
+    const needsReplace = micTrackNeedsReplace(track) || !micTrackUsable(track);
+    const force =
+      opts.force ||
+      shouldForceMicReacquire({
+        reason,
+        trackNeedsReplace: needsReplace,
+        routeChanged: this.micRouteChanged,
+        audioWasInterrupted: this.audioWasInterrupted,
+        ios: isIOSWebKit(),
+      });
+
+    if (!force && micTrackUsable(track)) {
       // Do not applyConstraints on every iOS keepalive tick — that glitches
       // HFP/CarPlay capture and resets server VAD.
+      this.micPendingReason = null;
       this.handlers.onMicRecovered?.();
       return;
     }
+
+    if (
+      !shouldAttemptMicOpen({
+        inFlight: this.micInFlight,
+        lastAttemptMs: this.lastMicAttemptMs,
+        now: Date.now(),
+        permissionDenied: this.micPermissionDenied,
+      })
+    ) {
+      if (this.micPermissionDenied) {
+        this.handlers.onMicNeedsGesture?.();
+        return;
+      }
+      this.scheduleMicRetry(reason);
+      return;
+    }
+
+    if (this.voiceAudioInterrupted()) {
+      await resumeAudioContext(this.ctx);
+    }
+
+    this.micInFlight = true;
+    this.lastMicAttemptMs = Date.now();
     try {
       const next = await openUserMic();
+      if (this.stopped) {
+        next.getTracks().forEach((item) => item.stop());
+        return;
+      }
       this.source?.disconnect();
       this.stream?.getTracks().forEach((item) => item.stop());
       this.stream = next;
@@ -1796,16 +1904,31 @@ export class VoiceSession {
         this.source = this.ctx.createMediaStreamSource(next);
         this.source.connect(this.worklet);
       }
+      this.micPermissionDenied = false;
+      this.micRouteChanged = false;
+      this.audioWasInterrupted = false;
+      this.micPendingReason = null;
       this.logger.log("mic.reacquire", {
+        reason,
         label: next.getAudioTracks()[0]?.label ?? "",
         state: next.getAudioTracks()[0]?.readyState,
       });
       this.handlers.onMicRecovered?.();
     } catch (error) {
-      this.logger.error("mic.reacquire", error);
-      if (isExclusiveMicError(error)) {
-        this.handlers.onMicNeedsGesture?.();
+      const kind = classifyMicError(error, {
+        pageHidden: pageIsHidden() || this.pageHidden,
+        documentHasFocus: typeof document === "undefined" ? undefined : document.hasFocus(),
+      });
+      this.logger.error("mic.reacquire", error, { reason, kind });
+      if (shouldKillSessionForMicError(kind)) {
+        this.fail(error);
+        return;
       }
+      if (shouldStopRetryingMic(kind)) this.micPermissionDenied = true;
+      if (shouldPromptMicGesture(kind)) this.handlers.onMicNeedsGesture?.();
+      if (!this.micPermissionDenied) this.scheduleMicRetry(reason);
+    } finally {
+      this.micInFlight = false;
     }
   }
 

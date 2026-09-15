@@ -27,7 +27,10 @@ import {
   shouldClaimMediaSession,
   shouldReclaimAfterExclusiveRelease,
   shouldReclaimForLifecycle,
+  shouldReclaimMicOnDeviceChange,
+  shouldRunMicReclaimAfterLifecycle,
 } from "../lib/voice/keepalive.ts";
+import { shouldBlockReclaimForInterrupt } from "../lib/voice/mic-recovery.ts";
 
 function expect(condition, label) {
   if (!condition) throw new Error(label);
@@ -124,6 +127,20 @@ expect(shouldReclaimAfterExclusiveRelease({ type: "devicechange" }) === true, "d
 expect(shouldReclaimAfterExclusiveRelease({ type: "focus" }) === true, "alt-tab back reclaims");
 expect(shouldReclaimAfterExclusiveRelease({ type: "statechange", audioContextState: "running" }) === true, "ctx running reclaims");
 expect(shouldReclaimAfterExclusiveRelease({ type: "visibilitychange", visibilityState: "hidden" }) === false, "hidden does not reclaim");
+expect(
+  shouldRunMicReclaimAfterLifecycle({ reclaiming: false, pageHidden: false }) === true,
+  "foreground still reclaims after PR4 hidden/voice-only",
+);
+expect(
+  shouldRunMicReclaimAfterLifecycle({ reclaiming: false, pageHidden: true }) === false,
+  "hidden voice-only still skips getUserMedia",
+);
+expect(
+  shouldBlockReclaimForInterrupt({ interrupted: true, resumed: true, pageHidden: false }) === false,
+  "AirPods: interrupted ctx after resume must reclaim",
+);
+expect(shouldReclaimMicOnDeviceChange({ pageHidden: false }) === true, "AirPods devicechange reclaims");
+expect(shouldReclaimMicOnDeviceChange({ pageHidden: true }) === false, "hidden devicechange waits for foreground");
 
 const wav = buildKeepAliveWavDataUrl(1, 8000);
 expect(wav.startsWith("data:audio/wav;base64,"), "wav data url");
