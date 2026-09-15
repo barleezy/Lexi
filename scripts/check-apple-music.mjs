@@ -2,13 +2,15 @@ import {
   APPLE_MUSIC_ACTIONS,
   APPLE_MUSIC_API,
   APPLE_MUSIC_USER_COOKIE,
+  MUSICKIT_SCRIPT,
+  OUR_SONG_SEARCH,
   appleMusicStorefront,
   isAppleMusicConfigured,
   parseAppleMusicAction,
   parseAppleMusicQuery,
   parseAppleMusicSongId,
+  parseAppleMusicSongIdFromInput,
 } from "../lib/apple-music/config.ts";
-import { MUSICKIT_SCRIPT } from "../lib/apple-music/client.ts";
 
 function expect(condition, label) {
   if (!condition) throw new Error(label);
@@ -34,5 +36,18 @@ expect(APPLE_MUSIC_ACTIONS.includes("connect"), "connect is an action");
 expect(parseAppleMusicQuery("  Down Low  ") === "Down Low", "trim query");
 expect(parseAppleMusicSongId("1666123568") === "1666123568", "catalog id");
 expect(parseAppleMusicSongId("not-an-id") === "", "reject non-id");
+expect(OUR_SONG_SEARCH.includes("Down Low"), "our song search");
+expect(OUR_SONG_SEARCH.includes("Astrid"), "our song artist");
+expect(
+  parseAppleMusicSongIdFromInput("https://music.apple.com/us/song/down-low/1578475848") ===
+    "1578475848",
+  "song url id",
+);
+expect(
+  parseAppleMusicSongIdFromInput("https://music.apple.com/us/album/down-low/1578475847?i=1578475848") ===
+    "1578475848",
+  "album url song id",
+);
+expect(parseAppleMusicSongIdFromInput("1578475848") === "1578475848", "plain catalog id");
 
 console.log("apple music config ok");

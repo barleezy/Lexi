@@ -275,7 +275,19 @@ export function applyPlayAndRecordSession() {
   return false;
 }
 
+let yieldMediaSession = false;
+
+/** When MusicKit (or the user) is playing music, do not steal lock-screen controls. */
+export function setMediaSessionYield(yieldToOther: boolean) {
+  yieldMediaSession = yieldToOther;
+}
+
+export function shouldClaimMediaSession(yieldToOther = yieldMediaSession) {
+  return !yieldToOther;
+}
+
 export function claimMediaSession() {
+  if (!shouldClaimMediaSession()) return;
   const media = navigator.mediaSession;
   if (!media) return;
   try {

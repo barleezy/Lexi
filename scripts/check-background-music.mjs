@@ -22,6 +22,7 @@ expect(/lyrics/i.test(persona), "lyrics-first in persona");
 expect(persona.includes("affect 10, stays 10"), "affect 10 stays 10 in persona");
 expect(persona.includes("apple_music_connect"), "connect tool in persona");
 expect(persona.includes("play_music"), "play_music in persona");
+expect(persona.includes("homepage"), "user can play from the homepage");
 expect(persona.includes("watch tab"), "tells her not to open a watch tab");
 
 console.log("background music + couple song ok");

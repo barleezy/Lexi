@@ -1,6 +1,8 @@
 export const APPLE_MUSIC_API = "https://api.music.apple.com/v1";
+export const MUSICKIT_SCRIPT = "https://js-cdn.music.apple.com/musickit/v3/musickit.js";
 export const APPLE_MUSIC_USER_COOKIE = "lexi_apple_music_user";
 export const APPLE_MUSIC_USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 180;
+export const OUR_SONG_SEARCH = "Down Low Astrid S";
 export const APPLE_MUSIC_SETUP =
   "Set APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, and APPLE_MUSIC_PRIVATE_KEY (the .p8 MusicKit key) in .env.local. Create a MusicKit identifier in Apple Developer. Ian then taps Connect Apple Music and signs in. Never commit the key.";
 
@@ -57,4 +59,26 @@ export function parseAppleMusicSongId(raw: unknown) {
   const value = String(raw).trim();
   if (!/^\d{1,18}$/.test(value)) return "";
   return value;
+}
+
+/** Catalog id from a typed id, or an official music.apple.com / itunes.apple.com song link. */
+export function parseAppleMusicSongIdFromInput(raw: unknown) {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) return "";
+  const direct = parseAppleMusicSongId(text);
+  if (direct) return direct;
+  try {
+    const url = new URL(text);
+    const host = url.hostname.toLowerCase();
+    if (host !== "music.apple.com" && host !== "itunes.apple.com" && !host.endsWith(".music.apple.com")) {
+      return "";
+    }
+    const songMatch = url.pathname.match(/\/song\/[^/]+\/(\d{1,18})/i);
+    if (songMatch?.[1] && parseAppleMusicSongId(songMatch[1])) return songMatch[1];
+    const albumSong = url.searchParams.get("i");
+    if (albumSong && parseAppleMusicSongId(albumSong)) return albumSong;
+  } catch {
+    // not a URL
+  }
+  return "";
 }

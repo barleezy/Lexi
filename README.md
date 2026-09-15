@@ -39,7 +39,7 @@ Official MusicKit only. Lexi does not scrape Apple Music or invent partner hosts
    - optional `APPLE_MUSIC_STOREFRONT` (default `us`)
 3. Restart. `GET /api/apple-music` mints a short-lived developer JWT. If keys are missing it returns **503** with a setup hint.
 4. On the homepage tap **Connect Apple Music** (or ask Lexi to connect). MusicKit JS (`js-cdn.music.apple.com`) opens Apple’s sign-in. The **user token** is stored as an HttpOnly cookie `lexi_apple_music_user` — not in git, not in Neon.
-5. After connect she can love a song, add it to your library or a playlist, or play it. Those official account actions are the recommendation signals. Background play of a direct audio URL uses a hidden `<audio>` element (no watch tab). Lexi’s voice ducks to 42% while other audio plays.
+5. After connect she can love a song, add it to your library or a playlist, or play it. You can also play, pause, and skip from the homepage while a voice session is live — tap Play (empty play is “Down Low” by Astrid S, or search / paste an Apple Music song link). Those official account actions are the recommendation signals. Background play of a direct audio URL uses a hidden `<audio>` element (no watch tab). Lexi’s voice ducks to 42% while other audio plays.
 
 Voice tools: `apple_music_connect`, `apple_music_love`, `apple_music_library`, `apple_music_playlist`, `play_music`, `stop_music`. Tokens stay on the server except the MusicKit developer JWT the browser needs to authorize.
 

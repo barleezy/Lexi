@@ -715,7 +715,7 @@ const PLAY_MUSIC_TOOL = {
   type: "function",
   name: "play_music",
   description:
-    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL Ian gave you, or a song query to play on his connected Apple Music. Does not open a watch tab. Voice stays up.",
+    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL Ian gave you, or a song query to play on his connected Apple Music. Ian can also play/pause/skip from the homepage without this tool. Does not open a watch tab. Voice stays up.",
   parameters: {
     type: "object",
     properties: {

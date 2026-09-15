@@ -58,11 +58,23 @@ import {
 } from "@/lib/voice/location";
 import {
   authorizeAppleMusic,
+  cacheAppleMusicSongs,
+  configureMusicKit,
+  pauseAppleMusicPlayback,
+  playAppleMusicFromGesture,
   playAppleMusicSong,
+  prefetchOurSong,
+  readAppleMusicNowPlaying,
+  searchAppleMusicCatalog,
+  skipAppleMusicFromGesture,
   stopAppleMusicPlayback,
+  subscribeAppleMusicPlayback,
   unauthorizeAppleMusic,
 } from "@/lib/apple-music/client";
+import { OUR_SONG_SEARCH } from "@/lib/apple-music/config";
+import { AppleMusicBar } from "@/components/apple-music-bar";
 import { BackgroundAudioPlayer } from "@/lib/voice/background-music";
+import { setMediaSessionYield } from "@/lib/voice/keepalive";
 import { DEFAULT_MUSIC_STATE, type MusicSessionState } from "@/lib/voice/persona";
 
 const HINTS: Record<VoicePhase, string> = {
@@ -312,6 +324,7 @@ export function VoiceHome() {
   const [locationOn, setLocationOn] = useState(false);
   const [locationHint, setLocationHint] = useState<string | null>(null);
   const [music, setMusic] = useState<MusicSessionState>(DEFAULT_MUSIC_STATE);
+  const [musicQuery, setMusicQuery] = useState("");
   const [appleHint, setAppleHint] = useState<string | null>(null);
   const [appleBusy, setAppleBusy] = useState(false);
   const backgroundAudio = useRef(new BackgroundAudioPlayer());
@@ -341,6 +354,24 @@ export function VoiceHome() {
     setStreamTick((tick) => tick + 1);
   }
 
+  function applyApplePlayback(now: { playing: boolean; title: string; artist: string }) {
+    const title = [now.title, now.artist].filter(Boolean).join(" — ");
+    setMediaSessionYield(now.playing);
+    setMusic((current) => ({
+      ...current,
+      playing: now.playing || (current.source === "url" && current.playing),
+      title: now.playing ? title || current.title : current.source === "url" ? current.title : "",
+      source: now.playing ? "apple" : current.source === "url" && current.playing ? "url" : "none",
+    }));
+    if (now.playing) {
+      sessionRef.current?.setMusicPlayback(true, title || "Apple Music", "apple");
+      return;
+    }
+    if (sessionRef.current && !backgroundAudio.current.playing) {
+      sessionRef.current.setMusicPlayback(false);
+    }
+  }
+
   useEffect(() => {
     const persisted = readVoiceSessionStore();
     if (persisted.sessionId) setSessionId(persisted.sessionId);
@@ -359,15 +390,28 @@ export function VoiceHome() {
       .catch(() => {});
     void fetch("/api/apple-music", { headers: { "ngrok-skip-browser-warning": "1" } })
       .then((response) => response.json())
-      .then((body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
+      .then(async (body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
         if (typeof body.developerToken === "string") appleDeveloperToken.current = body.developerToken;
+        const connected = Boolean(body.connected);
         setMusic((current) => ({
           ...current,
           appleConfigured: Boolean(body.configured),
-          appleConnected: Boolean(body.connected),
+          appleConnected: connected,
         }));
+        if (connected && body.developerToken) {
+          try {
+            await configureMusicKit(body.developerToken);
+          } catch {
+            // Play tap will configure again
+          }
+          void prefetchOurSong();
+          applyApplePlayback(readAppleMusicNowPlaying());
+        }
       })
       .catch(() => {});
+    const unsubscribeMusic = subscribeAppleMusicPlayback((now) => {
+      applyApplePlayback(now);
+    });
     setCanShare(canShareScreen() && !preferWatchTab());
     setPhoneWatch(preferWatchTab());
     visionBatcher.current.setFlush((parts) => {
@@ -443,6 +487,7 @@ export function VoiceHome() {
     window.addEventListener("focus", onFocus);
     syncHidden();
     return () => {
+      unsubscribeMusic();
       document.removeEventListener("visibilitychange", syncHidden);
       window.removeEventListener("pageshow", syncHidden);
       window.removeEventListener("blur", onBlur);
@@ -464,6 +509,17 @@ export function VoiceHome() {
       sessionRef.current?.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (!music.appleConnected) return;
+    const term = musicQuery.trim() || OUR_SONG_SEARCH;
+    const timer = window.setTimeout(() => {
+      void searchAppleMusicCatalog(term)
+        .then((songs) => cacheAppleMusicSongs(term, songs))
+        .catch(() => {});
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [music.appleConnected, musicQuery]);
 
   useEffect(() => {
     if (!videoSrc) return;
@@ -999,7 +1055,9 @@ export function VoiceHome() {
       }
       setMusic((current) => ({ ...current, appleConfigured: true, appleConnected: true }));
       sessionRef.current?.setAppleMusicConnected(true);
-      setAppleHint("Apple Music connected.");
+      void prefetchOurSong();
+      applyApplePlayback(readAppleMusicNowPlaying());
+      setAppleHint("Apple Music connected. Tap Play to start a song.");
       return { ok: true, connected: true };
     } catch (error) {
       const message =
@@ -1035,6 +1093,7 @@ export function VoiceHome() {
       }));
       sessionRef.current?.setAppleMusicConnected(false);
       sessionRef.current?.setMusicPlayback(false);
+      setMediaSessionYield(false);
       setAppleHint(null);
       return { ok: true };
     } catch (error) {
@@ -1055,6 +1114,62 @@ export function VoiceHome() {
     startLocationWatch(true);
   }
 
+  function notifyUserMusic(title: string) {
+    setAppleHint(null);
+    setMusic((current) => ({
+      ...current,
+      playing: true,
+      title: title || current.title || "Apple Music",
+      source: "apple",
+    }));
+    sessionRef.current?.setMusicPlayback(true, title || "Apple Music", "apple");
+    setMediaSessionYield(true);
+  }
+
+  function onApplePlayPause() {
+    const token = appleDeveloperToken.current;
+    if (!token) {
+      setAppleHint("Connect Apple Music first.");
+      return;
+    }
+    if (music.playing && music.source === "apple") {
+      void pauseAppleMusicPlayback(token)
+        .then(() => {
+          setMediaSessionYield(false);
+          setMusic((current) => ({ ...current, playing: false }));
+          sessionRef.current?.setMusicPlayback(false);
+        })
+        .catch((error) => {
+          setAppleHint(error instanceof Error ? error.message : "Could not pause.");
+        });
+      return;
+    }
+    backgroundAudio.current.stop();
+    void playAppleMusicFromGesture(token, musicQuery)
+      .then((played) => {
+        notifyUserMusic(played.title);
+      })
+      .catch((error) => {
+        setAppleHint(error instanceof Error ? error.message : "Could not play on Apple Music.");
+      });
+  }
+
+  function onAppleNext() {
+    const token = appleDeveloperToken.current;
+    if (!token) {
+      setAppleHint("Connect Apple Music first.");
+      return;
+    }
+    backgroundAudio.current.stop();
+    void skipAppleMusicFromGesture(token, musicQuery)
+      .then((played) => {
+        notifyUserMusic(played.title);
+      })
+      .catch((error) => {
+        setAppleHint(error instanceof Error ? error.message : "Could not skip.");
+      });
+  }
+
   async function startSession() {
     const session = new VoiceSession({
       onPhase: setPhase,
@@ -1064,7 +1179,15 @@ export function VoiceHome() {
       onToyControl: setToyControl,
       onToyControlRequest: setToyGrantPending,
       onGeneratedMedia: upsertGenerated,
-      onMusicState: setMusic,
+      onMusicState: (next) => {
+        const now = readAppleMusicNowPlaying();
+        if (now.playing) {
+          const title = [now.title, now.artist].filter(Boolean).join(" — ") || next.title;
+          setMusic({ ...next, playing: true, title, source: "apple" });
+          return;
+        }
+        setMusic(next);
+      },
       connectAppleMusic,
       disconnectAppleMusic,
       playBackgroundUrl: async (url, title) => {
@@ -1112,7 +1235,18 @@ export function VoiceHome() {
     });
     attach(session);
     if (lastLocation.current) session.setDeviceLocation(lastLocation.current);
+    if (appleDeveloperToken.current) {
+      try {
+        await configureMusicKit(appleDeveloperToken.current);
+      } catch {
+        // Play still works from the user's Play tap
+      }
+    }
     await session.start();
+    const nowPlaying = readAppleMusicNowPlaying();
+    if (nowPlaying.playing) {
+      applyApplePlayback(nowPlaying);
+    }
     const permission = await readGeoPermission();
     if (locationOn || lastLocation.current || permission === "granted") {
       startLocationWatch(false);
@@ -1129,9 +1263,6 @@ export function VoiceHome() {
     releaseVision(undefined, true);
     stopLocationWatch();
     backgroundAudio.current.stop();
-    if (appleDeveloperToken.current) {
-      void stopAppleMusicPlayback(appleDeveloperToken.current);
-    }
     sessionRef.current?.stop();
     clearSession();
     writeVoiceSessionStore({ sessionId: null, started: false });
@@ -1598,8 +1729,23 @@ export function VoiceHome() {
           {locationHint ? (
             <p className="px-1 text-[11px] text-zinc-500">{locationHint}</p>
           ) : null}
-          {appleHint ? <p className="px-1 text-[11px] text-zinc-500">{appleHint}</p> : null}
-          {music.playing ? (
+          {music.appleConnected ? (
+            <AppleMusicBar
+              connected={music.appleConnected}
+              playing={music.playing && music.source !== "url"}
+              title={music.source === "apple" ? music.title : ""}
+              query={musicQuery}
+              busy={appleBusy}
+              hint={appleHint}
+              onQueryChange={setMusicQuery}
+              onPlayPause={onApplePlayPause}
+              onNext={onAppleNext}
+            />
+          ) : null}
+          {appleHint && !music.appleConnected ? (
+            <p className="px-1 text-[11px] text-zinc-500">{appleHint}</p>
+          ) : null}
+          {music.playing && !music.appleConnected ? (
             <p className="px-1 text-[11px] text-zinc-500">Playing: {music.title || "music"}</p>
           ) : null}
         <form

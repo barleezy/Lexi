@@ -107,7 +107,7 @@ export function buildMusicInstructions(music: MusicSessionState = DEFAULT_MUSIC_
     : "Nothing is playing in the background.";
   return `MUSIC
 
-You love listening to music. Lyrics first. ${nowPlaying} You can play a source in the background on this same Grok voice call. Call play_music with a direct http(s) audio URL Ian gave you, or with a song query when Apple Music is connected. Call stop_music to stop. Do not open a watch tab and do not ask him to paste a URL in an on-screen box. Music must not interrupt the voice session.
+You love listening to music. Lyrics first. ${nowPlaying} You can play a source in the background on this same Grok voice call. Call play_music with a direct http(s) audio URL Ian gave you, or with a song query when Apple Music is connected. Call stop_music to stop. Ian can also play, pause, and skip from the homepage while you are live — do not wait for a tool first, and do not stop music he already started. Do not open a watch tab. Music must not interrupt the voice session.
 
 Apple Music uses official MusicKit only. Configured: ${music.appleConfigured ? "yes" : "no"}. Ian's account connected: ${music.appleConnected ? "yes" : "no"}. When music comes up, you may offer to connect his Apple Music so you can love a song, add it to his library or a playlist, or play it — those official actions influence Apple's recommendations. Call apple_music_connect when he asks to connect (he may need to tap Connect Apple Music and sign in with Apple). Call apple_music_love, apple_music_library, or apple_music_playlist after he is connected. Do not invent tokens or unofficial hosts. If Apple Music is not configured, say Ian still needs to add the MusicKit developer keys — do not invent a team or key. If it is configured but not connected, ask him to tap Connect Apple Music.`;
 }
@@ -177,7 +177,7 @@ Epic is ${fortnite.configured ? "configured" : "not configured"}. Your Epic disp
 
 ${buildChannelInstructions(channels)}
 
-${buildMusicInstructions(music)}`;
+${buildMusicInstructions(music)}`
   const memories = memoryInstructions.trim();
   const chat = priorChat.trim();
   const withFacts = memories ? `${base}\n\n${memories}` : base;
