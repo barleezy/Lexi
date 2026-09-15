@@ -1,14 +1,27 @@
 import {
+  EXPECT_STALL_MS,
   PENDING_SPEECH_ID,
+  RESPONSE_CREATE_STALL_MS,
+  TOOL_CALL_TIMEOUT_MS,
   claimExclusiveSpeech,
   decidePlaybackHandoff,
   decideResponseCreate,
+  decideToolFollowUpCreate,
+  isIgnorableRealtimeError,
+  isRecoverableRealtimeError,
   lockSpeechId,
+  previousIdForHandoff,
+  raceTimeout,
   shouldClearExpectAfterDone,
+  shouldReleaseSpeechFloor,
   normalizeResponseId,
   readResponseId,
   shouldPlayOutputAudio,
 } from "../lib/voice/exclusive-speech.ts";
+
+function expect(condition, label) {
+  if (!condition) throw new Error(label);
+}
 
 function expectEqual(actual, expected, label) {
   const left = JSON.stringify(actual);
@@ -189,6 +202,101 @@ expectEqual(
   true,
   "cancelled reply is not a follow-up window",
 );
+expectEqual(
+  shouldClearExpectAfterDone({
+    toolsThisResponse: true,
+    inflightTools: 1,
+    toolResponseWaiting: true,
+    status: "error",
+  }),
+  true,
+  "error status always closes the spoken turn",
+);
+
+expectEqual(
+  shouldReleaseSpeechFloor({ activeId: "r1", doneId: "r1" }),
+  true,
+  "matching done id releases the floor",
+);
+expectEqual(
+  shouldReleaseSpeechFloor({ activeId: "r1", doneId: "" }),
+  true,
+  "missing done id still releases — do not hold the lock",
+);
+expectEqual(
+  shouldReleaseSpeechFloor({ activeId: PENDING_SPEECH_ID, doneId: "r2" }),
+  true,
+  "pending floor releases on done",
+);
+expectEqual(
+  shouldReleaseSpeechFloor({ activeId: "r2", doneId: "r1" }),
+  false,
+  "a newer live response is not cleared by an older done",
+);
+expectEqual(
+  shouldReleaseSpeechFloor({ activeId: null, doneId: "r1" }),
+  true,
+  "empty floor stays free",
+);
+
+expectEqual(previousIdForHandoff("r1", "r1"), null, "finished id is not still generating");
+expectEqual(previousIdForHandoff("r2", "r1"), "r2", "a newer live id stays previous");
+expectEqual(previousIdForHandoff(PENDING_SPEECH_ID, "r1"), PENDING_SPEECH_ID, "pending is same turn");
+
+expectEqual(
+  decideToolFollowUpCreate({ createInFlight: false, activeId: null, finishedId: "r1" }),
+  "create",
+  "free floor after tools must create — server will not idle-talk",
+);
+expectEqual(
+  decideToolFollowUpCreate({ createInFlight: false, activeId: "r1", finishedId: "r1" }),
+  "create",
+  "stale finished id must not skip the spoken follow-up",
+);
+expectEqual(
+  decideToolFollowUpCreate({ createInFlight: false, activeId: "r2", finishedId: "r1" }),
+  "skip",
+  "a follow-up the server already started is not created again",
+);
+expectEqual(
+  decideToolFollowUpCreate({ createInFlight: true, activeId: null, finishedId: "r1" }),
+  "skip",
+  "in-flight create is enough",
+);
+expectEqual(
+  decideToolFollowUpCreate({ createInFlight: false, activeId: PENDING_SPEECH_ID, finishedId: "r1" }),
+  "skip",
+  "pending created event is the follow-up landing",
+);
+
+expectEqual(
+  decidePlaybackHandoff({
+    takeFloor: true,
+    previousActiveId: previousIdForHandoff("r1", "r1"),
+    incomingId: "r2",
+    queuedMs: 400,
+  }),
+  "continue",
+  "sequential follow-up after a finished line appends — no flush+lead gap",
+);
+
+expect(RESPONSE_CREATE_STALL_MS <= 2000, "create stall is recovery, not a stacked pause");
+expect(EXPECT_STALL_MS <= 5000, "expect stall is recovery");
+expect(TOOL_CALL_TIMEOUT_MS <= 12_000, "tools cannot hold the turn open indefinitely");
+expect(TOOL_CALL_TIMEOUT_MS >= 4000, "tools get a few seconds before timeout");
+
+expect(isIgnorableRealtimeError("Cancellation failed: no active response") === true, "cancel error is ignorable");
+expect(isIgnorableRealtimeError("no in-progress response") === true, "no in-progress is ignorable");
+expect(isRecoverableRealtimeError("already has an active response") === true, "already-active is recoverable");
+expect(isRecoverableRealtimeError("conversation_already has a response") === true, "conversation_already is recoverable");
+expect(isRecoverableRealtimeError("upstream 500") === false, "real failures still fail the session");
+
+await raceTimeout(new Promise((resolve) => setTimeout(() => resolve("slow"), 50)), 5, "fallback").then((value) => {
+  expectEqual(value, "fallback", "tool timeout wins over a hung promise");
+});
+await raceTimeout(Promise.resolve("fast"), 50, "fallback").then((value) => {
+  expectEqual(value, "fast", "finished tool is not delayed by the timeout");
+});
 
 expectEqual(
   shouldPlayOutputAudio({ ignore: false, activeId: PENDING_SPEECH_ID, incomingId: "r2" }),

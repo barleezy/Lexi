@@ -1,9 +1,9 @@
 import { bandFromStart, daysElapsed, decaySalience, rateForBand } from "../lib/memory/decay.ts";
 
 const cases = [
-  { start: 2, days: 10, expectBand: "low", expectRate: 0.08 },
-  { start: 5, days: 10, expectBand: "medium", expectRate: 0.02 },
-  { start: 8, days: 10, expectBand: "high", expectRate: 0.005 },
+  { start: 2, days: 10, expectBand: "low", expectRate: 0.04 },
+  { start: 5, days: 10, expectBand: "medium", expectRate: 0.01 },
+  { start: 8, days: 10, expectBand: "high", expectRate: 0.0025 },
 ];
 
 for (const item of cases) {

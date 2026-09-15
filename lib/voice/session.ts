@@ -56,14 +56,23 @@ import {
 } from "@/lib/voice/realtime-latency";
 import { buildInputAudio, readUserTranscript, sanitizeUserText } from "@/lib/voice/listen";
 import {
+  EXPECT_STALL_MS,
   PENDING_SPEECH_ID,
+  RESPONSE_CREATE_STALL_MS,
+  TOOL_CALL_TIMEOUT_MS,
   claimExclusiveSpeech,
   decidePlaybackHandoff,
   decideResponseCreate,
+  decideToolFollowUpCreate,
+  isIgnorableRealtimeError,
+  isRecoverableRealtimeError,
   lockSpeechId,
+  previousIdForHandoff,
+  raceTimeout,
   readResponseId,
   shouldClearExpectAfterDone,
   shouldPlayOutputAudio,
+  shouldReleaseSpeechFloor,
 } from "@/lib/voice/exclusive-speech";
 import type { GeneratedMediaItem } from "@/lib/generate/media";
 import { readGeneratePrompt } from "@/lib/generate/safety";
@@ -968,7 +977,12 @@ export class VoiceSession {
   private lastAudioSendT = 0;
   private openedAt = 0;
   private activeResponseId: string | null = null;
+  private lastFinishedResponseId: string | null = null;
   private responseCreateInFlight = false;
+  private spokenCreateAttempts = 0;
+  private responseCreateTimer: ReturnType<typeof setTimeout> | null = null;
+  private expectStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private sessionUpdateDeferred = false;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -1394,8 +1408,12 @@ export class VoiceSession {
     this.destKeepAliveStop?.();
     this.destKeepAliveStop = null;
     this.captionPacer.stop();
+    this.clearTurnWatchdogs();
     this.activeResponseId = null;
+    this.lastFinishedResponseId = null;
     this.responseCreateInFlight = false;
+    this.spokenCreateAttempts = 0;
+    this.sessionUpdateDeferred = false;
     this.flushInWindow(true);
     this.player?.stop();
     this.worklet?.port.close();
@@ -1536,6 +1554,9 @@ export class VoiceSession {
       this.flushPendingVideo();
       void this.refreshDecayState();
       this.expectSpokenResponse = false;
+      this.responseCreateInFlight = false;
+      this.spokenCreateAttempts = 0;
+      this.clearTurnWatchdogs();
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
         for (const audio of this.pending) {
@@ -1556,7 +1577,12 @@ export class VoiceSession {
         this.logger.error("parse", error);
         return;
       }
-      this.onServer(payload);
+      try {
+        this.onServer(payload);
+      } catch (error) {
+        this.logger.error("server", error);
+        this.releaseSpokenTurn("handler");
+      }
     });
 
     ws.addEventListener("error", () => {
@@ -1771,10 +1797,12 @@ export class VoiceSession {
         this.ignoreOutputAudio = true;
         this.responseCreateInFlight = false;
         this.activeResponseId = null;
+        this.spokenCreateAttempts = 0;
         const dropped = this.player?.flush() ?? 0;
         this.send({ type: "response.cancel" });
         this.logger.log("play.stop", { reason: "barge-in", dropped_ms: dropped });
         this.captionPacer.stop();
+        this.armExpectWatchdog();
         // Barge-in cancels Lexi's speech only. Never pause or stop a watch-together video.
         this.setPhase("listening");
         break;
@@ -1782,11 +1810,13 @@ export class VoiceSession {
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
         this.expectSpokenResponse = true;
+        this.armExpectWatchdog();
         this.setPhase("thinking");
         break;
       case "input_audio_buffer.timeout_triggered":
         this.expectSpokenResponse = false;
         this.ignoreOutputAudio = true;
+        this.clearTurnWatchdogs();
         this.send({ type: "response.cancel" });
         this.player?.flush();
         this.captionPacer.stop();
@@ -1812,6 +1842,8 @@ export class VoiceSession {
       case "response.created": {
         const incomingId = readResponseId(event);
         this.responseCreateInFlight = false;
+        this.spokenCreateAttempts = 0;
+        this.clearResponseCreateWatchdog();
         if (!this.expectSpokenResponse) {
           this.ignoreOutputAudio = true;
           this.send({ type: "response.cancel" });
@@ -1823,8 +1855,8 @@ export class VoiceSession {
           break;
         }
         this.ignoreOutputAudio = false;
-        const previousId = this.activeResponseId;
-        const claim = claimExclusiveSpeech(this.activeResponseId, incomingId ?? PENDING_SPEECH_ID);
+        const previousId = previousIdForHandoff(this.activeResponseId, this.lastFinishedResponseId);
+        const claim = claimExclusiveSpeech(previousId, incomingId ?? PENDING_SPEECH_ID);
         const handoff = decidePlaybackHandoff({
           takeFloor: claim.takeFloor,
           previousActiveId: previousId,
@@ -1846,6 +1878,7 @@ export class VoiceSession {
         this.outBytes = 0;
         this.toolsThisResponse = false;
         this.factWriteSucceeded = false;
+        this.armExpectWatchdog();
         break;
       }
       case "response.output_audio_transcript.delta":
@@ -1879,59 +1912,10 @@ export class VoiceSession {
         }
         break;
       }
-      case "response.done": {
-        const response = (event.response ?? {}) as Record<string, unknown>;
-        const responseId = readResponseId(event) ?? (typeof response.id === "string" ? response.id : "");
-        if (
-          this.activeResponseId === PENDING_SPEECH_ID ||
-          (responseId && responseId === this.activeResponseId)
-        ) {
-          this.activeResponseId = null;
-        }
-        this.responseCreateInFlight = false;
-        this.logger.log("audio.out", {
-          response_id: responseId,
-          status: response.status,
-          deltas: this.outDeltas,
-          bytes: this.outBytes,
-          audio_ms: this.outBytes > 0 ? Math.round((this.outBytes / 2 / TARGET_RATE) * 1000) : 0,
-          wall_ms: this.createdT ? Date.now() - this.createdT : 0,
-          max_gap_ms: this.player?.maxGapMs ?? 0,
-          queued_ms: this.player?.queuedMs ?? 0,
-          underruns: this.player?.underruns ?? 0,
-          drain_ms_max: this.player?.drainMsMax ?? 0,
-        });
-        this.decaySentForTurn = false;
-        const status = typeof response.status === "string" ? response.status : "";
-        const awaitingTools = this.toolsThisResponse && status !== "cancelled" && status !== "failed";
-        if (awaitingTools) {
-          this.toolResponseWaiting = true;
-          this.flushToolBatch();
-        } else {
-          this.toolResponseWaiting = false;
-          if (
-            shouldClearExpectAfterDone({
-              toolsThisResponse: this.toolsThisResponse,
-              inflightTools: this.inflightTools.size,
-              toolResponseWaiting: this.toolResponseWaiting,
-              status,
-            })
-          ) {
-            this.expectSpokenResponse = false;
-          }
-          this.setPhase("listening");
-        }
-        if (status !== "cancelled" && status !== "failed") {
-          if (!awaitingTools) void this.refreshDecayState();
-          this.captionPacer.flush();
-        } else {
-          this.expectSpokenResponse = false;
-          this.captionPacer.stop();
-        }
-        if (status !== "cancelled" && status !== "failed" && status !== "incomplete") {
-          this.pendingPersist = true;
-          this.persistTurn();
-        }
+      case "response.done":
+      case "response.cancelled":
+      case "response.failed": {
+        this.onResponseTerminal(event);
         break;
       }
       case "error": {
@@ -1942,7 +1926,18 @@ export class VoiceSession {
             : typeof nested?.message === "string"
               ? nested.message
               : "Voice session error.";
-        if (this.ignoreOutputAudio && /cancel/i.test(message)) break;
+        this.responseCreateInFlight = false;
+        this.clearResponseCreateWatchdog();
+        if (isIgnorableRealtimeError(message)) break;
+        if (isRecoverableRealtimeError(message)) {
+          this.logger.log("turn.recover", { reason: "error", message });
+          if (this.expectSpokenResponse && !this.activeResponseId) {
+            this.requestSpokenResponse();
+          } else if (!this.expectSpokenResponse) {
+            this.releaseSpokenTurn("error");
+          }
+          break;
+        }
         this.fail(new Error(message));
         break;
       }
@@ -2069,99 +2064,9 @@ export class VoiceSession {
 
     let result: Record<string, unknown> = { error: `Unknown function: ${name}` };
     try {
-      if (name === "request_toy_control") {
-        const requested = args.granted !== false && args.granted !== "false";
-        const resolved = resolveToyControlRequest({
-          requested,
-          lastUserUtterance: this.lastUserUtterance,
-          alreadyGranted: this.toyControlGranted,
-        });
-        if (!resolved.ok) {
-          result = {
-            ok: false,
-            controlGranted: this.toyControlGranted,
-            error: resolved.error,
-          };
-        } else {
-          result = this.applyUserToyControl(resolved.granted);
-        }
-      } else if (
-        name === "toy_command" ||
-        name === "lovense_function" ||
-        name === "lovense_vibrate" ||
-        name === "lovense_stop" ||
-        name === "lovense_pattern" ||
-        name === "joyhub_vibrate" ||
-        name === "joyhub_stop" ||
-        name === "joyhub_pattern"
-      ) {
-        result = await this.runToyCommand(name, args);
-      } else if (name === "get_video_context") {
-        result = await this.runVideoContext(
-          typeof args.question === "string" ? args.question : "",
-        );
-      } else if (name === "generate_image") {
-        result = await this.runGenerateImage(args);
-      } else if (name === "generate_video") {
-        result = await this.runGenerateVideo(args);
-      } else if (
-        name === "fortnite_add_friend" ||
-        name === "fortnite_status" ||
-        name === "fortnite_invite" ||
-        name === "fortnite_sign_in" ||
-        name === "fortnite_join_party" ||
-        name === "fortnite_sit_out" ||
-        name === "fortnite_leave_party"
-      ) {
-        result = await this.runFortniteTool(name, args);
-      } else if (name === "send_message" || name === "message_ian") {
-        result = await this.runChannelSend(args);
-      } else if (
-        name === "play_music" ||
-        name === "stop_music" ||
-        name === "apple_music_connect" ||
-        name === "apple_music_love" ||
-        name === "apple_music_library" ||
-        name === "apple_music_playlist"
-      ) {
-        result = await this.runMusicTool(name, args);
-      } else if (name === "upsert_fact" || name === "set_affect") {
-        const userId = clientUserId();
-        const response = await fetch("/api/memory", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-lexi-user-id": userId,
-            "ngrok-skip-browser-warning": "1",
-          },
-          body: JSON.stringify({
-            tool: name,
-            userId,
-            sessionId: this.currentSessionId(),
-            memory_key: args.memory_key ?? args.memoryKey,
-            value: args.value,
-            affect: args.affect,
-          }),
-        });
-        try {
-          result = (await response.json()) as Record<string, unknown>;
-        } catch {
-          result = { error: `Memory store returned ${response.status}.` };
-        }
-        if (!response.ok) {
-          this.logger.log("memory.tool.fail", { name, call_id: id, status: response.status, error: result.error });
-        } else {
-          const fact = (result.fact ?? null) as Record<string, unknown> | null;
-          if (fact) this.applyStoredFact(fact);
-          this.factWriteSucceeded = true;
-          this.logger.log("memory.tool.ok", {
-            name,
-            call_id: id,
-            memory_key: fact?.memory_key,
-            affect: fact?.affect,
-          });
-        }
-      }
+      result = await raceTimeout(this.executeClientTool(name, args), TOOL_CALL_TIMEOUT_MS, {
+        error: "Tool timed out.",
+      });
     } catch (error) {
       result = { error: error instanceof Error ? error.message : "Tool call failed." };
       this.logger.error("memory.tool", error, { name, call_id: id });
@@ -2179,7 +2084,111 @@ export class VoiceSession {
       });
     }
     this.inflightTools.delete(id);
+    this.toolResponseWaiting = true;
     this.flushToolBatch();
+  }
+
+  private async executeClientTool(name: string, args: Record<string, unknown>) {
+    if (name === "request_toy_control") {
+      const requested = args.granted !== false && args.granted !== "false";
+      const resolved = resolveToyControlRequest({
+        requested,
+        lastUserUtterance: this.lastUserUtterance,
+        alreadyGranted: this.toyControlGranted,
+      });
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          controlGranted: this.toyControlGranted,
+          error: resolved.error,
+        };
+      }
+      return this.applyUserToyControl(resolved.granted);
+    }
+    if (
+      name === "toy_command" ||
+      name === "lovense_function" ||
+      name === "lovense_vibrate" ||
+      name === "lovense_stop" ||
+      name === "lovense_pattern" ||
+      name === "joyhub_vibrate" ||
+      name === "joyhub_stop" ||
+      name === "joyhub_pattern"
+    ) {
+      return this.runToyCommand(name, args);
+    }
+    if (name === "get_video_context") {
+      return this.runVideoContext(typeof args.question === "string" ? args.question : "");
+    }
+    if (name === "generate_image") {
+      return this.runGenerateImage(args);
+    }
+    if (name === "generate_video") {
+      return this.runGenerateVideo(args);
+    }
+    if (
+      name === "fortnite_add_friend" ||
+      name === "fortnite_status" ||
+      name === "fortnite_invite" ||
+      name === "fortnite_sign_in" ||
+      name === "fortnite_join_party" ||
+      name === "fortnite_sit_out" ||
+      name === "fortnite_leave_party"
+    ) {
+      return this.runFortniteTool(name, args);
+    }
+    if (name === "send_message" || name === "message_ian") {
+      return this.runChannelSend(args);
+    }
+    if (
+      name === "play_music" ||
+      name === "stop_music" ||
+      name === "apple_music_connect" ||
+      name === "apple_music_love" ||
+      name === "apple_music_library" ||
+      name === "apple_music_playlist"
+    ) {
+      return this.runMusicTool(name, args);
+    }
+    if (name === "upsert_fact" || name === "set_affect") {
+      const userId = clientUserId();
+      const response = await fetch("/api/memory", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-lexi-user-id": userId,
+          "ngrok-skip-browser-warning": "1",
+        },
+        body: JSON.stringify({
+          tool: name,
+          userId,
+          sessionId: this.currentSessionId(),
+          memory_key: args.memory_key ?? args.memoryKey,
+          value: args.value,
+          affect: args.affect,
+        }),
+      });
+      let result: Record<string, unknown> = {};
+      try {
+        result = (await response.json()) as Record<string, unknown>;
+      } catch {
+        result = { error: `Memory store returned ${response.status}.` };
+      }
+      if (!response.ok) {
+        this.logger.log("memory.tool.fail", { name, status: response.status, error: result.error });
+        return result;
+      }
+      const fact = (result.fact ?? null) as Record<string, unknown> | null;
+      if (fact) this.applyStoredFact(fact);
+      this.factWriteSucceeded = true;
+      this.logger.log("memory.tool.ok", {
+        name,
+        memory_key: fact?.memory_key,
+        affect: fact?.affect,
+      });
+      return result;
+    }
+    return { error: `Unknown function: ${name}` };
   }
 
   private flushToolBatch() {
@@ -2190,7 +2199,7 @@ export class VoiceSession {
       this.toyGrantChanged = false;
       this.fortniteStateChanged = false;
       this.musicStateChanged = false;
-      this.send(this.sessionUpdate());
+      this.sessionUpdateDeferred = true;
     }
     this.requestSpokenResponse({ ifActive: "skip" });
   }
@@ -2198,12 +2207,22 @@ export class VoiceSession {
   private requestSpokenResponse(opts?: { ifActive?: "skip" | "replace" }) {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.expectSpokenResponse = true;
-    const decision = decideResponseCreate({
-      createInFlight: this.responseCreateInFlight,
-      hasActiveResponse: this.activeResponseId !== null,
-      ifActive: opts?.ifActive ?? "replace",
-    });
-    if (decision === "skip") return;
+    const decision =
+      opts?.ifActive === "skip"
+        ? decideToolFollowUpCreate({
+            createInFlight: this.responseCreateInFlight,
+            activeId: this.activeResponseId,
+            finishedId: this.lastFinishedResponseId,
+          })
+        : decideResponseCreate({
+            createInFlight: this.responseCreateInFlight,
+            hasActiveResponse: this.activeResponseId !== null,
+            ifActive: opts?.ifActive ?? "replace",
+          });
+    if (decision === "skip") {
+      this.armExpectWatchdog();
+      return;
+    }
     if (decision === "replace") {
       this.send({ type: "response.cancel" });
       this.ignoreOutputAudio = true;
@@ -2213,8 +2232,150 @@ export class VoiceSession {
       this.activeResponseId = null;
     }
     this.responseCreateInFlight = true;
+    this.spokenCreateAttempts += 1;
     this.send({ type: "response.create" });
+    this.armResponseCreateWatchdog();
+    this.armExpectWatchdog();
     this.setPhase("thinking");
+  }
+
+  private onResponseTerminal(event: Record<string, unknown>) {
+    const response = (event.response ?? {}) as Record<string, unknown>;
+    const responseId = readResponseId(event) ?? (typeof response.id === "string" ? response.id : "");
+    this.lastFinishedResponseId = responseId || this.activeResponseId;
+    if (
+      shouldReleaseSpeechFloor({
+        activeId: this.activeResponseId,
+        doneId: responseId || null,
+      })
+    ) {
+      this.activeResponseId = null;
+    }
+    this.responseCreateInFlight = false;
+    this.clearResponseCreateWatchdog();
+    this.logger.log("audio.out", {
+      response_id: responseId,
+      status: response.status,
+      deltas: this.outDeltas,
+      bytes: this.outBytes,
+      audio_ms: this.outBytes > 0 ? Math.round((this.outBytes / 2 / TARGET_RATE) * 1000) : 0,
+      wall_ms: this.createdT ? Date.now() - this.createdT : 0,
+      max_gap_ms: this.player?.maxGapMs ?? 0,
+      queued_ms: this.player?.queuedMs ?? 0,
+      underruns: this.player?.underruns ?? 0,
+      drain_ms_max: this.player?.drainMsMax ?? 0,
+    });
+    this.decaySentForTurn = false;
+    const status = typeof response.status === "string" ? response.status : "";
+    const terminal = status === "cancelled" || status === "failed" || status === "error";
+    const awaitingTools = this.toolsThisResponse && !terminal;
+    if (awaitingTools) {
+      this.toolResponseWaiting = true;
+      this.armExpectWatchdog();
+      this.flushToolBatch();
+    } else {
+      this.toolResponseWaiting = false;
+      if (
+        shouldClearExpectAfterDone({
+          toolsThisResponse: this.toolsThisResponse,
+          inflightTools: this.inflightTools.size,
+          toolResponseWaiting: this.toolResponseWaiting,
+          status,
+        })
+      ) {
+        this.expectSpokenResponse = false;
+        this.clearExpectWatchdog();
+      }
+      this.setPhase("listening");
+    }
+    if (!terminal) {
+      if (!awaitingTools) void this.refreshDecayState();
+      this.captionPacer.flush();
+    } else {
+      this.expectSpokenResponse = false;
+      this.clearExpectWatchdog();
+      this.captionPacer.stop();
+    }
+    if (!terminal && status !== "incomplete") {
+      this.pendingPersist = true;
+      this.persistTurn();
+    }
+  }
+
+  private armResponseCreateWatchdog() {
+    this.clearResponseCreateWatchdog();
+    this.responseCreateTimer = setTimeout(() => {
+      this.responseCreateTimer = null;
+      if (this.stopped || !this.responseCreateInFlight) return;
+      this.logger.log("turn.recover", {
+        reason: "create_stall",
+        attempts: this.spokenCreateAttempts,
+      });
+      this.responseCreateInFlight = false;
+      if (this.spokenCreateAttempts >= 2) {
+        this.releaseSpokenTurn("create_stall");
+        void this.reconnectSocket();
+        return;
+      }
+      this.requestSpokenResponse();
+    }, RESPONSE_CREATE_STALL_MS);
+  }
+
+  private armExpectWatchdog() {
+    this.clearExpectWatchdog();
+    this.expectStallTimer = setTimeout(() => {
+      this.expectStallTimer = null;
+      if (this.stopped || !this.expectSpokenResponse) return;
+      if (this.phase === "speaking" && (this.player?.queuedMs ?? 0) > 0) return;
+      if (this.inflightTools.size > 0) {
+        this.armExpectWatchdog();
+        return;
+      }
+      if (this.responseCreateInFlight) return;
+      if (this.activeResponseId && this.activeResponseId !== PENDING_SPEECH_ID) return;
+      if (this.toolResponseWaiting || this.activeResponseId === PENDING_SPEECH_ID) {
+        this.logger.log("turn.recover", { reason: "expect_stall_create" });
+        this.responseCreateInFlight = false;
+        this.activeResponseId =
+          this.activeResponseId === PENDING_SPEECH_ID ? null : this.activeResponseId;
+        this.requestSpokenResponse();
+        return;
+      }
+      this.logger.log("turn.recover", { reason: "expect_stall" });
+      this.requestSpokenResponse();
+    }, EXPECT_STALL_MS);
+  }
+
+  private releaseSpokenTurn(reason: string) {
+    this.logger.log("turn.recover", { reason });
+    this.expectSpokenResponse = false;
+    this.responseCreateInFlight = false;
+    this.toolResponseWaiting = false;
+    this.ignoreOutputAudio = false;
+    this.activeResponseId = null;
+    this.spokenCreateAttempts = 0;
+    this.clearTurnWatchdogs();
+    this.captionPacer.stop();
+    this.setPhase("listening");
+  }
+
+  private clearResponseCreateWatchdog() {
+    if (this.responseCreateTimer) {
+      clearTimeout(this.responseCreateTimer);
+      this.responseCreateTimer = null;
+    }
+  }
+
+  private clearExpectWatchdog() {
+    if (this.expectStallTimer) {
+      clearTimeout(this.expectStallTimer);
+      this.expectStallTimer = null;
+    }
+  }
+
+  private clearTurnWatchdogs() {
+    this.clearResponseCreateWatchdog();
+    this.clearExpectWatchdog();
   }
 
   private sessionUpdate() {
@@ -2266,7 +2427,22 @@ export class VoiceSession {
 
   private pushSilentSessionUpdate() {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.decayUpdateWouldStallSpeech()) {
+      this.sessionUpdateDeferred = true;
+      return;
+    }
+    this.sessionUpdateDeferred = false;
     this.send(this.sessionUpdate(), true);
+  }
+
+  private flushDeferredSessionUpdate() {
+    if (!this.sessionUpdateDeferred) return;
+    this.sessionUpdateDeferred = false;
+    if (this.decayUpdateWouldStallSpeech()) {
+      this.sessionUpdateDeferred = true;
+      return;
+    }
+    this.pushSilentSessionUpdate();
   }
 
   private applyUserToyControl(granted: boolean) {
@@ -2274,9 +2450,7 @@ export class VoiceSession {
       this.toyControlGranted = granted;
       this.toyGrantChanged = true;
       this.logger.log("toys.control", { granted, source: "user" });
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.send(this.sessionUpdate());
-      }
+      this.pushSilentSessionUpdate();
       if (!granted) {
         void this.runToyCommand("toy_command", { action: "stop" });
       }
@@ -3101,7 +3275,10 @@ export class VoiceSession {
     this.phase = phase;
     this.logger.log("phase", { phase });
     this.handlers.onPhase(phase);
-    if (phase === "listening") this.flushDeferredLiveFrames();
+    if (phase === "listening") {
+      this.flushDeferredLiveFrames();
+      this.flushDeferredSessionUpdate();
+    }
   }
 
   private fail(error: unknown) {

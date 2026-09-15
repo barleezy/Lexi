@@ -1,4 +1,4 @@
-export const PRIOR_TURN_CAP = 16;
+export const PRIOR_TURN_CAP = 32;
 const LINE_CAP = 500;
 
 export type ChatTurn = {

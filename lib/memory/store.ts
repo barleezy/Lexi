@@ -55,7 +55,7 @@ export type MigrateResult =
       legacyRows: number;
     };
 
-export const MEMORY_INSTRUCTION_CAP = 10;
+export const MEMORY_INSTRUCTION_CAP = 20;
 
 const FACT_KEY_SET = new Set<string>(FACT_KEYS);
 
@@ -169,9 +169,9 @@ async function migrateTable() {
       END
       WHERE band IS NULL OR band NOT IN ('low', 'medium', 'high');
       UPDATE memories SET rate = CASE band
-        WHEN 'low' THEN 0.08
-        WHEN 'medium' THEN 0.02
-        ELSE 0.005
+        WHEN 'low' THEN 0.04
+        WHEN 'medium' THEN 0.01
+        ELSE 0.0025
       END
       WHERE rate IS NULL;
       UPDATE memories SET t0 = COALESCE(created_at, now()) WHERE t0 IS NULL;
@@ -572,7 +572,7 @@ export async function recordExchange(input: {
 export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): Promise<ChatTurn[]> {
   const db = await ensureTable();
   if (!db) return [];
-  const cap = Math.min(20, Math.max(1, Math.floor(limit)));
+  const cap = Math.min(32, Math.max(1, Math.floor(limit)));
   const rows = (await db.query(
     `SELECT id, user_text, assistant_text
      FROM turns
