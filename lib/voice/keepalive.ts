@@ -233,10 +233,16 @@ export function shouldDuckPlaybackForCoexist(opts: {
   audioContextState?: string;
   audioSessionState?: string;
   musicPlaying?: boolean;
+  /** iOS hidden/blur is CarPlay or lock screen — Lexi is the speaker, not Fortnite. */
+  ios?: boolean;
 }) {
   if (opts.musicPlaying) return true;
   if (opts.audioSessionState === "interrupted") return true;
   if (opts.audioContextState === "interrupted") return true;
+  // Ducking on hide was for a desktop game stealing the tab. On iPhone,
+  // hidden + play-and-record is CarPlay / lock screen: keep full volume so
+  // iOS does not mix a ducked Web Audio graph on top of the car path.
+  if (opts.ios && (opts.pageHidden || opts.blurred)) return false;
   return Boolean(opts.pageHidden || opts.blurred);
 }
 
@@ -390,6 +396,7 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
         pageHidden: hidden,
         blurred,
         audioContextState,
+        ios,
       }),
     });
   };
