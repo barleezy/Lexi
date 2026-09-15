@@ -9,14 +9,16 @@ import {
   listRecentTurns,
   recallForUser,
 } from "@/lib/memory/store";
-import { resolveUserId } from "@/lib/memory/user";
+import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
 import { APPLE_MUSIC_USER_COOKIE, isAppleMusicConfigured } from "@/lib/apple-music/config";
 import type { DeviceLocationState } from "@/lib/voice/location";
+import { fortniteRealtimeTools, isFortniteConfigured } from "@/lib/voice/fortnite";
 import {
   DEFAULT_CHANNEL_STATE,
   DEFAULT_FORTNITE_STATE,
   DEFAULT_TOYS_STATE,
   buildInstructions,
+  type FortniteSessionState,
   type MusicSessionState,
 } from "@/lib/voice/persona";
 
@@ -48,7 +50,7 @@ export async function mintXaiClientSecret(apiKey: string) {
   return { ok: upstream.ok && Boolean(token), token, status: upstream.status };
 }
 
-export function iosRealtimeTools() {
+export function iosRealtimeTools(includeFortnite = false) {
   return [
     { type: "web_search" },
     {
@@ -209,11 +211,13 @@ export function iosRealtimeTools() {
         required: ["action"],
       },
     },
+    ...(includeFortnite ? fortniteRealtimeTools() : []),
   ];
 }
 
 export function iosSessionUpdatePayload(input: {
   instructions: string;
+  includeFortnite?: boolean;
 }) {
   return {
     type: "session.update",
@@ -227,7 +231,7 @@ export function iosSessionUpdatePayload(input: {
         silence_duration_ms: 300,
         prefix_padding_ms: 350,
       },
-      tools: iosRealtimeTools(),
+      tools: iosRealtimeTools(input.includeFortnite === true),
       audio: {
         input: {
           format: { type: "audio/pcm", rate: IOS_TARGET_RATE },
@@ -298,12 +302,22 @@ export async function buildIosSession(input: {
     title: input.musicTitle ?? "",
     source: input.musicSource ?? "none",
   };
+  const admin = isAdminUserId(userId);
+  const fortnite: FortniteSessionState = admin
+    ? {
+        ...DEFAULT_FORTNITE_STATE,
+        configured: isFortniteConfigured(),
+        signedIn: false,
+        inParty: false,
+        sittingOut: false,
+      }
+    : DEFAULT_FORTNITE_STATE;
   const instructions = `${buildInstructions(
     withSession,
     priorChat,
     memorySessionId ?? "",
     DEFAULT_TOYS_STATE,
-    DEFAULT_FORTNITE_STATE,
+    fortnite,
     DEFAULT_CHANNEL_STATE,
     input.clientTimeZone ?? "",
     input.location ?? null,
@@ -317,6 +331,6 @@ export async function buildIosSession(input: {
     priorChat,
     sessionId: memorySessionId,
     instructions,
-    sessionUpdate: iosSessionUpdatePayload({ instructions }),
+    sessionUpdate: iosSessionUpdatePayload({ instructions, includeFortnite: admin }),
   };
 }

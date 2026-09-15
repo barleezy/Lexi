@@ -1556,82 +1556,21 @@ export function VoiceHome() {
       <header className="relative z-10 flex items-center justify-between gap-4 px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
         {accountId ? (
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
             <span>
-              Signed in as {accountId}
+              Signed in as <strong className="font-medium text-foreground">{accountId}</strong>
               {isAdminUserId(accountId) ? " · admin" : ""}
             </span>
             <button
               type="button"
               onClick={signOutAccount}
-              className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-600 dark:border-zinc-500 dark:text-zinc-300"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
             >
               Sign out
             </button>
           </div>
         ) : (
-          <form className="flex max-w-[min(100%,22rem)] flex-col items-end gap-2" onSubmit={submitAccount}>
-            <div className="flex rounded-full border border-zinc-400 p-0.5 text-[11px] uppercase tracking-[0.14em] dark:border-zinc-500">
-              <button
-                type="button"
-                onClick={() => setAccountMode("signin")}
-                className={`rounded-full px-2.5 py-1 ${
-                  accountMode === "signin" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
-                }`}
-              >
-                Sign in
-              </button>
-              <button
-                type="button"
-                onClick={() => setAccountMode("signup")}
-                className={`rounded-full px-2.5 py-1 ${
-                  accountMode === "signup" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
-                }`}
-              >
-                Create
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <input
-                value={accountDraft}
-                onChange={(event) => setAccountDraft(event.target.value)}
-                placeholder="Account"
-                autoComplete="username"
-                className="w-28 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
-              />
-              <input
-                type="password"
-                value={accountPassword}
-                onChange={(event) => setAccountPassword(event.target.value)}
-                placeholder="Password"
-                autoComplete={accountMode === "signup" ? "new-password" : "current-password"}
-                className="w-28 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
-              />
-              {accountMode === "signup" ? (
-                <input
-                  type="password"
-                  value={accountConfirm}
-                  onChange={(event) => setAccountConfirm(event.target.value)}
-                  placeholder="Confirm"
-                  autoComplete="new-password"
-                  className="w-28 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
-                />
-              ) : null}
-              <button
-                type="submit"
-                disabled={accountPending}
-                className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-600 disabled:opacity-50 dark:border-zinc-500 dark:text-zinc-300"
-              >
-                {accountPending
-                  ? accountMode === "signup"
-                    ? "Creating…"
-                    : "Signing in…"
-                  : accountMode === "signup"
-                    ? "Create"
-                    : "Sign in"}
-              </button>
-            </div>
-          </form>
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
         )}
       </header>
       <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
@@ -1648,8 +1587,86 @@ export function VoiceHome() {
           data-stream-tick={streamTick}
           className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
         >
-          {error ?? (latestText || "A voice-first companion.")}
+          {error ?? (latestText || (accountId ? "A voice-first companion." : "Sign in to talk."))}
         </p>
+        {!accountId ? (
+          <form
+            onSubmit={submitAccount}
+            className="mt-6 w-full max-w-md rounded-3xl border-2 border-zinc-900 bg-background/95 p-5 shadow-xl dark:border-white dark:bg-zinc-950/95"
+          >
+            <p className="text-lg font-semibold tracking-tight">Sign in to talk</p>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              Use your account and password. New here? Create an account first.
+            </p>
+            <div className="mt-4 grid grid-cols-2 rounded-full bg-zinc-100 p-1 text-sm font-medium dark:bg-zinc-800">
+              <button
+                type="button"
+                onClick={() => setAccountMode("signin")}
+                className={`rounded-full px-3 py-2 ${
+                  accountMode === "signin" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccountMode("signup")}
+                className={`rounded-full px-3 py-2 ${
+                  accountMode === "signup" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
+            <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
+              Account
+              <input
+                value={accountDraft}
+                onChange={(event) => setAccountDraft(event.target.value)}
+                placeholder="Barleezy"
+                autoComplete="username"
+                className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+              />
+            </label>
+            <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+              Password
+              <input
+                type="password"
+                value={accountPassword}
+                onChange={(event) => setAccountPassword(event.target.value)}
+                placeholder="At least 8 characters"
+                autoComplete={accountMode === "signup" ? "new-password" : "current-password"}
+                className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+              />
+            </label>
+            {accountMode === "signup" ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+                Confirm password
+                <input
+                  type="password"
+                  value={accountConfirm}
+                  onChange={(event) => setAccountConfirm(event.target.value)}
+                  placeholder="Type it again"
+                  autoComplete="new-password"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            <button
+              type="submit"
+              disabled={accountPending}
+              className="mt-5 w-full rounded-full bg-zinc-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-zinc-900"
+            >
+              {accountPending
+                ? accountMode === "signup"
+                  ? "Creating account…"
+                  : "Signing in…"
+                : accountMode === "signup"
+                  ? "Create account"
+                  : "Sign in"}
+            </button>
+          </form>
+        ) : null}
       </main>
       <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-2">

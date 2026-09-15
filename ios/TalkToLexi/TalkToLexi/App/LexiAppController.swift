@@ -492,8 +492,35 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
              "joyhub_stop",
              "joyhub_pattern":
             return stringify(await toys.command(name: name, arguments: arguments, using: api))
+        case "fortnite_add_friend",
+             "fortnite_status",
+             "fortnite_invite",
+             "fortnite_sign_in",
+             "fortnite_join_party",
+             "fortnite_sit_out",
+             "fortnite_leave_party":
+            return stringify(await fortniteTool(name, arguments: arguments))
         default:
             return stringify(["error": "\(name) is not available in the iPhone app."])
+        }
+    }
+
+    private func fortniteTool(_ name: String, arguments: [String: Any]) async -> [String: Any] {
+        let action: String
+        switch name {
+        case "fortnite_add_friend": action = "add_friend"
+        case "fortnite_invite": action = "invite"
+        case "fortnite_sign_in": action = "sign_in"
+        case "fortnite_join_party": action = "join_party"
+        case "fortnite_sit_out": action = "sit_out"
+        case "fortnite_leave_party": action = "leave_party"
+        default: action = "status"
+        }
+        let displayName = (arguments["display_name"] as? String) ?? (arguments["displayName"] as? String)
+        do {
+            return try await api.fortnite(action: action, displayName: displayName)
+        } catch {
+            return ["ok": false, "canPlayInGame": false, "error": error.localizedDescription]
         }
     }
 

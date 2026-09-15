@@ -37,6 +37,8 @@ import {
   parseUserSearch,
   partyConnectionId,
   partyIdFromInvites,
+  partyIdFromPresence,
+  fortniteRealtimeTools,
   partyIntentionUrl,
   partyInviteUrl,
   partyJoinUrl,
@@ -272,11 +274,29 @@ expect(join.connection.yield_leadership === true, "join yields leadership");
 expect(join.meta["urn:epic:member:dn_s"] === "TalkToLexi", "join payload display name");
 expect(join.connection.meta["urn:epic:conn:type_s"] === "game", "join connection is game");
 expect(buildPartyIntentionPayload()["urn:epic:invite:platformdata_s"] === "", "intention payload");
+expect(
+  partyIdFromPresence(
+    {
+      them: {
+        Properties: {
+          "party.joininfodata.286331153_j": { partyId: "party-from-presence" },
+        },
+      },
+    },
+    "them",
+  ) === "party-from-presence",
+  "party id from last-online presence",
+);
+expect(
+  fortniteRealtimeTools().some((tool) => tool.name === "fortnite_join_party"),
+  "join party tool is exported",
+);
 
 const setup = fortniteSetupSteps().join(" ");
 expect(setup.includes("EPIC_DEVICE_AUTH"), "setup mentions device auth");
 expect(setup.includes("TTBarleezy"), "setup mentions default friend");
 expect(setup.includes("cannot load Fortnite"), "setup is honest about in-game play");
+expect(setup.includes("not being online"), "setup does not treat Epic token as in-game");
 expect(setup.includes("sit out"), "setup mentions sit out");
 
 console.log("fortnite check ok");

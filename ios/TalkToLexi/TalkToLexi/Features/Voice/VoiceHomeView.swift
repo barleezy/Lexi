@@ -34,7 +34,11 @@ struct VoiceHomeView: View {
             Button(app.isSignedIn ? "Sign out" : "Sign in") {
                 app.toggleSignIn()
             }
-            .buttonStyle(LexiPillButtonStyle())
+            .font(.system(size: app.isSignedIn ? 12 : 15, weight: .semibold))
+            .padding(.horizontal, app.isSignedIn ? 12 : 16)
+            .padding(.vertical, app.isSignedIn ? 6 : 10)
+            .foregroundStyle(app.isSignedIn ? Color.white.opacity(0.85) : .black)
+            .background(app.isSignedIn ? Color.white.opacity(0.08) : Color.white, in: Capsule())
         }
         .padding(.top, 8)
     }

@@ -216,6 +216,15 @@ final class LexiAPIClient {
         try await postJSON("/api/toys", body: body)
     }
 
+    func fortnite(action: String, displayName: String?) async throws -> [String: Any] {
+        var body: [String: Any] = [
+            "action": action,
+            "userId": account.userId,
+        ]
+        if let displayName, !displayName.isEmpty { body["displayName"] = displayName }
+        return try await postJSON("/api/fortnite", body: body)
+    }
+
     func videoContext(question: String, title: String, frames: [[String: Any]]) async throws -> [String: Any] {
         try await postJSON("/api/video/context", body: [
             "question": question,

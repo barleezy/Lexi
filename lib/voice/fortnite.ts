@@ -21,6 +21,99 @@ export const FORTNITE_ACTIONS = [
 ] as const;
 export type FortniteAction = (typeof FORTNITE_ACTIONS)[number];
 
+export function fortniteRealtimeTools() {
+  return [
+    {
+      type: "function",
+      name: "fortnite_add_friend",
+      description:
+        "Send or resend an Epic friend request from Lexi's Fortnite account. Default target is TTBarleezy. Tokens stay on the server. Does not load the game.",
+      parameters: {
+        type: "object",
+        properties: {
+          display_name: {
+            type: "string",
+            description: "Epic / in-game display name to add. Default TTBarleezy.",
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      name: "fortnite_status",
+      description:
+        "Check Lexi's Epic login, whether TTBarleezy (or another name) is a friend, and last-online. Not live in-match presence. If they look around, stay in companion voice — this Grok call is the voice chat. Does not play Fortnite.",
+      parameters: {
+        type: "object",
+        properties: {
+          display_name: {
+            type: "string",
+            description: "Whose friend/online status to check. Default TTBarleezy.",
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      name: "fortnite_invite",
+      description:
+        "Try to send a Fortnite party invite over Epic's party HTTP API. Fails if Lexi is not already in a party — she cannot open the game. Prefer joining Ian's party with fortnite_join_party.",
+      parameters: {
+        type: "object",
+        properties: {
+          display_name: {
+            type: "string",
+            description: "Friend to invite. Default TTBarleezy.",
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      name: "fortnite_sign_in",
+      description:
+        "Refresh TalkToLexi's Epic HTTP token from stored device auth. This does not load Fortnite and does not make TalkToLexi appear online in-game. Tokens stay on the server. Use when Ian says sign in.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      type: "function",
+      name: "fortnite_join_party",
+      description:
+        "Join Ian's (TTBarleezy) Fortnite party over Epic party HTTP, then sit out. Only report being in Fortnite if the tool says withFriend/inParty is true. An Epic token alone is not in-game. Speak on this Grok voice call. If he has no open party in lobby, the tool says to open a party and ask again.",
+      parameters: {
+        type: "object",
+        properties: {
+          display_name: {
+            type: "string",
+            description: "Friend whose party to join. Default TTBarleezy.",
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      name: "fortnite_sit_out",
+      description:
+        "Set SittingOut on Lexi's party member (LobbyState.gameReadiness and MatchmakingInfo.readyStatus). She stays in lobby and does not ready up. Use if she is already in the party.",
+      parameters: {
+        type: "object",
+        properties: {
+          display_name: {
+            type: "string",
+            description: "Friend to refresh status for. Default TTBarleezy.",
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      name: "fortnite_leave_party",
+      description: "Leave Lexi's current Fortnite party over Epic party HTTP. Does not load the game.",
+      parameters: { type: "object", properties: {} },
+    },
+  ] as const;
+}
+
 /** Exact user-facing error when Ian is not in a joinable lobby party. */
 export const OPEN_PARTY_ERROR = "open a party in lobby and ask again.";
 
@@ -154,7 +247,7 @@ export function fortniteSetupSteps() {
     "Authorization code: sign in at Epic, then open https://www.epicgames.com/id/api/redirect?clientId=3f69e56c7649492c8cc29f1af08a8a12&responseType=code and copy `code`.",
     "Paste EPIC_DEVICE_AUTH='{\"accountId\":\"\",\"deviceId\":\"\",\"secret\":\"\"}' into .env.local (never commit it). Or set EPIC_EXCHANGE_CODE, or local EPIC_EMAIL + EPIC_PASSWORD (may hit captcha/2FA).",
     `Restart the server. First successful login auto-sends a friend request to ${friendDisplayName()}.`,
-    "Lexi cannot load Fortnite or play in-match. She can sign in, join Ian's party over HTTP, sit out, report last-online, and try a party invite. Voice stays on this Grok call.",
+    "Lexi cannot load Fortnite or play in-match. An Epic HTTP token is not being online in the game. She only appears in Ian's lobby after a successful party join, then she can sit out. Voice stays on this Grok call.",
   ];
 }
 
@@ -329,6 +422,49 @@ export function friendAddStatus(httpStatus: number, data: unknown): FriendReques
   if (code.includes("cannot_friend_due_to_target_settings")) return "privacy_blocked";
   if (code.includes("account_not_found") || httpStatus === 404) return "not_found";
   return "failed";
+}
+
+export function partyIdFromPresence(data: unknown, accountId?: string | null): string | null {
+  const row = asRecord(data);
+  if (!row) return null;
+  const needle = accountId?.trim() ?? "";
+  const entries: unknown[] = [];
+  if (needle) {
+    const direct = row[needle] ?? row[needle.toLowerCase()];
+    if (direct !== undefined) entries.push(direct);
+  }
+  if (!entries.length) entries.push(...Object.values(row));
+  for (const entry of entries) {
+    const id = partyIdFromPresenceEntry(entry);
+    if (id) return id;
+  }
+  return null;
+}
+
+function partyIdFromPresenceEntry(entry: unknown): string | null {
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      const id = partyIdFromPresenceEntry(item);
+      if (id) return id;
+    }
+    return null;
+  }
+  const row = asRecord(entry);
+  if (!row) return null;
+  const direct = readString(row.partyId) || readString(row.party_id);
+  if (direct) return direct;
+  const props = asRecord(row.Properties) || asRecord(row.properties) || row;
+  for (const [key, value] of Object.entries(props)) {
+    if (!/party|joininfo/i.test(key)) continue;
+    const parsed = asRecord(parseJsonField(value)) || asRecord(value);
+    if (!parsed) continue;
+    const id =
+      readString(parsed.partyId) ||
+      readString(parsed.party_id) ||
+      readString(asRecord(parsed.party)?.id);
+    if (id) return id;
+  }
+  return null;
 }
 
 export function currentPartyId(data: unknown): string | null {
@@ -1139,16 +1275,16 @@ async function joinFriendParty(session: CachedToken, displayName: string) {
   }
 
   const target = await findJoinableParty(session, snapshot.accountId, snapshot.partyId);
-  if (!target) {
-    await requestToJoin(session, snapshot.accountId).catch(() => null);
-    const retry = await findJoinableParty(session, snapshot.accountId, null);
-    if (!retry) {
-      return failParty(409, OPEN_PARTY_ERROR, snapshot);
-    }
-    return completeJoin(session, displayName, snapshot.accountId, retry.partyId, snapshot.partyId);
+  if (target) {
+    return completeJoin(session, displayName, snapshot.accountId, target.partyId, snapshot.partyId);
   }
 
-  return completeJoin(session, displayName, snapshot.accountId, target.partyId, snapshot.partyId);
+  await requestToJoin(session, snapshot.accountId).catch(() => null);
+  const retry = await waitForJoinableParty(session, snapshot.accountId, snapshot.partyId);
+  if (!retry) {
+    return failParty(409, OPEN_PARTY_ERROR, snapshot);
+  }
+  return completeJoin(session, displayName, snapshot.accountId, retry.partyId, snapshot.partyId);
 }
 
 async function completeJoin(
@@ -1175,11 +1311,16 @@ async function completeJoin(
         error: sit.ok ? undefined : sit.error,
       };
     }
-    if (joined.code.includes("user_has_party") && currentPartyIdValue) {
-      await deletePartyMembership(session, currentPartyIdValue);
-      const retry = await postPartyJoin(session, partyId);
-      if (retry.ok) {
-        return finishJoined(session, displayName, friendId, partyId);
+    if (joined.code.includes("user_has_party")) {
+      const ownId =
+        currentPartyIdValue ||
+        currentPartyId(await fetchJson(session, partyUserUrl(session.accountId), "GET").catch(() => null));
+      if (ownId && ownId !== partyId) {
+        await deletePartyMembership(session, ownId);
+        const retry = await postPartyJoin(session, partyId);
+        if (retry.ok) {
+          return finishJoined(session, displayName, friendId, partyId);
+        }
       }
     }
     if (
@@ -1258,6 +1399,15 @@ async function leaveCurrentParty(session: CachedToken, displayName: string) {
   };
 }
 
+async function waitForJoinableParty(session: CachedToken, friendId: string, selfPartyId: string | null) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const found = await findJoinableParty(session, friendId, selfPartyId);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return null;
+}
+
 async function findJoinableParty(session: CachedToken, friendId: string, selfPartyId: string | null) {
   const friendParty = await fetchJson(session, partyUserUrl(friendId), "GET").catch(() => null);
   const friendPartyId = currentPartyId(friendParty);
@@ -1266,6 +1416,10 @@ async function findJoinableParty(session: CachedToken, friendId: string, selfPar
   if (selfPartyId && friendParty && partyHasMember(friendParty, session.accountId)) {
     return { partyId: selfPartyId, source: "already_in" as const };
   }
+
+  const lastOnline = await fetchJson(session, lastOnlineUrl(session.accountId), "GET").catch(() => null);
+  const presenceId = partyIdFromPresence(lastOnline, friendId);
+  if (presenceId) return { partyId: presenceId, source: "presence" as const };
 
   const selfParty = await fetchJson(session, partyUserUrl(session.accountId), "GET").catch(() => null);
   const inviteId = partyIdFromInvites(selfParty, friendId);
@@ -1408,14 +1562,17 @@ function friendStateFromSnapshot(snapshot: FriendSnapshot) {
 }
 
 function partyStateFromSnapshot(snapshot: FriendSnapshot) {
+  const withFriend = snapshot.withFriend;
   return {
-    inParty: Boolean(snapshot.partyId),
-    partyId: snapshot.partyId,
-    sittingOut: snapshot.sittingOut,
-    readiness: snapshot.readiness,
-    withFriend: snapshot.withFriend,
+    inParty: withFriend,
+    partyId: withFriend ? snapshot.partyId : null,
+    sittingOut: withFriend ? snapshot.sittingOut : false,
+    readiness: withFriend ? snapshot.readiness : null,
+    withFriend,
     friendPartyId: snapshot.friendPartyId,
     comms: "grok_voice" as const,
+    inUnrealClient: false,
+    visibleInFortnite: withFriend,
   };
 }
 

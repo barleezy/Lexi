@@ -109,6 +109,7 @@ import {
   type ToysSessionState,
 } from "@/lib/voice/persona";
 import { parseAudioSourceUrl } from "@/lib/voice/background-music";
+import { fortniteRealtimeTools } from "@/lib/voice/fortnite";
 
 export type { GeneratedMediaItem };
 
@@ -174,7 +175,7 @@ async function fetchFortniteStatus(): Promise<FortniteSessionState> {
       lexi?: { displayName?: string };
       friend?: { displayName?: string; relation?: string; presence?: unknown };
       friendDisplayName?: string;
-      party?: { inParty?: boolean; sittingOut?: boolean };
+      party?: { inParty?: boolean; sittingOut?: boolean; withFriend?: boolean };
     };
     return {
       configured: Boolean(body.configured),
@@ -188,8 +189,8 @@ async function fetchFortniteStatus(): Promise<FortniteSessionState> {
       friendRelation: typeof body.friend?.relation === "string" ? body.friend.relation : "none",
       friendPresence: readFriendPresence(body.friend?.presence),
       signedIn: body.signedIn === true || Boolean(body.lexi?.displayName),
-      inParty: body.party?.inParty === true,
-      sittingOut: body.party?.sittingOut === true,
+      inParty: body.party?.withFriend === true,
+      sittingOut: body.party?.sittingOut === true && body.party?.withFriend === true,
     };
   } catch {
     return { ...DEFAULT_FORTNITE_STATE };
@@ -582,101 +583,6 @@ const GENERATE_VIDEO_TOOL = {
   },
 };
 
-const FORTNITE_ADD_FRIEND_TOOL = {
-  type: "function",
-  name: "fortnite_add_friend",
-  description:
-    "Send or resend an Epic friend request from Lexi's Fortnite account. Default target is TTBarleezy. Tokens stay on the server. Does not load the game.",
-  parameters: {
-    type: "object",
-    properties: {
-      display_name: {
-        type: "string",
-        description: "Epic / in-game display name to add. Default TTBarleezy.",
-      },
-    },
-  },
-};
-
-const FORTNITE_STATUS_TOOL = {
-  type: "function",
-  name: "fortnite_status",
-  description:
-    "Check Lexi's Epic login, whether TTBarleezy (or another name) is a friend, and last-online. Not live in-match presence. If they look around, stay in companion voice — this Grok call is the voice chat. Does not play Fortnite.",
-  parameters: {
-    type: "object",
-    properties: {
-      display_name: {
-        type: "string",
-        description: "Whose friend/online status to check. Default TTBarleezy.",
-      },
-    },
-  },
-};
-
-const FORTNITE_INVITE_TOOL = {
-  type: "function",
-  name: "fortnite_invite",
-  description:
-    "Try to send a Fortnite party invite over Epic's party HTTP API. Fails if Lexi is not already in a party — she cannot open the game. Prefer joining Ian's party with fortnite_join_party.",
-  parameters: {
-    type: "object",
-    properties: {
-      display_name: {
-        type: "string",
-        description: "Friend to invite. Default TTBarleezy.",
-      },
-    },
-  },
-};
-
-const FORTNITE_SIGN_IN_TOOL = {
-  type: "function",
-  name: "fortnite_sign_in",
-  description:
-    "Refresh TalkToLexi's Epic session from stored device auth. Does not load Fortnite. Tokens stay on the server. Use when Ian says sign in.",
-  parameters: { type: "object", properties: {} },
-};
-
-const FORTNITE_JOIN_PARTY_TOOL = {
-  type: "function",
-  name: "fortnite_join_party",
-  description:
-    "Sign in, join Ian's (TTBarleezy) Fortnite party over Epic party HTTP, then sit out so she stays in lobby and is not matchmade. Speak to him on this Grok voice call — that is comms. If he has no open party in lobby, the tool says to open a party and ask again.",
-  parameters: {
-    type: "object",
-    properties: {
-      display_name: {
-        type: "string",
-        description: "Friend whose party to join. Default TTBarleezy.",
-      },
-    },
-  },
-};
-
-const FORTNITE_SIT_OUT_TOOL = {
-  type: "function",
-  name: "fortnite_sit_out",
-  description:
-    "Set SittingOut on Lexi's party member (LobbyState.gameReadiness and MatchmakingInfo.readyStatus). She stays in lobby and does not ready up. Use if she is already in the party.",
-  parameters: {
-    type: "object",
-    properties: {
-      display_name: {
-        type: "string",
-        description: "Friend to refresh status for. Default TTBarleezy.",
-      },
-    },
-  },
-};
-
-const FORTNITE_LEAVE_PARTY_TOOL = {
-  type: "function",
-  name: "fortnite_leave_party",
-  description: "Leave Lexi's current Fortnite party over Epic party HTTP. Does not load the game.",
-  parameters: { type: "object", properties: {} },
-};
-
 const SEND_MESSAGE_TOOL = {
   type: "function",
   name: "send_message",
@@ -865,17 +771,7 @@ function buildSessionUpdate(
         JOYHUB_STOP_TOOL,
         JOYHUB_PATTERN_TOOL,
         ...(admin
-          ? [
-              FORTNITE_ADD_FRIEND_TOOL,
-              FORTNITE_STATUS_TOOL,
-              FORTNITE_INVITE_TOOL,
-              FORTNITE_SIGN_IN_TOOL,
-              FORTNITE_JOIN_PARTY_TOOL,
-              FORTNITE_SIT_OUT_TOOL,
-              FORTNITE_LEAVE_PARTY_TOOL,
-              SEND_MESSAGE_TOOL,
-              MESSAGE_IAN_TOOL,
-            ]
+          ? [...fortniteRealtimeTools(), SEND_MESSAGE_TOOL, MESSAGE_IAN_TOOL]
           : []),
         PLAY_MUSIC_TOOL,
         STOP_MUSIC_TOOL,
@@ -2903,8 +2799,8 @@ export class VoiceSession {
           ? readFriendPresence(friend.presence)
           : this.fortniteState.friendPresence,
       signedIn: body.signedIn === true || Boolean(lexi?.displayName) || this.fortniteState.signedIn,
-      inParty: party?.inParty === true,
-      sittingOut: party?.sittingOut === true,
+      inParty: party?.withFriend === true,
+      sittingOut: party?.sittingOut === true && party?.withFriend === true,
     };
     if (
       next.configured !== this.fortniteState.configured ||
