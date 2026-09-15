@@ -169,9 +169,6 @@ struct VoiceHomeView: View {
                 onSubmit: { app.sendDraftOrToggle() },
                 onPhoto: { app.sendPhoto($0) }
             )
-            Text("Adults only. Porn 18+, roleplay 21+, refuse minors.")
-                .font(.caption)
-                .foregroundStyle(LexiTheme.muted)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)

@@ -21,101 +21,21 @@ export const FORTNITE_ACTIONS = [
 ] as const;
 export type FortniteAction = (typeof FORTNITE_ACTIONS)[number];
 
-export function fortniteRealtimeTools() {
-  return [
-    {
-      type: "function",
-      name: "fortnite_add_friend",
-      description:
-        "Send or resend an Epic friend request from Lexi's Fortnite account. Default target is TTBarleezy. Tokens stay on the server. Does not load the game.",
-      parameters: {
-        type: "object",
-        properties: {
-          display_name: {
-            type: "string",
-            description: "Epic / in-game display name to add. Default TTBarleezy.",
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      name: "fortnite_status",
-      description:
-        "Check Lexi's Epic login, whether TTBarleezy (or another name) is a friend, and last-online. Not live in-match presence. If they look around, stay in companion voice — this Grok call is the voice chat. Does not play Fortnite.",
-      parameters: {
-        type: "object",
-        properties: {
-          display_name: {
-            type: "string",
-            description: "Whose friend/online status to check. Default TTBarleezy.",
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      name: "fortnite_invite",
-      description:
-        "Try to send a Fortnite party invite over Epic's party HTTP API. Fails if Lexi is not already in a party — she cannot open the game. Prefer joining Ian's party with fortnite_join_party.",
-      parameters: {
-        type: "object",
-        properties: {
-          display_name: {
-            type: "string",
-            description: "Friend to invite. Default TTBarleezy.",
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      name: "fortnite_sign_in",
-      description:
-        "Refresh TalkToLexi's Epic HTTP token from stored device auth. This does not load Fortnite and does not make TalkToLexi appear online in-game. Tokens stay on the server. Use when Ian says sign in.",
-      parameters: { type: "object", properties: {} },
-    },
-    {
-      type: "function",
-      name: "fortnite_join_party",
-      description:
-        "Join Ian's (TTBarleezy) Fortnite party over Epic party HTTP, then sit out. Only report being in Fortnite if the tool says withFriend/inParty is true. An Epic token alone is not in-game. Speak on this Grok voice call. If he has no open party in lobby, the tool says to open a party and ask again.",
-      parameters: {
-        type: "object",
-        properties: {
-          display_name: {
-            type: "string",
-            description: "Friend whose party to join. Default TTBarleezy.",
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      name: "fortnite_sit_out",
-      description:
-        "Set SittingOut on Lexi's party member (LobbyState.gameReadiness and MatchmakingInfo.readyStatus). She stays in lobby and does not ready up. Use if she is already in the party.",
-      parameters: {
-        type: "object",
-        properties: {
-          display_name: {
-            type: "string",
-            description: "Friend to refresh status for. Default TTBarleezy.",
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      name: "fortnite_leave_party",
-      description: "Leave Lexi's current Fortnite party over Epic party HTTP. Does not load the game.",
-      parameters: { type: "object", properties: {} },
-    },
-  ] as const;
-}
-
 /** Exact user-facing error when Ian is not in a joinable lobby party. */
 export const OPEN_PARTY_ERROR = "open a party in lobby and ask again.";
+
+/** Exact user-facing error after a join request is waiting on Ian. */
+export const ACCEPT_JOIN_ERROR = "accept TalkToLexi in Friends lobby and ask again.";
+
+export const ACCEPT_JOIN_SAY =
+  "I sent a join request. Stay in Friends lobby, accept TalkToLexi, then ask me again.";
+
+/** fortnite_sign_in tool result when she is not in Ian's party. */
+export const FORTNITE_SIGN_IN_NOT_VISIBLE =
+  "Refreshed the server Epic HTTP token. TalkToLexi is not visible in Fortnite.";
+
+export const FORTNITE_SIGN_IN_SAY =
+  "I refreshed the server token. I'm not in Fortnite — you won't see me until I join your party.";
 
 /** Real sit-out fields from fortnitepy / current fnbr — not a fake NotReady that still matchmakes. */
 export const LOBBY_STATE_KEY = "Default:LobbyState_j";
@@ -128,9 +48,43 @@ export const EPIC_PRESENCE = "https://presence-public-service-prod.ol.epicgames.
 export const EPIC_PARTY = "https://party-service-prod.ol.epicgames.com";
 export const EPIC_USER_SEARCH = "https://user-search-service-prod.ol.epicgames.com";
 
+/** Official Epic hosts this companion is allowed to call. No proxies or lookalikes. */
+export const EPIC_OFFICIAL_HOSTS = [
+  "account-public-service-prod.ol.epicgames.com",
+  "friends-public-service-prod.ol.epicgames.com",
+  "presence-public-service-prod.ol.epicgames.com",
+  "party-service-prod.ol.epicgames.com",
+  "user-search-service-prod.ol.epicgames.com",
+  "api.epicgames.dev",
+  "www.epicgames.com",
+] as const;
+
+export function isOfficialEpicHost(host: string) {
+  const value = host.trim().toLowerCase();
+  return (EPIC_OFFICIAL_HOSTS as readonly string[]).includes(value);
+}
+
+export function epicServiceUrls() {
+  return [
+    EPIC_ACCOUNT,
+    EPIC_FRIENDS,
+    EPIC_PRESENCE,
+    EPIC_PARTY,
+    EPIC_USER_SEARCH,
+    oauthTokenUrl(),
+    oauthVerifyUrl(),
+    oauthTokenInfoUrl(),
+    oauthAccountVerifyUrl(),
+    authorizationRedirectUrl(),
+  ];
+}
+
 /** Public Fortnite Android game client (not a user password). iOS client 3446cd… is disabled. */
 export const FORTNITE_IOS_CLIENT_ID = "3f69e56c7649492c8cc29f1af08a8a12";
 export const FORTNITE_IOS_CLIENT_SECRET = "b51ee9cb12234f50a69efa67ef53812e";
+
+/** Epic OAuth scope required for this companion. Requested on every token grant. */
+export const EPIC_OAUTH_SCOPE = "basic_profile friends_list presence";
 
 const EPIC_AUTH_CLIENTS = [
   { id: FORTNITE_IOS_CLIENT_ID, secret: FORTNITE_IOS_CLIENT_SECRET },
@@ -172,6 +126,7 @@ type CachedToken = {
   accountId: string;
   displayName: string;
   expiresAt: number;
+  scope: string;
 };
 
 type FriendAttempt = {
@@ -183,6 +138,10 @@ type FriendAttempt = {
 };
 
 let tokenCache: CachedToken | null = null;
+let tokenVerified = false;
+let lastGoodVerifyAt = 0;
+let verifyGraceUntil = 0;
+let verifyRetryInflight: Promise<void> | null = null;
 let createdDeviceAuthOnce = false;
 let autoFriend: FriendAttempt | null = null;
 let autoFriendInflight: Promise<FriendAttempt> | null = null;
@@ -244,9 +203,11 @@ export function fortniteSetupSteps() {
   return [
     "Create or use a real Epic account for Lexi (Ian does this — Lexi will not register one).",
     "Get a device auth JSON (fnbr-style { accountId, deviceId, secret }) or a one-time exchange/authorization code.",
-    "Authorization code: sign in at Epic, then open https://www.epicgames.com/id/api/redirect?clientId=3f69e56c7649492c8cc29f1af08a8a12&responseType=code and copy `code`.",
+    `Authorization code: sign in at Epic, then open ${authorizationRedirectUrl()} and copy \`code\`. Token requests use scope=${EPIC_OAUTH_SCOPE}.`,
     "Paste EPIC_DEVICE_AUTH='{\"accountId\":\"\",\"deviceId\":\"\",\"secret\":\"\"}' into .env.local (never commit it). Or set EPIC_EXCHANGE_CODE, or local EPIC_EMAIL + EPIC_PASSWORD (may hit captcha/2FA).",
+    `If friends work but presence/party stays empty, the stored device auth was minted without \`${EPIC_OAUTH_SCOPE}\`. Paste a new EPIC_EXCHANGE_CODE once and re-run configure-fortnite so device auth is reissued.`,
     `Restart the server. First successful login auto-sends a friend request to ${friendDisplayName()}.`,
+    "On every launch the server verifies the access token at https://api.epicgames.dev/epic/oauth/v2/verify. A leftover token or device-auth file is not signed in. Transient verify failures keep last-known-good HTTP-ready for 30 seconds while a retry runs. If 401/expired persists after that, the cache is cleared and login is forced.",
     "Lexi cannot load Fortnite or play in-match. An Epic HTTP token is not being online in the game. She only appears in Ian's lobby after a successful party join, then she can sit out. Voice stays on this Grok call.",
   ];
 }
@@ -330,6 +291,130 @@ export function partyConnectionId(accountId: string, resource = randomUUID()) {
 
 export function oauthTokenUrl() {
   return `${EPIC_ACCOUNT}/account/api/oauth/token`;
+}
+
+/** Ian's launch verify. Official EOS docs also expose tokenInfo; this repo's device-auth tokens may need account-service verify. */
+export const EPIC_OAUTH_VERIFY_URL = "https://api.epicgames.dev/epic/oauth/v2/verify";
+
+export function oauthVerifyUrl() {
+  return EPIC_OAUTH_VERIFY_URL;
+}
+
+export function oauthTokenInfoUrl() {
+  return "https://api.epicgames.dev/epic/oauth/v2/tokenInfo";
+}
+
+export function oauthAccountVerifyUrl() {
+  return `${EPIC_ACCOUNT}/account/api/oauth/verify`;
+}
+
+export const EPIC_VERIFY_GRACE_MS = 30_000;
+
+export type EpicTokenVerify = {
+  ok: boolean;
+  status: number;
+  expired: boolean;
+  transient: boolean;
+  accountId: string;
+  displayName: string;
+  scope: string;
+  expiresAt: number | null;
+};
+
+export function parseEpicTokenVerify(httpStatus: number, data: unknown, now = Date.now()): EpicTokenVerify {
+  const row = asRecord(data);
+  const expiresAtRaw = readString(row?.expires_at) || readString(row?.expiresAt);
+  const expiresAtMs = expiresAtRaw ? Date.parse(expiresAtRaw) : Number.NaN;
+  const expiresIn = Number(row?.expires_in ?? row?.expiresIn);
+  const expiresAt = Number.isFinite(expiresAtMs)
+    ? expiresAtMs
+    : Number.isFinite(expiresIn)
+      ? now + Math.max(0, expiresIn) * 1000
+      : null;
+  const code = epicErrorCode(data);
+  const message = epicErrorMessage(data).toLowerCase();
+  const expiredByCode =
+    code.includes("expired") ||
+    code.includes("invalid_token") ||
+    message.includes("expired") ||
+    message.includes("invalid_token");
+  const expiredByTime = expiresAt !== null && expiresAt <= now;
+  const inactive = row?.active === false;
+  const authFail = httpStatus === 401 || httpStatus === 403;
+  const expired = expiredByTime || expiredByCode || inactive || authFail;
+  const transient = isTransientVerifyFailure(httpStatus, data);
+  const ok = httpStatus >= 200 && httpStatus < 300 && !expired && !transient && row?.active !== false;
+  const scopeValue = row?.scope;
+  const scope = Array.isArray(scopeValue)
+    ? scopeValue.map((part) => (typeof part === "string" ? part.trim() : "")).filter(Boolean).join(" ")
+    : readString(scopeValue);
+  return {
+    ok,
+    status: httpStatus,
+    expired,
+    transient,
+    accountId: readString(row?.account_id) || readString(row?.accountId),
+    displayName: readString(row?.displayName) || readString(row?.display_name) || readString(row?.dn),
+    scope,
+    expiresAt,
+  };
+}
+
+export function isMissingVerifyEndpoint(httpStatus: number) {
+  return httpStatus === 404 || httpStatus === 405 || httpStatus === 501;
+}
+
+export function isTransientVerifyFailure(httpStatus: number, data?: unknown) {
+  if (httpStatus === 0 || httpStatus === 408 || httpStatus === 429 || httpStatus >= 500) return true;
+  if (httpStatus < 200 || httpStatus >= 300) return false;
+  const row = asRecord(data);
+  return !row || Object.keys(row).length === 0;
+}
+
+export function verifyGraceActive(lastGoodAt: number, graceUntil: number, now: number) {
+  return lastGoodAt > 0 && graceUntil > now;
+}
+
+export function shouldForceLoginAfterVerify(input: {
+  lastGoodAt: number;
+  graceUntil: number;
+  now: number;
+  expired: boolean;
+  transient?: boolean;
+}) {
+  if (input.transient) return false;
+  if (!input.expired) return false;
+  if (verifyGraceActive(input.lastGoodAt, input.graceUntil, input.now)) return false;
+  return true;
+}
+
+export function clearEpicAccessTokenCache() {
+  tokenCache = null;
+  tokenVerified = false;
+  lastGoodVerifyAt = 0;
+  verifyGraceUntil = 0;
+}
+
+export async function ensureVerifiedEpicSession(options: { forceVerify?: boolean } = {}) {
+  return loginEpic({ forceVerify: options.forceVerify === true });
+}
+
+export function authorizationRedirectUrl(clientId = FORTNITE_IOS_CLIENT_ID) {
+  const params = new URLSearchParams({
+    clientId,
+    responseType: "code",
+    scope: EPIC_OAUTH_SCOPE,
+  });
+  return `https://www.epicgames.com/id/api/redirect?${params}`;
+}
+
+export function tokenHasRequiredScopes(scope: string | null | undefined) {
+  const granted = new Set(scopeTokens(scope));
+  return scopeTokens(EPIC_OAUTH_SCOPE).every((needed) => granted.has(needed));
+}
+
+function scopeTokens(scope: string | null | undefined) {
+  return (scope ?? "").split(/[,\s]+/).map((part) => part.trim()).filter(Boolean);
 }
 
 export function createDeviceAuthUrl(accountId: string) {
@@ -679,24 +764,47 @@ export async function getFortniteStatus(options: { autoFriend?: boolean } = {}) 
       status: 503,
       configured: false,
       canPlayInGame: false,
+      epicHttpReady: false,
+      inIanParty: false,
+      visibleInFortnite: false,
       error: "Fortnite/Epic is not configured.",
       setup: fortniteSetupSteps(),
       friendDisplayName: friendDisplayName(),
     };
   }
 
-  const session = await loginEpic();
+  let session: CachedToken;
+  try {
+    session = await loginEpic({ forceVerify: true });
+  } catch (error) {
+    return {
+      ok: false as const,
+      status: fortniteErrorStatus(error),
+      configured: true,
+      canPlayInGame: false,
+      epicHttpReady: false,
+      inIanParty: false,
+      visibleInFortnite: false,
+      error: fortniteErrorMessage(error),
+      needsReauth: true,
+      setup: fortniteSetupSteps(),
+      friendDisplayName: friendDisplayName(),
+    };
+  }
   const targetName = friendDisplayName();
   const friendAttempt =
     options.autoFriend === false ? autoFriend : await ensureDefaultFriend(session, targetName);
   const snapshot = await loadFriendSnapshot(session, targetName, friendAttempt?.accountId ?? null);
   const request = friendAttempt?.request ?? inferRequest(snapshot.relation);
+  const party = partyStateFromSnapshot(snapshot);
+  const tokenScope = session.scope || "";
 
   return {
     ok: true as const,
     status: 200,
     configured: true,
-    canPlayInGame: false,
+    tokenScope,
+    needsReauth: !tokenHasRequiredScopes(tokenScope),
     lexi: { displayName: session.displayName, accountId: session.accountId },
     friend: {
       displayName: snapshot.displayName,
@@ -706,8 +814,11 @@ export async function getFortniteStatus(options: { autoFriend?: boolean } = {}) 
       presence: snapshot.presence,
       error: friendAttempt?.error,
     },
-    signedIn: true,
-    party: partyStateFromSnapshot(snapshot),
+    party,
+    ...fortniteHttpReadyFields(party.withFriend),
+    visibleNote: party.withFriend
+      ? "TalkToLexi is in Ian's party."
+      : "TalkToLexi is not visible in Fortnite.",
     autoFriend: Boolean(friendAttempt),
     deviceAuthCreated: createdDeviceAuthOnce,
   };
@@ -721,6 +832,7 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       status: 400,
       configured: isFortniteConfigured(),
       canPlayInGame: false,
+      epicHttpReady: false,
       error: "action must be add_friend, status, invite, sign_in, join_party, sit_out, or leave_party.",
     };
   }
@@ -730,6 +842,9 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       status: 503,
       configured: false,
       canPlayInGame: false,
+      epicHttpReady: false,
+      inIanParty: false,
+      visibleInFortnite: false,
       error: "Fortnite/Epic is not configured.",
       setup: fortniteSetupSteps(),
       friendDisplayName: friendDisplayName(),
@@ -738,19 +853,41 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
 
   if (action === "status") return getFortniteStatus({ autoFriend: true });
 
-  const session = await loginEpic({ refresh: action === "sign_in" || action === "join_party" });
+  let session: CachedToken;
+  try {
+    session = await loginEpic({
+      refresh: action === "sign_in" || action === "join_party",
+      forceVerify: action === "sign_in",
+    });
+  } catch (error) {
+    return {
+      ok: false as const,
+      status: fortniteErrorStatus(error),
+      configured: true,
+      canPlayInGame: false,
+      epicHttpReady: false,
+      inIanParty: false,
+      visibleInFortnite: false,
+      error: fortniteErrorMessage(error),
+      needsReauth: true,
+    };
+  }
   const displayName = parseFortniteDisplayName(input.displayName);
   if (action === "sign_in") {
     const snapshot = await loadFriendSnapshot(session, displayName, null);
+    const party = partyStateFromSnapshot(snapshot);
     return {
       ok: true as const,
       status: 200,
       configured: true,
-      canPlayInGame: false,
-      signedIn: true,
       lexi: { displayName: session.displayName, accountId: session.accountId },
       friend: friendStateFromSnapshot(snapshot),
-      party: partyStateFromSnapshot(snapshot),
+      party,
+      ...fortniteHttpReadyFields(party.withFriend),
+      message: party.withFriend
+        ? "Refreshed the server Epic HTTP token."
+        : FORTNITE_SIGN_IN_NOT_VISIBLE,
+      say: party.withFriend ? undefined : FORTNITE_SIGN_IN_SAY,
     };
   }
   if (action === "join_party") {
@@ -759,12 +896,12 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       ok: join.joined,
       status: join.joined ? 200 : join.status,
       configured: true,
-      canPlayInGame: false,
-      signedIn: true,
       lexi: { displayName: session.displayName, accountId: session.accountId },
       friend: join.friend,
       party: join.party,
+      ...fortniteHttpReadyFields(join.party.withFriend === true),
       error: join.error,
+      say: join.say,
     };
   }
   if (action === "sit_out") {
@@ -773,11 +910,10 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       ok: sit.sittingOut,
       status: sit.sittingOut ? 200 : sit.status,
       configured: true,
-      canPlayInGame: false,
-      signedIn: true,
       lexi: { displayName: session.displayName, accountId: session.accountId },
       friend: sit.friend,
       party: sit.party,
+      ...fortniteHttpReadyFields(sit.party.withFriend === true),
       error: sit.error,
     };
   }
@@ -787,11 +923,10 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       ok: leave.ok,
       status: leave.ok ? 200 : leave.status,
       configured: true,
-      canPlayInGame: false,
-      signedIn: true,
       lexi: { displayName: session.displayName, accountId: session.accountId },
       friend: leave.friend,
       party: leave.party,
+      ...fortniteHttpReadyFields(leave.party.withFriend === true),
       error: leave.error,
     };
   }
@@ -821,45 +956,229 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
     ok: invite.invited,
     status: invite.invited ? 200 : invite.status,
     configured: true,
-    canPlayInGame: false,
     lexi: { displayName: session.displayName, accountId: session.accountId },
     friend: invite.friend,
     party: {
-      inParty: invite.inParty,
+      ...invite.party,
       invited: invite.invited,
       error: invite.error,
     },
+    ...fortniteHttpReadyFields(invite.party.withFriend),
   };
 }
 
-async function loginEpic(options: { refresh?: boolean } = {}): Promise<CachedToken> {
-  if (!options.refresh && tokenCache && tokenCache.expiresAt > Date.now() + 15_000) return tokenCache;
+async function loginEpic(options: { refresh?: boolean; forceVerify?: boolean } = {}): Promise<CachedToken> {
+  if (
+    !options.refresh &&
+    !options.forceVerify &&
+    tokenCache &&
+    tokenVerified &&
+    tokenCache.expiresAt > Date.now() + 15_000
+  ) {
+    return tokenCache;
+  }
 
+  if (!options.refresh && tokenCache) {
+    const cached = await safeVerifyEpicAccessToken(tokenCache.accessToken);
+    if (cached.ok) {
+      applyVerifyToCache(tokenCache, cached);
+      markLastGoodVerify();
+      return tokenCache;
+    }
+    if (lastGoodVerifyAt > 0) {
+      beginVerifyGrace();
+      scheduleVerifyRetry();
+      if (
+        !shouldForceLoginAfterVerify({
+          lastGoodAt: lastGoodVerifyAt,
+          graceUntil: verifyGraceUntil,
+          now: Date.now(),
+          expired: cached.expired || cached.status === 401,
+          transient: cached.transient,
+        })
+      ) {
+        return tokenCache;
+      }
+    }
+    clearEpicAccessTokenCache();
+  }
+
+  return grantAndVerify();
+}
+
+async function grantAndVerify(): Promise<CachedToken> {
+  const token = await grantFreshToken();
+  const verified = await safeVerifyEpicAccessToken(token.accessToken);
+  if (verified.ok) {
+    applyVerifyToCache(token, verified);
+    tokenCache = token;
+    markLastGoodVerify();
+    return token;
+  }
+  if (verified.transient) {
+    throw new FortniteHttpError(502, "Epic access token failed verify. Sign in again.");
+  }
+  clearEpicAccessTokenCache();
+  throw new FortniteHttpError(
+    verified.status === 401 || verified.expired ? 401 : 502,
+    verified.expired
+      ? "Epic access token expired. Sign in again (device auth or a new EPIC_EXCHANGE_CODE)."
+      : "Epic access token failed verify. Sign in again.",
+  );
+}
+
+async function grantFreshToken(): Promise<CachedToken> {
   const device = deviceAuthFromEnv();
   const exchange = exchangeCodeFromEnv();
   const emailPassword = emailPasswordFromEnv();
   let token: CachedToken;
-  if (device) {
+  if (exchange) {
+    token = await grantFromCode(exchange);
+    await maybeCreateDeviceAuth(token, { replace: true });
+  } else if (device) {
     token = await grantWithClients({
       grant_type: "device_auth",
       account_id: device.accountId,
       device_id: device.deviceId,
       secret: device.secret,
     });
-  } else if (exchange) {
-    token = await grantFromCode(exchange);
-    await maybeCreateDeviceAuth(token);
   } else if (emailPassword) {
     token = await grantFromEmailPassword(emailPassword);
-    await maybeCreateDeviceAuth(token);
+    await maybeCreateDeviceAuth(token, { replace: true });
   } else {
     throw new FortniteHttpError(503, "Fortnite/Epic is not configured.");
   }
   if (!token.displayName || token.displayName === token.accountId) {
     token.displayName = lexiDisplayNameFromEnv();
   }
-  tokenCache = token;
   return token;
+}
+
+function markLastGoodVerify(now = Date.now()) {
+  tokenVerified = true;
+  lastGoodVerifyAt = now;
+  verifyGraceUntil = 0;
+}
+
+function beginVerifyGrace(now = Date.now()) {
+  if (verifyGraceUntil === 0) verifyGraceUntil = now + EPIC_VERIFY_GRACE_MS;
+}
+
+function scheduleVerifyRetry() {
+  if (verifyRetryInflight || !tokenCache) return;
+  const accessToken = tokenCache.accessToken;
+  verifyRetryInflight = (async () => {
+    try {
+      const first = await safeVerifyEpicAccessToken(accessToken);
+      if (!tokenCache || tokenCache.accessToken !== accessToken) return;
+      if (first.ok) {
+        applyVerifyToCache(tokenCache, first);
+        markLastGoodVerify();
+        return;
+      }
+      const remaining = Math.max(0, verifyGraceUntil - Date.now());
+      if (remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remaining));
+      }
+      if (!tokenCache || tokenCache.accessToken !== accessToken) return;
+      const again = await safeVerifyEpicAccessToken(accessToken);
+      if (again.ok) {
+        applyVerifyToCache(tokenCache, again);
+        markLastGoodVerify();
+        return;
+      }
+      if (
+        shouldForceLoginAfterVerify({
+          lastGoodAt: lastGoodVerifyAt,
+          graceUntil: verifyGraceUntil,
+          now: Date.now(),
+          expired: again.expired || again.status === 401,
+          transient: again.transient,
+        })
+      ) {
+        clearEpicAccessTokenCache();
+        await grantAndVerify().catch(() => undefined);
+      }
+    } finally {
+      verifyRetryInflight = null;
+    }
+  })();
+}
+
+async function safeVerifyEpicAccessToken(accessToken: string): Promise<EpicTokenVerify> {
+  try {
+    return await verifyEpicAccessToken(accessToken);
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      expired: false,
+      transient: true,
+      accountId: "",
+      displayName: "",
+      scope: "",
+      expiresAt: null,
+    };
+  }
+}
+
+function applyVerifyToCache(token: CachedToken, verified: EpicTokenVerify) {
+  if (verified.accountId) token.accountId = verified.accountId;
+  if (verified.displayName) token.displayName = verified.displayName;
+  if (verified.scope) token.scope = verified.scope;
+  if (verified.expiresAt) token.expiresAt = verified.expiresAt;
+}
+
+async function verifyEpicAccessToken(accessToken: string): Promise<EpicTokenVerify> {
+  const headers = { Authorization: `bearer ${accessToken}` };
+  const primary = await epicFetch(oauthVerifyUrl(), { method: "GET", headers });
+  const primaryData = primary.status === 204 ? {} : await readJson(primary);
+  let parsed = parseEpicTokenVerify(primary.status, primaryData);
+  if (primary.status === 405) {
+    const posted = await epicFetch(oauthVerifyUrl(), { method: "POST", headers });
+    const postedData = posted.status === 204 ? {} : await readJson(posted);
+    parsed = parseEpicTokenVerify(posted.status, postedData);
+    if (parsed.ok) return parsed;
+    if (!isMissingVerifyEndpoint(posted.status) && (parsed.expired || posted.status === 401)) {
+      const classic = await verifyAccountServiceToken(accessToken);
+      return classic.ok ? classic : parsed;
+    }
+  } else if (parsed.ok) {
+    return parsed;
+  } else if (!isMissingVerifyEndpoint(primary.status) && (parsed.expired || primary.status === 401)) {
+    const classic = await verifyAccountServiceToken(accessToken);
+    return classic.ok ? classic : parsed;
+  }
+
+  if (isMissingVerifyEndpoint(primary.status) || !parsed.ok) {
+    const info = await verifyTokenInfo(accessToken);
+    if (info.ok) return info;
+    const classic = await verifyAccountServiceToken(accessToken);
+    if (classic.ok) return classic;
+    if (info.expired || info.status === 401) return info;
+    if (classic.expired || classic.status === 401) return classic;
+    return parsed;
+  }
+  return parsed;
+}
+
+async function verifyTokenInfo(accessToken: string): Promise<EpicTokenVerify> {
+  const response = await epicFetch(oauthTokenInfoUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token: accessToken }).toString(),
+  });
+  const data = response.status === 204 ? {} : await readJson(response);
+  return parseEpicTokenVerify(response.status, data);
+}
+
+async function verifyAccountServiceToken(accessToken: string): Promise<EpicTokenVerify> {
+  const response = await epicFetch(oauthAccountVerifyUrl(), {
+    method: "GET",
+    headers: { Authorization: `bearer ${accessToken}` },
+  });
+  const data = response.status === 204 ? {} : await readJson(response);
+  return parseEpicTokenVerify(response.status, data);
 }
 
 async function grantFromCode(code: string) {
@@ -1087,7 +1406,7 @@ async function grantToken(
       Authorization: `basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: new URLSearchParams(body).toString(),
+    body: new URLSearchParams({ ...body, scope: EPIC_OAUTH_SCOPE }).toString(),
   });
   const data = await readJson(response);
   if (!response.ok) {
@@ -1097,6 +1416,7 @@ async function grantToken(
   const accountId = readString(asRecord(data)?.account_id);
   const displayName = readString(asRecord(data)?.displayName) || readString(asRecord(data)?.display_name);
   const expiresIn = Number(asRecord(data)?.expires_in);
+  const scope = readString(asRecord(data)?.scope);
   if (!accessToken || !accountId) {
     throw new FortniteHttpError(502, "Epic token response was missing access_token or account_id.", data);
   }
@@ -1105,11 +1425,13 @@ async function grantToken(
     accountId,
     displayName: displayName || accountId,
     expiresAt: Date.now() + Math.max(30, Number.isFinite(expiresIn) ? expiresIn : 300) * 1000,
+    scope,
   };
 }
 
-async function maybeCreateDeviceAuth(session: CachedToken) {
-  if (createdDeviceAuthOnce || deviceAuthFromEnv()) return;
+async function maybeCreateDeviceAuth(session: CachedToken, options: { replace?: boolean } = {}) {
+  if (createdDeviceAuthOnce) return;
+  if (!options.replace && deviceAuthFromEnv()) return;
   const response = await epicFetch(createDeviceAuthUrl(session.accountId), {
     method: "POST",
     headers: { Authorization: `bearer ${session.accessToken}` },
@@ -1190,32 +1512,34 @@ async function addFriend(session: CachedToken, displayName: string): Promise<Fri
 
 async function inviteFriend(session: CachedToken, displayName: string) {
   const snapshot = await loadFriendSnapshot(session, displayName, null);
+  const party = partyStateFromSnapshot(snapshot);
+  const friend = friendStateFromSnapshot(snapshot);
   if (!snapshot.accountId) {
     return {
       invited: false,
-      inParty: false,
       status: 404,
       error: `Could not resolve Epic account ${displayName}.`,
-      friend: snapshot,
+      friend,
+      party,
     };
   }
   if (snapshot.relation !== "friends") {
     return {
       invited: false,
-      inParty: Boolean(snapshot.partyId),
       status: 409,
       error: `${snapshot.displayName} is not on Lexi's friends list yet. Accept the request, then invite from lobby.`,
-      friend: snapshot,
+      friend,
+      party,
     };
   }
-  if (!snapshot.partyId) {
+  if (!snapshot.withFriend || !snapshot.partyId) {
     return {
       invited: false,
-      inParty: false,
       status: 409,
       error:
-        "Lexi is not in a Fortnite party. She cannot open the game client. Invite her when you are in lobby.",
-      friend: snapshot,
+        "Lexi is not in Ian's Fortnite party. She cannot open the game client. Invite her when you are in lobby.",
+      friend,
+      party,
     };
   }
 
@@ -1231,13 +1555,13 @@ async function inviteFriend(session: CachedToken, displayName: string) {
   if (!response.ok) {
     return {
       invited: false,
-      inParty: true,
       status: response.status >= 400 && response.status < 500 ? response.status : 502,
       error: epicErrorMessage(data) || "Party invite failed.",
-      friend: snapshot,
+      friend,
+      party,
     };
   }
-  return { invited: true, inParty: true, status: 200, friend: snapshot };
+  return { invited: true, status: 200, friend, party };
 }
 
 async function joinFriendParty(session: CachedToken, displayName: string) {
@@ -1276,15 +1600,26 @@ async function joinFriendParty(session: CachedToken, displayName: string) {
 
   const target = await findJoinableParty(session, snapshot.accountId, snapshot.partyId);
   if (target) {
-    return completeJoin(session, displayName, snapshot.accountId, target.partyId, snapshot.partyId);
+    const joined = await completeJoin(session, displayName, snapshot.accountId, target.partyId, snapshot.partyId);
+    if (joined.joined) return joined;
   }
 
-  await requestToJoin(session, snapshot.accountId).catch(() => null);
+  const intended = await requestToJoin(session, snapshot.accountId);
   const retry = await waitForJoinableParty(session, snapshot.accountId, snapshot.partyId);
-  if (!retry) {
+  if (retry) {
+    return completeJoin(session, displayName, snapshot.accountId, retry.partyId, snapshot.partyId);
+  }
+  if (intended.ok || isPendingIntention(intended.code)) {
+    return failParty(409, ACCEPT_JOIN_ERROR, snapshot, ACCEPT_JOIN_SAY);
+  }
+  if (friendHasNoParty(intended.code)) {
     return failParty(409, OPEN_PARTY_ERROR, snapshot);
   }
-  return completeJoin(session, displayName, snapshot.accountId, retry.partyId, snapshot.partyId);
+  return failParty(
+    intended.status >= 400 && intended.status < 500 ? intended.status : 409,
+    intended.error || OPEN_PARTY_ERROR,
+    snapshot,
+  );
 }
 
 async function completeJoin(
@@ -1400,7 +1735,7 @@ async function leaveCurrentParty(session: CachedToken, displayName: string) {
 }
 
 async function waitForJoinableParty(session: CachedToken, friendId: string, selfPartyId: string | null) {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 15; attempt += 1) {
     const found = await findJoinableParty(session, friendId, selfPartyId);
     if (found) return found;
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -1443,13 +1778,31 @@ async function requestToJoin(session: CachedToken, friendId: string) {
   });
   const data = response.status === 204 ? {} : await readJson(response);
   if (!response.ok) {
-    throw new FortniteHttpError(
-      response.status,
-      epicErrorMessage(data) || "Party join request failed.",
-      data,
-    );
+    return {
+      ok: false as const,
+      status: response.status,
+      code: epicErrorCode(data),
+      error: epicErrorMessage(data) || "Party join request failed.",
+    };
   }
-  return data;
+  return { ok: true as const, status: response.status, code: "", error: undefined };
+}
+
+function isPendingIntention(code: string) {
+  return (
+    code.includes("intention_already") ||
+    code.includes("already_exists") ||
+    code.includes("invite_already") ||
+    code.includes("ping_already")
+  );
+}
+
+function friendHasNoParty(code: string) {
+  return (
+    code.includes("user_has_no_party") ||
+    code.includes("party_not_found") ||
+    code.includes("user_not_in_party")
+  );
 }
 
 async function postPartyJoin(session: CachedToken, partyId: string) {
@@ -1541,11 +1894,12 @@ async function deletePartyMembership(session: CachedToken, partyId: string) {
   return { ok: true as const, status: 200, error: undefined };
 }
 
-function failParty(status: number, error: string, snapshot: FriendSnapshot) {
+function failParty(status: number, error: string, snapshot: FriendSnapshot, say?: string) {
   return {
     joined: false,
     status,
     error,
+    say,
     friend: friendStateFromSnapshot(snapshot),
     party: { ...partyStateFromSnapshot(snapshot), error },
   };
@@ -1561,10 +1915,20 @@ function friendStateFromSnapshot(snapshot: FriendSnapshot) {
   };
 }
 
+export function fortniteHttpReadyFields(withFriend: boolean) {
+  return {
+    epicHttpReady: true as const,
+    inIanParty: withFriend,
+    visibleInFortnite: withFriend,
+    canPlayInGame: false as const,
+  };
+}
+
 function partyStateFromSnapshot(snapshot: FriendSnapshot) {
   const withFriend = snapshot.withFriend;
   return {
     inParty: withFriend,
+    inIanParty: withFriend,
     partyId: withFriend ? snapshot.partyId : null,
     sittingOut: withFriend ? snapshot.sittingOut : false,
     readiness: withFriend ? snapshot.readiness : null,

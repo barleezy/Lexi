@@ -30,10 +30,14 @@ function publicResult(result) {
     configured: result.configured,
     canPlayInGame: result.canPlayInGame,
     error: result.error,
+    tokenScope: result.tokenScope,
+    needsReauth: result.needsReauth,
     lexi: result.lexi,
     friend: result.friend,
     party: result.party,
-    signedIn: result.signedIn,
+    epicHttpReady: result.epicHttpReady,
+    inIanParty: result.inIanParty,
+    visibleInFortnite: result.visibleInFortnite,
     autoFriend: result.autoFriend,
     deviceAuthCreated: result.deviceAuthCreated,
   };
@@ -42,6 +46,11 @@ function publicResult(result) {
 try {
   const status = await getFortniteStatus({ autoFriend: true });
   console.log(JSON.stringify(publicResult(status), null, 2));
+  if (status.needsReauth) {
+    console.log(
+      "Epic token is missing scope=basic_profile friends_list presence. Paste a new EPIC_EXCHANGE_CODE (from the Android-client redirect that requests that scope) and re-run this script so device auth is reissued. Do not commit the code.",
+    );
+  }
   if (!status.ok) process.exit(1);
 } catch (error) {
   const status = typeof error?.status === "number" ? error.status : 502;

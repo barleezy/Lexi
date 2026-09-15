@@ -34,8 +34,8 @@ export default async function IosSignInPage({
         <p className="text-sm uppercase tracking-[0.2em] text-neutral-500">Talk to Lexi</p>
         <h1 className="text-3xl font-semibold tracking-tight">Sign in on iPhone</h1>
         <p className="text-neutral-600 dark:text-neutral-400">
-          Sign in with your account and password, or create an account. This sets the same cookie
-          the site uses, then returns a session to the native app.
+          Sign in with your account, email, and password, or create an account. This sets the same
+          cookie the site uses, then returns a session to the native app.
         </p>
       </div>
       <IosSignInForm
@@ -45,8 +45,7 @@ export default async function IosSignInPage({
         callbackOk={callbackOk}
       />
       <p className="text-xs leading-relaxed text-neutral-500">
-        Adults only. Porn 18+, sexual roleplay 21+. Refuse anyone who is a minor. The iPhone app
-        holds the Grok voice session natively — this page is only account sign-in.
+        The iPhone app holds the voice session. This page is only account sign-in.
       </p>
     </main>
   );

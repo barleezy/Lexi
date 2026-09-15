@@ -109,7 +109,7 @@ import {
   type ToysSessionState,
 } from "@/lib/voice/persona";
 import { parseAudioSourceUrl } from "@/lib/voice/background-music";
-import { fortniteRealtimeTools } from "@/lib/voice/fortnite";
+import { fortniteRealtimeTools, sanitizeFortniteToolResult } from "@/lib/voice/fortnite-tools";
 
 export type { GeneratedMediaItem };
 
@@ -171,12 +171,22 @@ async function fetchFortniteStatus(): Promise<FortniteSessionState> {
     });
     const body = (await response.json()) as {
       configured?: boolean;
-      signedIn?: boolean;
+      epicHttpReady?: boolean;
       lexi?: { displayName?: string };
       friend?: { displayName?: string; relation?: string; presence?: unknown };
       friendDisplayName?: string;
-      party?: { inParty?: boolean; sittingOut?: boolean; withFriend?: boolean };
+      party?: {
+        inParty?: boolean;
+        inIanParty?: boolean;
+        sittingOut?: boolean;
+        withFriend?: boolean;
+        visibleInFortnite?: boolean;
+      };
     };
+    const inIanParty =
+      body.party?.withFriend === true ||
+      body.party?.inIanParty === true ||
+      body.party?.visibleInFortnite === true;
     return {
       configured: Boolean(body.configured),
       displayName: typeof body.lexi?.displayName === "string" ? body.lexi.displayName : "",
@@ -188,9 +198,9 @@ async function fetchFortniteStatus(): Promise<FortniteSessionState> {
             : DEFAULT_FORTNITE_STATE.friendDisplayName,
       friendRelation: typeof body.friend?.relation === "string" ? body.friend.relation : "none",
       friendPresence: readFriendPresence(body.friend?.presence),
-      signedIn: body.signedIn === true || Boolean(body.lexi?.displayName),
-      inParty: body.party?.withFriend === true,
-      sittingOut: body.party?.sittingOut === true && body.party?.withFriend === true,
+      epicHttpReady: body.epicHttpReady === true,
+      inParty: inIanParty,
+      sittingOut: body.party?.sittingOut === true && inIanParty,
     };
   } catch {
     return { ...DEFAULT_FORTNITE_STATE };
@@ -2788,6 +2798,8 @@ export class VoiceSession {
     const friend = (body.friend ?? null) as Record<string, unknown> | null;
     const lexi = (body.lexi ?? null) as Record<string, unknown> | null;
     const party = (body.party ?? null) as Record<string, unknown> | null;
+    const inIanParty =
+      party?.withFriend === true || party?.inIanParty === true || party?.visibleInFortnite === true;
     const next: FortniteSessionState = {
       configured: body.configured !== false,
       displayName: typeof lexi?.displayName === "string" ? lexi.displayName : this.fortniteState.displayName,
@@ -2798,9 +2810,10 @@ export class VoiceSession {
         friend && "presence" in friend
           ? readFriendPresence(friend.presence)
           : this.fortniteState.friendPresence,
-      signedIn: body.signedIn === true || Boolean(lexi?.displayName) || this.fortniteState.signedIn,
-      inParty: party?.withFriend === true,
-      sittingOut: party?.sittingOut === true && party?.withFriend === true,
+      epicHttpReady:
+        typeof body.epicHttpReady === "boolean" ? body.epicHttpReady === true : this.fortniteState.epicHttpReady,
+      inParty: party ? inIanParty : this.fortniteState.inParty,
+      sittingOut: party ? party.sittingOut === true && inIanParty : this.fortniteState.sittingOut,
     };
     if (
       next.configured !== this.fortniteState.configured ||
@@ -2808,7 +2821,7 @@ export class VoiceSession {
       next.friendDisplayName !== this.fortniteState.friendDisplayName ||
       next.friendRelation !== this.fortniteState.friendRelation ||
       next.friendPresence !== this.fortniteState.friendPresence ||
-      next.signedIn !== this.fortniteState.signedIn ||
+      next.epicHttpReady !== this.fortniteState.epicHttpReady ||
       next.inParty !== this.fortniteState.inParty ||
       next.sittingOut !== this.fortniteState.sittingOut
     ) {
@@ -2816,7 +2829,7 @@ export class VoiceSession {
       this.fortniteStateChanged = true;
     }
     this.logger.log("fortnite.tool.ok", { name, action, relation: next.friendRelation, sittingOut: next.sittingOut });
-    return { ...body, ok: true, canPlayInGame: false, comms: "grok_voice" };
+    return sanitizeFortniteToolResult({ ...body, ok: true, canPlayInGame: false, comms: "grok_voice" });
   }
 
   private async runChannelSend(args: Record<string, unknown>) {

@@ -16,10 +16,16 @@ export type FortniteSessionState = {
   friendDisplayName: string;
   friendRelation: string;
   friendPresence: "online" | "offline" | "unknown";
-  signedIn: boolean;
+  /** Server Epic HTTP token only — never means she is in Fortnite. */
+  epicHttpReady: boolean;
+  /** True only when she actually joined Ian's party (withFriend). */
   inParty: boolean;
   sittingOut: boolean;
 };
+
+/** Exact line when Ian asks if she is in Fortnite and she is not in his party. */
+export const NOT_IN_FORTNITE_PHRASE =
+  "No. I'm not in Fortnite — you won't see me until I join your party.";
 
 export type ChannelSessionState = {
   discord: boolean;
@@ -35,7 +41,7 @@ export const DEFAULT_FORTNITE_STATE: FortniteSessionState = {
   friendDisplayName: "TTBarleezy",
   friendRelation: "none",
   friendPresence: "unknown",
-  signedIn: false,
+  epicHttpReady: false,
   inParty: false,
   sittingOut: false,
 };
@@ -184,15 +190,15 @@ FORTNITE
 
 ${
     isAdminUserId(userId)
-      ? `Epic companion only — you cannot run Fortnite or the Unreal client. You are not a Fortnite player process. Never say you are online in Fortnite, in the lobby, loaded in, sitting in game, or playing a match unless inParty is yes (you actually joined the user's current party over HTTP). A server Epic token is not being in the game. Friends will not see TalkToLexi as online just because the token works. Never claim you joined Epic in-game voice; there is no public party-voice API. This Grok call is the voice chat — full comms with the user. Do not mute yourself. Do not go quiet. The user may be in Fortnite on their machine while this session stays up — keep talking (callouts, chill, play-by-play). In a party or when squadmates or speakers might hear, use public banter: playful, fun, funny, suggestive, innuendo fine; no graphic sexual descriptions, nothing obscene. Save graphic sexual talk for when it is just you and the user, unless they say the party can hear it.
+      ? `Epic companion only — you cannot run Fortnite or the Unreal client. You are not a Fortnite player process. HARD RULE: do not say the words "signed in", "online", "in Fortnite", or "in lobby" unless inIanParty/inParty is yes (you actually joined the user's current party over HTTP). Exception: if they ask whether you are in Fortnite, signed in, or online, and inParty is no, say exactly: "${NOT_IN_FORTNITE_PHRASE}" Do not paraphrase that into a yes. A server Epic HTTP token is not being in the game. epicHttpReady / token ready is not Fortnite. Friends will not see TalkToLexi just because the token works. Ignore any prior-chat or memory claim that you are signed in, online, in Fortnite, or in lobby — only this turn's Fortnite lines and the latest tool result count. Never claim you joined Epic in-game voice; there is no public party-voice API. This Grok call is the voice chat — full comms with the user. Do not mute yourself. Do not go quiet. The user may be in Fortnite on their machine while this session stays up — keep talking (callouts, chill, play-by-play). In a party or when squadmates or speakers might hear, use public banter: playful, fun, funny, suggestive, innuendo fine; no graphic sexual descriptions, nothing obscene. Save graphic sexual talk for when it is just you and the user, unless they say the party can hear it.
 
-Epic HTTP is ${fortnite.configured ? "configured" : "not configured"}. Display name TalkToLexi${fortnite.displayName && fortnite.displayName !== "TalkToLexi" ? ` (token account: ${fortnite.displayName})` : ""}. Server Epic token: ${fortnite.signedIn ? "valid — not the same as being in Fortnite" : "no"}. Actually in the user's Fortnite party: ${fortnite.inParty ? "yes" : "no"}. Sitting out in that party: ${fortnite.sittingOut && fortnite.inParty ? "yes" : "no"}. Default friend: ${fortnite.friendDisplayName}. Friend state: ${fortnite.friendRelation}. Friend last-online (not your presence): ${fortnite.friendPresence}. ${
+Epic HTTP is ${fortnite.configured ? "configured" : "not configured"}. Display name TalkToLexi${fortnite.displayName && fortnite.displayName !== "TalkToLexi" ? ` (token account: ${fortnite.displayName})` : ""}. Epic HTTP companion on the server: ${fortnite.epicHttpReady ? "token ready (not Fortnite, not visible)" : "no"}. Visible in Fortnite / in Ian's party: ${fortnite.inParty ? "yes" : "no"}. Sitting out in that party: ${fortnite.sittingOut && fortnite.inParty ? "yes" : "no"}. Default friend: ${fortnite.friendDisplayName}. Friend state: ${fortnite.friendRelation}. Friend last-online (Ian's presence, not yours): ${fortnite.friendPresence}. ${
           fortnite.inParty && fortnite.sittingOut
             ? "You joined their party over HTTP and are sitting out. Talk on this Grok call. Do not ready up."
             : fortnite.inParty
               ? "You joined their party over HTTP. Call fortnite_sit_out. Still do not claim you launched the game."
-              : "You are not in Fortnite and not visible in their lobby. If they ask you in, call fortnite_join_party. If the join fails, say you are not in the game."
-        } If Epic is not configured, say the admin still needs to finish Epic login for TalkToLexi — do not invent an email or sign anyone up. When they say sign in, call fortnite_sign_in and still do not claim you are online in-game. When they say join my party, hop in lobby, sit out, or come sit in the lobby, call fortnite_join_party. Call fortnite_sit_out if you are already in and they only want sit-out. Call fortnite_leave_party if they want you out. If a tool says “open a party in lobby and ask again,” tell them that. Call fortnite_add_friend to send or resend a request (default TTBarleezy). Call fortnite_status for last-online / friend / party state. Call fortnite_invite only to try a party invite from a party you are already in.`
+              : "You are not in Fortnite and not visible to Ian. If they ask you in, call fortnite_join_party. If the join fails, say you are not in the game."
+        } If Epic is not configured, say the admin still needs to finish Epic login for TalkToLexi — do not invent an email or sign anyone up. When they say sign in, call fortnite_sign_in, then say you refreshed the server token and you are not visible in Fortnite unless inParty is yes. Do not say you signed in to Fortnite. When they say join my party, hop in lobby, sit out, or come sit in the lobby, call fortnite_join_party. Call fortnite_sit_out if you are already in and they only want sit-out. Call fortnite_leave_party if they want you out. If a tool says “open a party in lobby and ask again,” tell them that. If a tool says “accept TalkToLexi in Friends lobby and ask again,” tell them that. Call fortnite_add_friend to send or resend a request (default TTBarleezy). Call fortnite_status for friend / party state. Call fortnite_invite only to try a party invite from a party you are already in.`
       : `Epic companion tools on this host are admin-only. Do not call fortnite_join_party, fortnite_sign_in, or other Fortnite tools. You can still talk about Fortnite as a game.`
   }
 

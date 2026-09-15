@@ -33,10 +33,22 @@ export function smtpConfig(env: NodeJS.ProcessEnv = process.env) {
   return { host, user, pass, port: Number.isFinite(port) ? port : 587 };
 }
 
-async function sendViaResend(text: string, env: NodeJS.ProcessEnv) {
+export function isOutboundEmailConfigured(env: NodeJS.ProcessEnv = process.env) {
+  return Boolean(emailFrom(env) && (readEnv("RESEND_API_KEY", env) || smtpConfig(env)));
+}
+
+function headerSafe(value: string) {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+async function sendViaResend(
+  to: string,
+  subject: string,
+  text: string,
+  env: NodeJS.ProcessEnv,
+) {
   const key = readEnv("RESEND_API_KEY", env);
   const from = emailFrom(env);
-  const to = emailTo(env);
   if (!key || !from || !to) return { ok: false as const, status: 503, error: "Email is not configured." };
   const content = clipOutboundText(text, 8000);
   if (!content) return { ok: false as const, status: 400, error: "Message is empty." };
@@ -50,7 +62,7 @@ async function sendViaResend(text: string, env: NodeJS.ProcessEnv) {
     body: JSON.stringify({
       from,
       to: [to],
-      subject: "Lexi",
+      subject,
       text: content,
     }),
   });
@@ -102,10 +114,9 @@ async function expectCode(socket: Socket, prefix: string) {
   return reply;
 }
 
-async function sendViaSmtp(text: string, env: NodeJS.ProcessEnv) {
+async function sendViaSmtp(to: string, subject: string, text: string, env: NodeJS.ProcessEnv) {
   const smtp = smtpConfig(env);
   const from = emailFrom(env);
-  const to = emailTo(env);
   if (!smtp || !from || !to) {
     return { ok: false as const, status: 503, error: "Email is not configured." };
   }
@@ -158,9 +169,9 @@ async function sendViaSmtp(text: string, env: NodeJS.ProcessEnv) {
     await expectCode(secure, "250");
     smtpWrite(secure, "DATA");
     await expectCode(secure, "354");
-    smtpWrite(secure, `From: ${from}`);
-    smtpWrite(secure, `To: ${to}`);
-    smtpWrite(secure, "Subject: Lexi");
+    smtpWrite(secure, `From: ${headerSafe(from)}`);
+    smtpWrite(secure, `To: ${headerSafe(to)}`);
+    smtpWrite(secure, `Subject: ${headerSafe(subject)}`);
     smtpWrite(secure, "Content-Type: text/plain; charset=utf-8");
     smtpWrite(secure, "");
     smtpWrite(secure, content.replaceAll("\r\n.", "\r\n.."));
@@ -180,8 +191,17 @@ async function sendViaSmtp(text: string, env: NodeJS.ProcessEnv) {
   }
 }
 
-export async function sendEmail(text: string, env: NodeJS.ProcessEnv = process.env) {
-  if (readEnv("RESEND_API_KEY", env)) return sendViaResend(text, env);
-  if (smtpConfig(env)) return sendViaSmtp(text, env);
+export async function sendOutboundEmail(
+  options: { to: string; subject: string; text: string },
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const to = headerSafe(options.to);
+  const subject = headerSafe(options.subject) || "Lexi";
+  if (readEnv("RESEND_API_KEY", env)) return sendViaResend(to, subject, options.text, env);
+  if (smtpConfig(env)) return sendViaSmtp(to, subject, options.text, env);
   return { ok: false as const, status: 503, error: "Email is not configured." };
+}
+
+export async function sendEmail(text: string, env: NodeJS.ProcessEnv = process.env) {
+  return sendOutboundEmail({ to: emailTo(env), subject: "Lexi", text }, env);
 }

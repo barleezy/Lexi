@@ -1,6 +1,13 @@
 import { cookies } from "next/headers";
 import { AccountAuthError } from "@/lib/auth/accounts";
-import { LEXI_USER_COOKIE, lexiUserCookieOptions, loginAccount, parseAuthAction } from "@/lib/auth/login";
+import {
+  LEXI_USER_COOKIE,
+  lexiUserCookieOptions,
+  loginAccount,
+  parseAuthAction,
+  publicAppUrl,
+  runPasswordFlow,
+} from "@/lib/auth/login";
 import {
   callbackURLWithToken,
   iosSigningSecret,
@@ -39,6 +46,9 @@ export async function POST(request: Request) {
     userId?: unknown;
     password?: unknown;
     action?: unknown;
+    email?: unknown;
+    token?: unknown;
+    code?: unknown;
     redirect_uri?: unknown;
     redirectURI?: unknown;
     state?: unknown;
@@ -47,6 +57,16 @@ export async function POST(request: Request) {
     body = (await request.json()) as typeof body;
   } catch {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  try {
+    const reset = await runPasswordFlow(body.action, body, publicAppUrl(request));
+    if (reset) return Response.json(reset);
+  } catch (error) {
+    if (error instanceof AccountAuthError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
+    return Response.json({ error: "Could not sign in." }, { status: 500 });
   }
 
   const redirectURI =
@@ -62,7 +82,7 @@ export async function POST(request: Request) {
 
   let userId: string;
   try {
-    userId = await loginAccount(parseAuthAction(body.action), body.userId, body.password);
+    userId = await loginAccount(parseAuthAction(body.action), body.userId, body.password, body.email);
   } catch (error) {
     if (error instanceof AccountAuthError) {
       return Response.json({ error: error.message }, { status: error.status });

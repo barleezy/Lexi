@@ -12,7 +12,8 @@ import {
 import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
 import { APPLE_MUSIC_USER_COOKIE, isAppleMusicConfigured } from "@/lib/apple-music/config";
 import type { DeviceLocationState } from "@/lib/voice/location";
-import { fortniteRealtimeTools, isFortniteConfigured } from "@/lib/voice/fortnite";
+import { ensureVerifiedEpicSession, isFortniteConfigured } from "@/lib/voice/fortnite";
+import { fortniteRealtimeTools } from "@/lib/voice/fortnite-tools";
 import {
   DEFAULT_CHANNEL_STATE,
   DEFAULT_FORTNITE_STATE,
@@ -303,11 +304,21 @@ export async function buildIosSession(input: {
     source: input.musicSource ?? "none",
   };
   const admin = isAdminUserId(userId);
+  const configured = isFortniteConfigured();
+  let epicHttpReady = false;
+  if (admin && configured) {
+    try {
+      await ensureVerifiedEpicSession({ forceVerify: true });
+      epicHttpReady = true;
+    } catch {
+      epicHttpReady = false;
+    }
+  }
   const fortnite: FortniteSessionState = admin
     ? {
         ...DEFAULT_FORTNITE_STATE,
-        configured: isFortniteConfigured(),
-        signedIn: false,
+        configured,
+        epicHttpReady,
         inParty: false,
         sittingOut: false,
       }

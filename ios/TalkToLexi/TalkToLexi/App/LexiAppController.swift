@@ -518,10 +518,27 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         }
         let displayName = (arguments["display_name"] as? String) ?? (arguments["displayName"] as? String)
         do {
-            return try await api.fortnite(action: action, displayName: displayName)
+            return sanitizeFortniteResult(try await api.fortnite(action: action, displayName: displayName))
         } catch {
-            return ["ok": false, "canPlayInGame": false, "error": error.localizedDescription]
+            return ["ok": false, "canPlayInGame": false, "visibleInFortnite": false, "inIanParty": false, "error": error.localizedDescription]
         }
+    }
+
+    private func sanitizeFortniteResult(_ raw: [String: Any]) -> [String: Any] {
+        var result = raw
+        result.removeValue(forKey: "signedIn")
+        result["canPlayInGame"] = false
+        if result["epicHttpReady"] == nil {
+            result["epicHttpReady"] = false
+        }
+        if let party = raw["party"] as? [String: Any] {
+            let withFriend = (party["withFriend"] as? Bool) == true
+                || (party["inIanParty"] as? Bool) == true
+                || (party["visibleInFortnite"] as? Bool) == true
+            result["inIanParty"] = withFriend
+            result["visibleInFortnite"] = withFriend
+        }
+        return result
     }
 
     private func stringify(_ object: [String: Any]) -> String {

@@ -17,7 +17,8 @@
     "apple-music:check": "node --experimental-strip-types scripts/check-apple-music.mjs",
     "music:check": "node --experimental-strip-types scripts/check-background-music.mjs",
     "watch:check-formats": "node --experimental-strip-types scripts/check-watch-formats.mjs",
-    "ios:check": "node --experimental-strip-types scripts/check-ios-auth.mjs"
+    "ios:check": "node --experimental-strip-types scripts/check-ios-auth.mjs",
+    "auth:check": "node --experimental-strip-types scripts/check-auth.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

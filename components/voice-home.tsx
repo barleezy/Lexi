@@ -309,9 +309,13 @@ export function VoiceHome() {
   const [error, setError] = useState<string | null>(null);
   const [accountId, setAccountId] = useState("");
   const [accountDraft, setAccountDraft] = useState("");
+  const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
   const [accountConfirm, setAccountConfirm] = useState("");
+  const [accountResetToken, setAccountResetToken] = useState("");
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
+  const [accountPanel, setAccountPanel] = useState<"auth" | "forgot" | "reset">("auth");
+  const [accountNotice, setAccountNotice] = useState<string | null>(null);
   const [accountPending, setAccountPending] = useState(false);
   const [rows, setRows] = useState<TranscriptRow[]>([]);
   const [caption, setCaption] = useState("");
@@ -1292,15 +1296,37 @@ export function VoiceHome() {
     setAccountDraft(id);
     setAccountPassword("");
     setAccountConfirm("");
+    setAccountEmail("");
+    setAccountResetToken("");
+    setAccountNotice(null);
+    setAccountPanel("auth");
     writeVoiceSessionStore({ userId: id });
     return id;
   }
 
+  function clearAccountSecrets() {
+    setAccountPassword("");
+    setAccountConfirm("");
+    setAccountResetToken("");
+  }
+
   async function submitAccount(event: FormEvent) {
     event.preventDefault();
+    if (accountPanel === "forgot") {
+      await submitForgot();
+      return;
+    }
+    if (accountPanel === "reset") {
+      await submitReset();
+      return;
+    }
     const creating = accountMode === "signup";
     if (!accountDraft.trim()) {
       setError("Enter an account.");
+      return;
+    }
+    if (!accountEmail.trim()) {
+      setError("Enter the email for this account.");
       return;
     }
     if (accountPassword.length < 8) {
@@ -1312,6 +1338,7 @@ export function VoiceHome() {
       return;
     }
     setError(null);
+    setAccountNotice(null);
     setAccountPending(true);
     try {
       const response = await fetch("/api/auth", {
@@ -1320,6 +1347,7 @@ export function VoiceHome() {
         body: JSON.stringify({
           action: accountMode,
           userId: accountDraft,
+          email: accountEmail,
           password: accountPassword,
         }),
       });
@@ -1335,12 +1363,91 @@ export function VoiceHome() {
     }
   }
 
+  async function submitForgot() {
+    if (!accountDraft.trim() || !accountEmail.trim()) {
+      setError("Enter your account and email.");
+      return;
+    }
+    setError(null);
+    setAccountNotice(null);
+    setAccountPending(true);
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "forgot",
+          userId: accountDraft,
+          email: accountEmail,
+        }),
+      });
+      const body = (await response.json()) as { error?: string; message?: string; sent?: boolean };
+      if (!response.ok) {
+        throw new Error(body.error || "Could not send a reset email.");
+      }
+      setAccountNotice(
+        body.message ||
+          "If that account exists, we sent a reset email. We never email the current password.",
+      );
+      setAccountPanel("reset");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send a reset email.");
+    } finally {
+      setAccountPending(false);
+    }
+  }
+
+  async function submitReset() {
+    if (!accountResetToken.trim()) {
+      setError("Enter the reset code from your email.");
+      return;
+    }
+    if (accountPassword.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (accountPassword !== accountConfirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setError(null);
+    setAccountNotice(null);
+    setAccountPending(true);
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reset",
+          token: accountResetToken,
+          password: accountPassword,
+        }),
+      });
+      const body = (await response.json()) as { error?: string; reset?: boolean };
+      if (!response.ok || !body.reset) {
+        throw new Error(body.error || "Could not reset password.");
+      }
+      clearAccountSecrets();
+      setAccountPanel("auth");
+      setAccountMode("signin");
+      setAccountNotice("Password updated. Sign in with your new password.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reset password.");
+    } finally {
+      setAccountPending(false);
+    }
+  }
+
   async function signOutAccount() {
     writeBrowserUserId("");
     setAccountId("");
     setAccountDraft("");
+    setAccountEmail("");
     setAccountPassword("");
     setAccountConfirm("");
+    setAccountResetToken("");
+    setAccountNotice(null);
+    setAccountPanel("auth");
     writeVoiceSessionStore({ userId: "" });
     try {
       await fetch("/api/auth", { method: "DELETE" });
@@ -1594,52 +1701,95 @@ export function VoiceHome() {
             onSubmit={submitAccount}
             className="mt-6 w-full max-w-md rounded-3xl border-2 border-zinc-900 bg-background/95 p-5 shadow-xl dark:border-white dark:bg-zinc-950/95"
           >
-            <p className="text-lg font-semibold tracking-tight">Sign in to talk</p>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Use your account and password. New here? Create an account first.
+            <p className="text-lg font-semibold tracking-tight">
+              {accountPanel === "forgot"
+                ? "Forgot password"
+                : accountPanel === "reset"
+                  ? "Set a new password"
+                  : "Sign in to talk"}
             </p>
-            <div className="mt-4 grid grid-cols-2 rounded-full bg-zinc-100 p-1 text-sm font-medium dark:bg-zinc-800">
-              <button
-                type="button"
-                onClick={() => setAccountMode("signin")}
-                className={`rounded-full px-3 py-2 ${
-                  accountMode === "signin" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
-                }`}
-              >
-                Sign in
-              </button>
-              <button
-                type="button"
-                onClick={() => setAccountMode("signup")}
-                className={`rounded-full px-3 py-2 ${
-                  accountMode === "signup" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
-                }`}
-              >
-                Create account
-              </button>
-            </div>
-            <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
-              Account
-              <input
-                value={accountDraft}
-                onChange={(event) => setAccountDraft(event.target.value)}
-                placeholder="Barleezy"
-                autoComplete="username"
-                className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
-              />
-            </label>
-            <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
-              Password
-              <input
-                type="password"
-                value={accountPassword}
-                onChange={(event) => setAccountPassword(event.target.value)}
-                placeholder="At least 8 characters"
-                autoComplete={accountMode === "signup" ? "new-password" : "current-password"}
-                className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
-              />
-            </label>
-            {accountMode === "signup" ? (
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              {accountPanel === "forgot"
+                ? "We send a one-time reset link to the email on the account. The current password cannot be emailed."
+                : accountPanel === "reset"
+                  ? "Enter the code from your email, then choose a new password."
+                  : "Use your account, email, and password. New here? Create an account first."}
+            </p>
+            {accountPanel === "auth" ? (
+              <div className="mt-4 grid grid-cols-2 rounded-full bg-zinc-100 p-1 text-sm font-medium dark:bg-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setAccountMode("signin")}
+                  className={`rounded-full px-3 py-2 ${
+                    accountMode === "signin" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
+                  }`}
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAccountMode("signup")}
+                  className={`rounded-full px-3 py-2 ${
+                    accountMode === "signup" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
+                  }`}
+                >
+                  Create account
+                </button>
+              </div>
+            ) : null}
+            {accountPanel !== "reset" ? (
+              <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
+                Account
+                <input
+                  value={accountDraft}
+                  onChange={(event) => setAccountDraft(event.target.value)}
+                  placeholder="Barleezy"
+                  autoComplete="username"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel !== "reset" ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+                Email
+                <input
+                  type="email"
+                  value={accountEmail}
+                  onChange={(event) => setAccountEmail(event.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel === "reset" ? (
+              <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
+                Reset code
+                <input
+                  value={accountResetToken}
+                  onChange={(event) => setAccountResetToken(event.target.value.toUpperCase())}
+                  placeholder="Code from your email"
+                  autoComplete="one-time-code"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal tracking-[0.12em] outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel !== "forgot" ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+                {accountPanel === "reset" ? "New password" : "Password"}
+                <input
+                  type="password"
+                  value={accountPassword}
+                  onChange={(event) => setAccountPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete={
+                    accountMode === "signup" || accountPanel === "reset" ? "new-password" : "current-password"
+                  }
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel === "reset" || accountMode === "signup" ? (
               <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
                 Confirm password
                 <input
@@ -1652,19 +1802,69 @@ export function VoiceHome() {
                 />
               </label>
             ) : null}
+            {accountNotice ? (
+              <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">{accountNotice}</p>
+            ) : null}
             <button
               type="submit"
               disabled={accountPending}
               className="mt-5 w-full rounded-full bg-zinc-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-zinc-900"
             >
               {accountPending
-                ? accountMode === "signup"
-                  ? "Creating account…"
-                  : "Signing in…"
-                : accountMode === "signup"
-                  ? "Create account"
-                  : "Sign in"}
+                ? accountPanel === "forgot"
+                  ? "Sending reset email…"
+                  : accountPanel === "reset"
+                    ? "Updating password…"
+                    : accountMode === "signup"
+                      ? "Creating account…"
+                      : "Signing in…"
+                : accountPanel === "forgot"
+                  ? "Send reset email"
+                  : accountPanel === "reset"
+                    ? "Set new password"
+                    : accountMode === "signup"
+                      ? "Create account"
+                      : "Sign in"}
             </button>
+            {accountPanel === "auth" && accountMode === "signin" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setAccountNotice(null);
+                  setAccountPanel("forgot");
+                }}
+                className="mt-3 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+              >
+                Forgot password?
+              </button>
+            ) : null}
+            {accountPanel === "forgot" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setAccountPanel("reset");
+                }}
+                className="mt-3 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+              >
+                I already have a reset code
+              </button>
+            ) : null}
+            {accountPanel !== "auth" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setAccountNotice(null);
+                  setAccountPanel("auth");
+                  setAccountMode("signin");
+                }}
+                className="mt-2 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+              >
+                Back to sign in
+              </button>
+            ) : null}
           </form>
         ) : null}
       </main>

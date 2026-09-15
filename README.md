@@ -21,7 +21,7 @@ Lexi cannot run Fortnite or play in-match (no Unreal client, no input, no bot). 
 
 1. Create or use a **real** Epic account for Lexi. Do not invent an email here or register through this app.
 2. Copy empty placeholders from `.env.example` into `.env.local`. Never commit tokens.
-3. Paste **device auth** as `EPIC_DEVICE_AUTH` JSON: `{"accountId":"","deviceId":"","secret":""}` (fnbr-style). Or set `EPIC_EXCHANGE_CODE` / an authorization `code` from [Epic’s Android-client redirect](https://www.epicgames.com/id/api/redirect?clientId=3f69e56c7649492c8cc29f1af08a8a12&responseType=code) after you sign in — one-shot; the server writes device auth to `.env.local` and clears the code.
+3. Paste **device auth** as `EPIC_DEVICE_AUTH` JSON: `{"accountId":"","deviceId":"","secret":""}` (fnbr-style). Or set `EPIC_EXCHANGE_CODE` / an authorization `code` from [Epic’s Android-client redirect](https://www.epicgames.com/id/api/redirect?clientId=3f69e56c7649492c8cc29f1af08a8a12&responseType=code&scope=basic_profile%20friends_list%20presence) after you sign in — one-shot; the server writes device auth to `.env.local` and clears the code. Token requests use `scope=basic_profile friends_list presence`. If an older device auth was minted without those scopes, paste a new exchange code once and re-run `node scripts/configure-fortnite.mjs`.
 4. Optional: `FORTNITE_FRIEND_DISPLAY_NAME` (default `TTBarleezy`).
 5. Restart. First successful login **automatically sends a friend request** to TTBarleezy. `GET`/`POST` `/api/fortnite` — 503 with setup steps if credentials are missing. Tokens stay on the server.
 

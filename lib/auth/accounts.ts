@@ -54,6 +54,19 @@ export function validatePassword(raw?: unknown) {
   return raw;
 }
 
+const MAX_EMAIL = 254;
+
+export function validateEmail(raw?: unknown) {
+  if (typeof raw !== "string") throw new AccountAuthError("Email is required.");
+  const email = raw.trim().toLowerCase();
+  if (!email) throw new AccountAuthError("Email is required.");
+  if (email.length > MAX_EMAIL) throw new AccountAuthError("Email is too long.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new AccountAuthError("Enter a valid email address.");
+  }
+  return email;
+}
+
 export function hashPassword(password: string) {
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, KEY_LEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P });
@@ -81,70 +94,125 @@ async function ensureAccountsTable() {
   const db = sql();
   if (!db) throw new AccountAuthError("Accounts are not configured. Set DATABASE_URL.", 503);
   if (!ensured) {
-    ensured = db
-      .query(
+    ensured = (async () => {
+      await db.query(
         `
         CREATE TABLE IF NOT EXISTS accounts (
           user_id text PRIMARY KEY,
           password_hash text NOT NULL,
+          email text,
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now()
         )
       `,
-      )
-      .then(() => undefined)
-      .catch((error) => {
-        ensured = null;
-        throw error;
-      });
+      );
+      await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email text`);
+      await db.query(
+        `
+        CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_lower_idx
+        ON accounts (lower(email))
+        WHERE email IS NOT NULL AND email <> ''
+      `,
+      );
+    })().catch((error) => {
+      ensured = null;
+      throw error;
+    });
   }
   await ensured;
   return db;
 }
 
+/** Barleezy and Ian are the same admin row (`normalizeUserId`). Server-only — not shown in UI. */
+export const ADMIN_ACCOUNT_EMAIL = "barlow80136@gmail.com";
+
 export async function ensureBootstrapAdmin() {
-  const password = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
-  if (!password) return;
   const db = await ensureAccountsTable();
   const userId = normalizeUserId("Barleezy");
+  const email = ADMIN_ACCOUNT_EMAIL;
+  const password = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
+  if (password) {
+    await db.query(
+      `
+      INSERT INTO accounts (user_id, password_hash, email)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (user_id) DO UPDATE
+      SET email = EXCLUDED.email, updated_at = now()
+    `,
+      [userId, hashPassword(password), email],
+    );
+    return;
+  }
   await db.query(
     `
-    INSERT INTO accounts (user_id, password_hash)
-    VALUES ($1, $2)
-    ON CONFLICT (user_id) DO UPDATE
-    SET password_hash = EXCLUDED.password_hash, updated_at = now()
+    UPDATE accounts
+    SET email = $1, updated_at = now()
+    WHERE user_id = $2
   `,
-    [userId, hashPassword(password)],
+    [email, userId],
   );
 }
 
-export async function createAccount(rawUserId: string, password: string) {
+async function emailTakenByOther(db: NonNullable<ReturnType<typeof sql>>, email: string, userId?: string) {
+  const rows = userId
+    ? ((await db.query(
+        `SELECT user_id FROM accounts WHERE lower(email) = $1 AND user_id <> $2 LIMIT 1`,
+        [email, userId],
+      )) as { user_id?: string }[])
+    : ((await db.query(`SELECT user_id FROM accounts WHERE lower(email) = $1 LIMIT 1`, [
+        email,
+      ])) as { user_id?: string }[]);
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+export async function createAccount(rawUserId: string, password: string, rawEmail: string) {
   const userId = validateAccountName(rawUserId);
   const secret = validatePassword(password);
+  const email = validateEmail(rawEmail);
   await ensureBootstrapAdmin();
   const db = await ensureAccountsTable();
   const existing = await db.query(`SELECT user_id FROM accounts WHERE user_id = $1 LIMIT 1`, [userId]);
   if (Array.isArray(existing) && existing.length > 0) {
     throw new AccountAuthError("That account already exists. Sign in instead.", 409);
   }
-  await db.query(`INSERT INTO accounts (user_id, password_hash) VALUES ($1, $2)`, [
+  if (await emailTakenByOther(db, email)) {
+    throw new AccountAuthError("That email is already in use.", 409);
+  }
+  await db.query(`INSERT INTO accounts (user_id, password_hash, email) VALUES ($1, $2, $3)`, [
     userId,
     hashPassword(secret),
+    email,
   ]);
   return userId;
 }
 
-export async function authenticateAccount(rawUserId: string, password: string) {
+export async function authenticateAccount(rawUserId: string, password: string, rawEmail: string) {
   const userId = validateAccountName(rawUserId);
   const secret = validatePassword(password);
+  const email = validateEmail(rawEmail);
   await ensureBootstrapAdmin();
   const db = await ensureAccountsTable();
-  const rows = (await db.query(`SELECT password_hash FROM accounts WHERE user_id = $1 LIMIT 1`, [
-    userId,
-  ])) as { password_hash?: string }[];
+  const rows = (await db.query(
+    `SELECT password_hash, email FROM accounts WHERE user_id = $1 LIMIT 1`,
+    [userId],
+  )) as { password_hash?: string; email?: string | null }[];
   const stored = typeof rows[0]?.password_hash === "string" ? rows[0].password_hash : "";
   if (!stored || !verifyPassword(secret, stored)) {
-    throw new AccountAuthError("Account or password is wrong.", 401);
+    throw new AccountAuthError("Account, email, or password is wrong.", 401);
   }
+  const bound = typeof rows[0]?.email === "string" ? rows[0].email.trim().toLowerCase() : "";
+  if (bound) {
+    if (bound !== email) {
+      throw new AccountAuthError("Account, email, or password is wrong.", 401);
+    }
+    return userId;
+  }
+  if (await emailTakenByOther(db, email, userId)) {
+    throw new AccountAuthError("That email is already in use.", 409);
+  }
+  await db.query(`UPDATE accounts SET email = $1, updated_at = now() WHERE user_id = $2`, [
+    email,
+    userId,
+  ]);
   return userId;
 }
