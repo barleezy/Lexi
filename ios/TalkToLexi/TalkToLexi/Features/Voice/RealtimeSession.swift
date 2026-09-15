@@ -351,7 +351,10 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         parts: [(source: String, dataUrl: String, timeSec: Double?)]
     ) -> Bool {
         if respond || phase != .thinking { return false }
-        if parts.contains(where: { $0.source == "upload" }) { return false }
+        // Camera / screen stay live for the whole share. Only watch stills wait out thinking.
+        if parts.contains(where: { $0.source == "upload" || $0.source == "camera" || $0.source == "screen" }) {
+            return false
+        }
         return true
     }
 

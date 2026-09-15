@@ -41,6 +41,8 @@ expect(vad.idle_timeout_ms == null, "no idle check-in — she must not speak unp
 expect(shouldDeferLiveVision("thinking", false, ["watch"]) === true, "defer watch frames while thinking");
 expect(shouldDeferLiveVision("thinking", true, ["watch"]) === false, "user-asked frames still send");
 expect(shouldDeferLiveVision("thinking", false, ["upload"]) === false, "uploaded video is not deferred");
+expect(shouldDeferLiveVision("thinking", false, ["camera"]) === false, "camera feed never defers");
+expect(shouldDeferLiveVision("thinking", false, ["screen"]) === false, "screen feed never defers");
 expect(shouldDeferLiveVision("listening", false, ["watch"]) === false, "frames ride along while listening");
 expect(shouldDeferLiveVision("speaking", false, ["camera"]) === false, "frames ride along while speaking");
 

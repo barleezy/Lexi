@@ -6,15 +6,22 @@ enum CameraFacing: String {
     case rear
 }
 
+enum CameraFlipOutcome {
+    case switched
+    case unavailable
+}
+
 /// Encodes viewfinder stills on the capture queue. `CMSampleBuffer` is only valid
 /// during `captureOutput`; hopping to the main actor first drops the frame.
 final class CameraFramePump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onJPEG: ((String) -> Void)?
+    var isPaused = false
 
     private var lastSent: TimeInterval = 0
-    private let minInterval: TimeInterval = 1.0
+    /// Video-like cadence. Grok realtime has no live video item — only `input_image`.
+    private let minInterval: TimeInterval = 0.25
     private let maxEdge: CGFloat = 640
-    private let jpegQuality: CGFloat = 0.6
+    private let jpegQuality: CGFloat = 0.55
     private let context = CIContext(options: [.useSoftwareRenderer: false])
 
     func resetClock() {
@@ -26,6 +33,7 @@ final class CameraFramePump: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        if isPaused { return }
         let now = CACurrentMediaTime()
         guard now - lastSent >= minInterval else { return }
         guard let dataUrl = jpegDataURL(from: sampleBuffer) else { return }
@@ -60,55 +68,132 @@ final class CameraCapturePipeline {
 
     func start(facing: CameraFacing, orientation: AVCaptureVideoOrientation) {
         queue.async { [weak self] in
-            self?.reconfigure(facing: facing, orientation: orientation)
-            self?.session.startRunning()
+            guard let self else { return }
+            self.installOutputIfNeeded()
+            _ = self.swapInput(facing: facing, orientation: orientation, allowFallback: true)
+            if self.session.isRunning == false {
+                self.session.startRunning()
+            }
+            self.pump.isPaused = false
+            self.pump.resetClock()
         }
     }
 
-    func flip(facing: CameraFacing, orientation: AVCaptureVideoOrientation) {
+    func flip(
+        facing: CameraFacing,
+        orientation: AVCaptureVideoOrientation,
+        completion: @escaping (CameraFlipOutcome) -> Void
+    ) {
         queue.async { [weak self] in
-            self?.reconfigure(facing: facing, orientation: orientation)
+            guard let self else { return }
+            self.pump.isPaused = true
+            let outcome = self.swapInput(facing: facing, orientation: orientation, allowFallback: false)
+            if self.session.inputs.isEmpty == false, self.session.isRunning == false {
+                self.session.startRunning()
+            }
+            self.pump.isPaused = false
+            if outcome == .switched {
+                self.pump.resetClock()
+            }
+            completion(outcome)
         }
     }
 
     func stop() {
         pump.onJPEG = nil
+        pump.isPaused = true
         pump.resetClock()
         queue.async { [weak self] in
             guard let self else { return }
-            self.session.stopRunning()
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
             self.session.beginConfiguration()
             self.session.inputs.forEach { self.session.removeInput($0) }
             self.session.commitConfiguration()
         }
     }
 
-    private func reconfigure(facing: CameraFacing, orientation: AVCaptureVideoOrientation) {
+    private func installOutputIfNeeded() {
+        if session.outputs.contains(output) { return }
         session.beginConfiguration()
         if session.canSetSessionPreset(.vga640x480) {
             session.sessionPreset = .vga640x480
         } else {
             session.sessionPreset = .medium
         }
-        session.inputs.forEach { session.removeInput($0) }
-        if session.outputs.contains(output) == false {
-            output.alwaysDiscardsLateVideoFrames = true
-            output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-            output.setSampleBufferDelegate(pump, queue: queue)
-            if session.canAddOutput(output) {
-                session.addOutput(output)
-            }
+        output.alwaysDiscardsLateVideoFrames = true
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.setSampleBufferDelegate(pump, queue: queue)
+        if session.canAddOutput(output) {
+            session.addOutput(output)
         }
+        session.commitConfiguration()
+    }
+
+    private func swapInput(
+        facing: CameraFacing,
+        orientation: AVCaptureVideoOrientation,
+        allowFallback: Bool
+    ) -> CameraFlipOutcome {
+        installOutputIfNeeded()
         let position: AVCaptureDevice.Position = facing == .front ? .front : .back
         let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
-            ?? AVCaptureDevice.default(for: .video)
-        if let device, let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input) {
-            session.addInput(input)
+            ?? (allowFallback ? AVCaptureDevice.default(for: .video) : nil)
+        guard let device, let newInput = try? AVCaptureDeviceInput(device: device) else {
+            return .unavailable
         }
+
+        let existing = session.inputs.compactMap { $0 as? AVCaptureDeviceInput }
+        if let current = existing.first, current.device.uniqueID == device.uniqueID {
+            applyOrientation(orientation)
+            return allowFallback ? .switched : .unavailable
+        }
+
+        let wasRunning = session.isRunning
+        let oldInputs = session.inputs
+
+        if session.canAddInput(newInput) {
+            session.beginConfiguration()
+            session.addInput(newInput)
+            oldInputs.forEach { session.removeInput($0) }
+            applyOrientation(orientation)
+            session.commitConfiguration()
+            return .switched
+        }
+
+        if wasRunning {
+            session.stopRunning()
+        }
+        session.beginConfiguration()
+        oldInputs.forEach { session.removeInput($0) }
+        if session.canAddInput(newInput) {
+            session.addInput(newInput)
+            applyOrientation(orientation)
+            session.commitConfiguration()
+            if wasRunning {
+                session.startRunning()
+            }
+            return .switched
+        }
+
+        for old in oldInputs {
+            if session.canAddInput(old) {
+                session.addInput(old)
+            }
+        }
+        applyOrientation(orientation)
+        session.commitConfiguration()
+        if wasRunning, session.inputs.isEmpty == false {
+            session.startRunning()
+        }
+        return .unavailable
+    }
+
+    private func applyOrientation(_ orientation: AVCaptureVideoOrientation) {
         if let connection = output.connection(with: .video), connection.isVideoOrientationSupported {
             connection.videoOrientation = orientation
         }
-        session.commitConfiguration()
     }
 }
 
@@ -122,6 +207,7 @@ final class CameraController: NSObject, ObservableObject {
     var onShareChange: ((Bool) -> Void)?
 
     private let pipeline = CameraCapturePipeline()
+    private var isFlipping = false
 
     var session: AVCaptureSession { pipeline.session }
 
@@ -134,9 +220,21 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func flip() {
-        guard isOn else { return }
-        facing = facing == .front ? .rear : .front
-        pipeline.flip(facing: facing, orientation: currentVideoOrientation())
+        guard isOn, isFlipping == false else { return }
+        let next: CameraFacing = facing == .front ? .rear : .front
+        isFlipping = true
+        pipeline.flip(facing: next, orientation: currentVideoOrientation()) { [weak self] outcome in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isFlipping = false
+                if outcome == .switched {
+                    self.facing = next
+                    self.hint = nil
+                    return
+                }
+                self.hint = next == .rear ? "Rear camera is not available." : "Front camera is not available."
+            }
+        }
     }
 
     func start() async {
@@ -163,6 +261,7 @@ final class CameraController: NSObject, ObservableObject {
     func stop(notify: Bool = true) {
         let wasOn = isOn
         isOn = false
+        isFlipping = false
         hint = nil
         pipeline.stop()
         if wasOn && notify {

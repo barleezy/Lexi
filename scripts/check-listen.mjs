@@ -124,10 +124,15 @@ expectEqual(
 );
 
 const persona = readFileSync(new URL("../lib/voice/persona.ts", import.meta.url), "utf8");
-expect(persona.includes("Never interrupt."), "voice rule: never interrupt");
-expect(persona.includes("People hate being talked over"), "courtesy: people hate being talked over");
+expect(persona.includes("Do not interrupt by default."), "voice rule: do not interrupt by default");
+expect(persona.includes("Interruption is counterproductive — it draws attention to itself instead of the subject of the speaker."), "interrupt draws attention to itself");
+expect(persona.includes("Do not barge in on casual, emotional, or storytelling talk"), "no barge-in on casual talk");
+expect(persona.includes("Jump in when they are debating or in the middle of something intellectual"), "interrupt on debate or intellectual work");
+expect(persona.includes("a back-and-forth argument, unpacking an idea, a rigorous discussion"), "intellectual interrupt examples");
+expect(persona.includes("Then interrupting is OK and expected."), "debate interrupt is expected");
 expect(!/inferior|not (his |their )?equal|beneath/i.test(persona), "do not frame her as inferior");
-expect(persona.includes("if he asks you to jump in, cut in, interrupt him, talk over him, or keep interrupting"), "interrupt only on request");
-expect(persona.includes("If he starts talking and he did not ask you to talk over him, stop and let him finish."), "she yields unless he asked");
+expect(!/\bmetrics\b/i.test(persona), "no KPI metrics wording");
+expect(persona.includes("If he asks you to jump in, cut in, interrupt him, talk over him, or keep interrupting"), "interrupt also on request");
+expect(persona.includes("If he starts talking and it is not debate or intellectual work and he did not ask you to talk over him, stop and let him finish."), "she yields unless debate or he asked");
 
 console.log("listen ok");

@@ -38,11 +38,13 @@ import {
 import { isAdultPageUrl, isDirectWatchMediaUrl, isWatchHlsUrl, shouldProxyWatchMedia } from "@/lib/voice/watch-adult";
 import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
+  CAMERA_VISION_INTERVAL_MS,
   canShareScreen,
   nextCameraFacing,
   preferWatchTab,
   startCameraStream,
   startScreenStream,
+  sameVideoDevice,
   startVisionLoop,
   stopMediaStream,
   VisionFrameBatcher,
@@ -224,10 +226,11 @@ type AttachmentChip = {
 type VisionSlot = {
   stream: MediaStream | null;
   stopLoop: (() => void) | null;
+  busy: boolean;
 };
 
 function emptyVisionSlot(): VisionSlot {
-  return { stream: null, stopLoop: null };
+  return { stream: null, stopLoop: null, busy: false };
 }
 
 function LiveWaveform({ phase }: { phase: VoicePhase }) {
@@ -565,6 +568,21 @@ export function VoiceHome() {
     };
   }, [videoSrc]);
 
+  function sendCameraFrame(dataUrl: string) {
+    if (watchTabActiveRef.current || videoMeta.current.source) {
+      visionBatcher.current.push({ source: "camera", dataUrl });
+      return;
+    }
+    sessionRef.current?.sendVisionFrame("camera", dataUrl);
+  }
+
+  function bindCameraTrack(stream: MediaStream) {
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      if (cameraSlot.current.busy || cameraSlot.current.stream !== stream) return;
+      releaseVision("camera");
+    });
+  }
+
   useEffect(() => {
     if (!cameraOn) return;
     const video = cameraVideoRef.current;
@@ -572,20 +590,15 @@ export function VoiceHome() {
     if (!video || !stream) return;
     video.srcObject = stream;
     void video.play().catch(() => {});
-    cameraSlot.current.stopLoop?.();
-    cameraSlot.current.stopLoop = startVisionLoop(video, (dataUrl) => {
-      if (watchTabActiveRef.current || videoMeta.current.source) {
-        visionBatcher.current.push({ source: "camera", dataUrl });
-        return;
-      }
-      sessionRef.current?.sendVisionFrame("camera", dataUrl);
-    });
+    if (!cameraSlot.current.stopLoop) {
+      cameraSlot.current.stopLoop = startVisionLoop(video, sendCameraFrame, CAMERA_VISION_INTERVAL_MS);
+    }
     return () => {
       cameraSlot.current.stopLoop?.();
       cameraSlot.current.stopLoop = null;
-      video.srcObject = null;
+      if (video.srcObject === stream) video.srcObject = null;
     };
-  }, [cameraOn, cameraFacing]);
+  }, [cameraOn]);
 
   useEffect(() => {
     if (!screenOn) return;
@@ -637,9 +650,12 @@ export function VoiceHome() {
         source === "camera" ? await startCameraStream(cameraFacing) : await startScreenStream();
       const slot = source === "camera" ? cameraSlot : screenSlot;
       slot.current.stream = stream;
-      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
-        releaseVision(source);
-      });
+      if (source === "camera") bindCameraTrack(stream);
+      else {
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+          releaseVision(source);
+        });
+      }
       if (source === "camera") setCameraOn(true);
       else setScreenOn(true);
       sessionRef.current?.notifyVision(source, true);
@@ -669,21 +685,50 @@ export function VoiceHome() {
   }
 
   async function flipCamera() {
-    if (!cameraSlot.current.stream) return;
-    const next = nextCameraFacing(cameraFacing);
+    if (!cameraSlot.current.stream || cameraSlot.current.busy) return;
+    const previousFacing = cameraFacing;
+    const next = nextCameraFacing(previousFacing);
+    const previous = cameraSlot.current.stream;
+    cameraSlot.current.busy = true;
     setVisionHint(null);
     try {
-      const stream = await startCameraStream(next);
-      const previous = cameraSlot.current.stream;
-      cameraSlot.current.stopLoop?.();
-      cameraSlot.current.stopLoop = null;
+      let stream: MediaStream;
+      try {
+        stream = await startCameraStream(next);
+      } catch {
+        stopMediaStream(previous);
+        if (cameraSlot.current.stream === previous) cameraSlot.current.stream = null;
+        stream = await startCameraStream(next);
+      }
+      if (cameraSlot.current.stream === previous && sameVideoDevice(previous, stream)) {
+        stopMediaStream(stream);
+        setVisionHint(next === "environment" ? "Rear camera is not available." : "Front camera is not available.");
+        return;
+      }
       cameraSlot.current.stream = stream;
-      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
-        releaseVision("camera");
-      });
-      stopMediaStream(previous);
+      bindCameraTrack(stream);
+      const video = cameraVideoRef.current;
+      if (video) {
+        video.srcObject = stream;
+        void video.play().catch(() => {});
+      }
+      if (previous !== stream) stopMediaStream(previous);
       setCameraFacing(next);
     } catch (caught) {
+      if (!cameraSlot.current.stream) {
+        try {
+          const restored = await startCameraStream(previousFacing);
+          cameraSlot.current.stream = restored;
+          bindCameraTrack(restored);
+          const video = cameraVideoRef.current;
+          if (video) {
+            video.srcObject = restored;
+            void video.play().catch(() => {});
+          }
+        } catch {
+          releaseVision("camera", true);
+        }
+      }
       const message =
         caught instanceof Error && caught.name === "NotAllowedError"
           ? "Camera permission was denied."
@@ -691,6 +736,8 @@ export function VoiceHome() {
             ? caught.message
             : "Could not switch cameras.";
       setVisionHint(message);
+    } finally {
+      cameraSlot.current.busy = false;
     }
   }
 

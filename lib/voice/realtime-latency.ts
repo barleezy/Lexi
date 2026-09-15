@@ -55,13 +55,15 @@ export function buildTurnDetection() {
   };
 }
 
-/** Background camera/watch stills wait out thinking so they do not block first audio. */
+/** Watch stills wait out thinking so they do not block first audio. Camera/screen stay live. */
 export function shouldDeferLiveVision(
   phase: "idle" | "connecting" | "listening" | "thinking" | "speaking",
   respond = false,
   sources: Array<"camera" | "screen" | "watch" | "upload"> = [],
 ) {
   if (respond || phase !== "thinking") return false;
-  if (sources.some((source) => source === "upload")) return false;
+  if (sources.some((source) => source === "upload" || source === "camera" || source === "screen")) {
+    return false;
+  }
   return true;
 }
