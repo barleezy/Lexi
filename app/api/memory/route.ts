@@ -4,20 +4,13 @@ import {
   extractFacts,
   userTextFromBlob,
 } from "@/lib/memory/extract";
-import { endSession, isMemoryStoreConfigured, recallForUser, recordExchange } from "@/lib/memory/store";
-import { readUserId, resolveUserId } from "@/lib/memory/user";
+import { memoryFactsResponse } from "@/lib/memory/http";
+import { endSession, isMemoryStoreConfigured, recordExchange } from "@/lib/memory/store";
+import { resolveUserId } from "@/lib/memory/user";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const userId = readUserId(request, url.searchParams.get("userId"));
-  if (!userId) {
-    return Response.json({ error: "userId is required." }, { status: 400 });
-  }
-  if (!isMemoryStoreConfigured()) {
-    return Response.json({ error: "Memory store is not configured." }, { status: 503 });
-  }
-  const facts = await recallForUser(userId);
-  return Response.json({ userId, facts });
+  return memoryFactsResponse(request, url.searchParams.get("userId"));
 }
 
 export async function POST(request: Request) {

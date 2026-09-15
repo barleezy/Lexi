@@ -324,7 +324,8 @@ export async function createOrResumeSession(userId: string, sessionId?: string |
   const existing = parseSessionId(sessionId);
   if (existing) {
     const rows = (await db.query(
-      `SELECT id, user_id, started_at, ended_at FROM sessions WHERE id = $1 AND user_id = $2`,
+      `SELECT id, user_id, started_at, ended_at FROM sessions
+       WHERE id = $1 AND lower(user_id) = lower($2)`,
       [existing, id],
     )) as SessionRow[];
     if (rows[0] && !rows[0].ended_at) return rows[0];
@@ -352,7 +353,7 @@ export async function endSession(userId: string, sessionId: string) {
   const rows = (await db.query(
     `UPDATE sessions
      SET ended_at = now()
-     WHERE id = $1 AND user_id = $2 AND ended_at IS NULL
+     WHERE id = $1 AND lower(user_id) = lower($2) AND ended_at IS NULL
      RETURNING id, user_id, started_at, ended_at`,
     [existing, normalizeUserId(userId)],
   )) as SessionRow[];
@@ -371,7 +372,7 @@ export async function insertTurn(input: {
   let sessionId = parseSessionId(input.sessionId);
   if (sessionId) {
     const existing = (await db.query(
-      `SELECT id FROM sessions WHERE id = $1 AND user_id = $2`,
+      `SELECT id FROM sessions WHERE id = $1 AND lower(user_id) = lower($2)`,
       [sessionId, userId],
     )) as { id: string }[];
     if (!existing[0]) {
@@ -405,15 +406,29 @@ export async function upsertFact(input: {
   const sessionId = parseSessionId(input.sessionId);
   const incoming = Math.min(10, Math.max(1, input.affect));
   const existing = (await db.query(
-    `SELECT affect FROM facts WHERE user_id = $1 AND memory_key = $2`,
+    `SELECT id, affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
     [userId, input.memoryKey],
-  )) as { affect: number }[];
+  )) as { id: string; affect: number }[];
   const affect = isIdentityKey(input.memoryKey)
     ? 10
     : existing[0]
       ? bumpAffect(existing[0].affect, incoming)
       : incoming;
-  const tZero = existing[0] ? null : (input.tZero ?? new Date());
+  if (existing[0]) {
+    const rows = (await db.query(
+      `UPDATE facts
+       SET user_id = $1,
+           value = $2,
+           affect = $3,
+           session_id = COALESCE($4, session_id),
+           updated_at = now()
+       WHERE id = $5
+       RETURNING *`,
+      [userId, input.value, affect, sessionId, existing[0].id],
+    )) as FactRow[];
+    return rows[0] ?? null;
+  }
+  const tZero = input.tZero ?? new Date();
   const rows = (await db.query(
     `INSERT INTO facts (user_id, memory_key, value, affect, t_zero, session_id, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -423,7 +438,7 @@ export async function upsertFact(input: {
        session_id = COALESCE(excluded.session_id, facts.session_id),
        updated_at = now()
      RETURNING *`,
-    [userId, input.memoryKey, input.value, affect, (tZero ?? new Date()).toISOString(), sessionId],
+    [userId, input.memoryKey, input.value, affect, tZero.toISOString(), sessionId],
   )) as FactRow[];
   return rows[0] ?? null;
 }
@@ -463,7 +478,7 @@ export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): P
   const rows = (await db.query(
     `SELECT id, user_text, assistant_text
      FROM turns
-     WHERE user_id = $1
+     WHERE lower(user_id) = lower($1)
      ORDER BY created_at DESC
      LIMIT $2`,
     [normalizeUserId(userId), cap],
@@ -476,12 +491,17 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   if (!db) return [];
   const id = normalizeUserId(userId);
   const rows = (await db.query(
-    `SELECT * FROM facts WHERE user_id = $1 ORDER BY t_zero ASC`,
+    `SELECT * FROM facts
+     WHERE lower(user_id) = lower($1)
+     ORDER BY CASE WHEN user_id = $1 THEN 0 ELSE 1 END, t_zero ASC`,
     [id],
   )) as FactRow[];
   const lines: DecayLine[] = [];
+  const seen = new Set<string>();
   for (const row of rows) {
     if (!FACT_KEY_SET.has(row.memory_key) || !row.value.trim()) continue;
+    if (seen.has(row.memory_key)) continue;
+    seen.add(row.memory_key);
     const clock = new Date(row.t_zero);
     const band = bandFromStart(row.affect);
     const rate = rateForBand(band);
