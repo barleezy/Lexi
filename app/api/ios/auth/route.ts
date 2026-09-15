@@ -1,13 +1,7 @@
 import { cookies } from "next/headers";
+import { AccountAuthError } from "@/lib/auth/accounts";
+import { LEXI_USER_COOKIE, lexiUserCookieOptions, loginAccount, parseAuthAction } from "@/lib/auth/login";
 import {
-  AccountAuthError,
-  authenticateAccount,
-  createAccount,
-  ensureBootstrapAdmin,
-} from "@/lib/auth/accounts";
-import {
-  LEXI_USER_COOKIE,
-  LEXI_USER_COOKIE_MAX_AGE,
   callbackURLWithToken,
   iosSigningSecret,
   parseCallbackURI,
@@ -16,16 +10,6 @@ import {
 import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
 
 export const maxDuration = 15;
-
-function cookieOptions() {
-  return {
-    httpOnly: false,
-    sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: LEXI_USER_COOKIE_MAX_AGE,
-  };
-}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -65,14 +49,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const action = typeof body.action === "string" ? body.action.trim().toLowerCase() : "signin";
-  if (action !== "signin" && action !== "signup") {
-    return Response.json({ error: "Use Sign in or Create account." }, { status: 400 });
-  }
-  if (typeof body.password !== "string" || !body.password) {
-    return Response.json({ error: "Password is required." }, { status: 400 });
-  }
-
   const redirectURI =
     (typeof body.redirect_uri === "string" && body.redirect_uri) ||
     (typeof body.redirectURI === "string" && body.redirectURI) ||
@@ -86,11 +62,7 @@ export async function POST(request: Request) {
 
   let userId: string;
   try {
-    await ensureBootstrapAdmin();
-    userId =
-      action === "signup"
-        ? await createAccount(typeof body.userId === "string" ? body.userId : "", body.password)
-        : await authenticateAccount(typeof body.userId === "string" ? body.userId : "", body.password);
+    userId = await loginAccount(parseAuthAction(body.action), body.userId, body.password);
   } catch (error) {
     if (error instanceof AccountAuthError) {
       return Response.json({ error: error.message }, { status: error.status });
@@ -110,7 +82,7 @@ export async function POST(request: Request) {
   }
 
   const jar = await cookies();
-  jar.set(LEXI_USER_COOKIE, userId, cookieOptions());
+  jar.set(LEXI_USER_COOKIE, userId, lexiUserCookieOptions());
 
   return Response.json({
     ok: true,

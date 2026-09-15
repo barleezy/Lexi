@@ -27,10 +27,13 @@ final class VoiceAudioEngine {
     }
 
     private func activatePlayAndRecord() async throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: categoryOptions)
-        try session.setPreferredSampleRate(Double(Self.sampleRate))
-        try session.setPreferredIOBufferDuration(0.04)
+        let options = categoryOptions
+        try await Task.detached(priority: .userInitiated) {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            try session.setPreferredSampleRate(Double(Self.sampleRate))
+            try session.setPreferredIOBufferDuration(0.04)
+        }.value
         try await setSessionActive(true)
     }
 
@@ -39,44 +42,47 @@ final class VoiceAudioEngine {
     }
 
     private func setSessionActive(_ active: Bool) async throws {
-        let session = AVAudioSession.sharedInstance()
-        if #available(iOS 26.0, *) {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                let finish: @Sendable (Bool, (any Error)?) -> Void = { ok, error in
-                    if let error {
-                        cont.resume(throwing: error)
-                    } else if !ok {
-                        cont.resume(throwing: NSError(
-                            domain: "LexiAudio",
-                            code: 2,
-                            userInfo: [NSLocalizedDescriptionKey: "Could not update the audio session."]
-                        ))
-                    } else {
-                        cont.resume()
-                    }
-                }
-                if active {
-                    session.activate(options: [], completionHandler: finish)
-                } else {
-                    session.deactivate(options: [], completionHandler: finish)
-                }
-            }
+        if #available(iOS 27.0, *) {
+            try await setSessionActiveAsync(active)
             return
         }
+        try await setSessionActiveOffMain(active)
+    }
+
+    @available(iOS 27.0, *)
+    private func setSessionActiveAsync(_ active: Bool) async throws {
+        let session = AVAudioSession.sharedInstance()
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    if active {
-                        try session.setActive(true, options: [])
-                    } else {
-                        try session.setActive(false, options: [.notifyOthersOnDeactivation])
-                    }
-                    cont.resume()
-                } catch {
+            let finish: @Sendable (Bool, (any Error)?) -> Void = { ok, error in
+                if let error {
                     cont.resume(throwing: error)
+                } else if !ok {
+                    cont.resume(throwing: NSError(
+                        domain: "LexiAudio",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Could not update the audio session."]
+                    ))
+                } else {
+                    cont.resume()
                 }
             }
+            if active {
+                session.activate(options: [], completionHandler: finish)
+            } else {
+                session.deactivate(options: [], completionHandler: finish)
+            }
         }
+    }
+
+    private func setSessionActiveOffMain(_ active: Bool) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            let session = AVAudioSession.sharedInstance()
+            if active {
+                try session.setActive(true, options: [])
+            } else {
+                try session.setActive(false, options: [.notifyOthersOnDeactivation])
+            }
+        }.value
     }
 
     func start() async throws {

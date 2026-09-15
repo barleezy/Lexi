@@ -309,6 +309,10 @@ export function VoiceHome() {
   const [error, setError] = useState<string | null>(null);
   const [accountId, setAccountId] = useState("");
   const [accountDraft, setAccountDraft] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [accountConfirm, setAccountConfirm] = useState("");
+  const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
+  const [accountPending, setAccountPending] = useState(false);
   const [rows, setRows] = useState<TranscriptRow[]>([]);
   const [caption, setCaption] = useState("");
   const [streamTick, setStreamTick] = useState(0);
@@ -403,12 +407,13 @@ export function VoiceHome() {
 
   useEffect(() => {
     const persisted = readVoiceSessionStore();
-    const signedIn = readBrowserUserId() || persisted.userId;
+    const signedIn = readBrowserUserId();
     if (signedIn) {
-      const id = writeBrowserUserId(signedIn);
-      setAccountId(id);
-      setAccountDraft(id);
-      writeVoiceSessionStore({ userId: id });
+      setAccountId(signedIn);
+      setAccountDraft(signedIn);
+      writeVoiceSessionStore({ userId: signedIn });
+    } else if (persisted.userId) {
+      writeVoiceSessionStore({ userId: "" });
     }
     if (persisted.sessionId) setSessionId(persisted.sessionId);
     if (persisted.rows.length || persisted.caption) {
@@ -1281,23 +1286,71 @@ export function VoiceHome() {
       });
   }
 
-  function signInAccount(raw: string) {
-    const id = writeBrowserUserId(raw);
+  function applySignedIn(id: string) {
+    writeBrowserUserId(id);
     setAccountId(id);
     setAccountDraft(id);
+    setAccountPassword("");
+    setAccountConfirm("");
     writeVoiceSessionStore({ userId: id });
     return id;
   }
 
-  function signOutAccount() {
+  async function submitAccount(event: FormEvent) {
+    event.preventDefault();
+    const creating = accountMode === "signup";
+    if (!accountDraft.trim()) {
+      setError("Enter an account.");
+      return;
+    }
+    if (accountPassword.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (creating && accountPassword !== accountConfirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setError(null);
+    setAccountPending(true);
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: accountMode,
+          userId: accountDraft,
+          password: accountPassword,
+        }),
+      });
+      const body = (await response.json()) as { error?: string; userId?: string };
+      if (!response.ok || !body.userId) {
+        throw new Error(body.error || (creating ? "Could not create account." : "Could not sign in."));
+      }
+      applySignedIn(body.userId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign in.");
+    } finally {
+      setAccountPending(false);
+    }
+  }
+
+  async function signOutAccount() {
     writeBrowserUserId("");
     setAccountId("");
     setAccountDraft("");
+    setAccountPassword("");
+    setAccountConfirm("");
     writeVoiceSessionStore({ userId: "" });
+    try {
+      await fetch("/api/auth", { method: "DELETE" });
+    } catch {
+      /* cookie already cleared locally */
+    }
   }
 
   async function startSession() {
-    if (!accountId && !signInAccount(accountDraft)) {
+    if (!accountId) {
       setError("Sign in first.");
       return null;
     }
@@ -1517,26 +1570,67 @@ export function VoiceHome() {
             </button>
           </div>
         ) : (
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!signInAccount(accountDraft)) setError("Enter an account.");
-            }}
-          >
-            <input
-              value={accountDraft}
-              onChange={(event) => setAccountDraft(event.target.value)}
-              placeholder="Account"
-              autoComplete="username"
-              className="w-32 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
-            />
-            <button
-              type="submit"
-              className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-600 dark:border-zinc-500 dark:text-zinc-300"
-            >
-              Sign in
-            </button>
+          <form className="flex max-w-[min(100%,22rem)] flex-col items-end gap-2" onSubmit={submitAccount}>
+            <div className="flex rounded-full border border-zinc-400 p-0.5 text-[11px] uppercase tracking-[0.14em] dark:border-zinc-500">
+              <button
+                type="button"
+                onClick={() => setAccountMode("signin")}
+                className={`rounded-full px-2.5 py-1 ${
+                  accountMode === "signin" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccountMode("signup")}
+                className={`rounded-full px-2.5 py-1 ${
+                  accountMode === "signup" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Create
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <input
+                value={accountDraft}
+                onChange={(event) => setAccountDraft(event.target.value)}
+                placeholder="Account"
+                autoComplete="username"
+                className="w-28 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
+              />
+              <input
+                type="password"
+                value={accountPassword}
+                onChange={(event) => setAccountPassword(event.target.value)}
+                placeholder="Password"
+                autoComplete={accountMode === "signup" ? "new-password" : "current-password"}
+                className="w-28 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
+              />
+              {accountMode === "signup" ? (
+                <input
+                  type="password"
+                  value={accountConfirm}
+                  onChange={(event) => setAccountConfirm(event.target.value)}
+                  placeholder="Confirm"
+                  autoComplete="new-password"
+                  className="w-28 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
+                />
+              ) : null}
+              <button
+                type="submit"
+                disabled={accountPending}
+                className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-600 disabled:opacity-50 dark:border-zinc-500 dark:text-zinc-300"
+              >
+                {accountPending
+                  ? accountMode === "signup"
+                    ? "Creating…"
+                    : "Signing in…"
+                  : accountMode === "signup"
+                    ? "Create"
+                    : "Sign in"}
+              </button>
+            </div>
           </form>
         )}
       </header>
