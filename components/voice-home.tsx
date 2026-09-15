@@ -38,13 +38,16 @@ import {
 import { isAdultPageUrl, isDirectWatchMediaUrl, isWatchHlsUrl, shouldProxyWatchMedia } from "@/lib/voice/watch-adult";
 import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
+  cameraSwitchErrorMessage,
   canShareScreen,
+  otherCameraFacing,
   preferWatchTab,
   startCameraStream,
   startScreenStream,
   startVisionLoop,
   stopMediaStream,
   VisionFrameBatcher,
+  type CameraFacing,
   type VisionSource,
 } from "@/lib/voice/vision";
 import { openWatchChannel, watchTabHref, WATCH_UI_ENABLED } from "@/lib/voice/watch-channel";
@@ -286,9 +289,15 @@ export function VoiceHome() {
   const [streamTick, setStreamTick] = useState(0);
   const [draft, setDraft] = useState("");
   const [cameraOn, setCameraOn] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<CameraFacing>("user");
+  const [cameraFlipKey, setCameraFlipKey] = useState(0);
+  const [cameraBusy, setCameraBusy] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const [visionHint, setVisionHint] = useState<string | null>(null);
+  const cameraFacingRef = useRef<CameraFacing>("user");
+  const cameraBusyRef = useRef(false);
+  const ignoreCameraEnded = useRef(false);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const cameraSlot = useRef<VisionSlot>(emptyVisionSlot());
@@ -561,7 +570,7 @@ export function VoiceHome() {
       cameraSlot.current.stopLoop = null;
       video.srcObject = null;
     };
-  }, [cameraOn]);
+  }, [cameraOn, cameraFlipKey]);
 
   useEffect(() => {
     if (!screenOn) return;
@@ -609,12 +618,18 @@ export function VoiceHome() {
   async function startVision(source: VisionSource) {
     setVisionHint(null);
     try {
-      const stream = source === "camera" ? await startCameraStream() : await startScreenStream();
+      const stream =
+        source === "camera"
+          ? await startCameraStream(cameraFacingRef.current)
+          : await startScreenStream();
       const slot = source === "camera" ? cameraSlot : screenSlot;
       slot.current.stream = stream;
-      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
-        releaseVision(source);
-      });
+      if (source === "camera") attachCameraEnded(stream);
+      else {
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+          releaseVision(source);
+        });
+      }
       if (source === "camera") setCameraOn(true);
       else setScreenOn(true);
       sessionRef.current?.notifyVision(source, true);
@@ -641,6 +656,50 @@ export function VoiceHome() {
       return;
     }
     void startVision(source);
+  }
+
+  function attachCameraEnded(stream: MediaStream) {
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      if (ignoreCameraEnded.current) return;
+      releaseVision("camera");
+    });
+  }
+
+  async function flipCamera() {
+    if (!cameraSlot.current.stream || cameraBusyRef.current) return;
+    const current = cameraFacingRef.current;
+    const next = otherCameraFacing(current);
+    cameraBusyRef.current = true;
+    setCameraBusy(true);
+    setVisionHint(null);
+    cameraSlot.current.stopLoop?.();
+    cameraSlot.current.stopLoop = null;
+    ignoreCameraEnded.current = true;
+    stopMediaStream(cameraSlot.current.stream);
+    cameraSlot.current.stream = null;
+    try {
+      const stream = await startCameraStream(next);
+      cameraSlot.current.stream = stream;
+      attachCameraEnded(stream);
+      cameraFacingRef.current = next;
+      setCameraFacing(next);
+      setCameraFlipKey((key) => key + 1);
+    } catch {
+      try {
+        const stream = await startCameraStream(current);
+        cameraSlot.current.stream = stream;
+        attachCameraEnded(stream);
+        setCameraFlipKey((key) => key + 1);
+        setVisionHint(cameraSwitchErrorMessage(next));
+      } catch {
+        releaseVision("camera");
+        setVisionHint("Could not switch cameras.");
+      }
+    } finally {
+      ignoreCameraEnded.current = false;
+      cameraBusyRef.current = false;
+      setCameraBusy(false);
+    }
   }
 
   function sendReadyAttachments(items: ReadyAttachment[], respond: boolean) {
@@ -1525,14 +1584,29 @@ export function VoiceHome() {
           ) : null}
           <div className="flex items-end justify-between gap-3">
             {cameraOn ? (
-              <video
-                ref={cameraVideoRef}
-                muted
-                playsInline
-                autoPlay
-                className="h-[4.5rem] w-24 shrink-0 rounded-xl border border-zinc-400 object-cover shadow-md -scale-x-100 dark:border-zinc-500"
-                aria-label="Camera viewfinder"
-              />
+              <div className="flex flex-col items-start gap-1.5">
+                <video
+                  ref={cameraVideoRef}
+                  muted
+                  playsInline
+                  autoPlay
+                  className={`h-[4.5rem] w-24 shrink-0 rounded-xl border border-zinc-400 object-cover shadow-md dark:border-zinc-500 ${cameraFacing === "user" ? "-scale-x-100" : ""}`}
+                  aria-label={
+                    cameraFacing === "user" ? "Front camera viewfinder" : "Rear camera viewfinder"
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() => void flipCamera()}
+                  disabled={cameraBusy}
+                  aria-label={
+                    cameraFacing === "user" ? "Flip camera to rear" : "Flip camera to front"
+                  }
+                  className="flex h-8 shrink-0 items-center rounded-full border border-zinc-400 bg-background px-3 text-xs text-foreground transition-colors hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-500 dark:hover:bg-zinc-800"
+                >
+                  Flip camera
+                </button>
+              </div>
             ) : (
               <span />
             )}
