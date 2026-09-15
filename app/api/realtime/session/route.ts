@@ -1,3 +1,5 @@
+import { formatDecayState, recallForUser } from "@/lib/memory/store";
+import { resolveUserId } from "@/lib/memory/user";
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
 
 const UPSTREAM = "https://api.x.ai/v1/realtime/client_secrets";
@@ -86,5 +88,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Could not start a voice session." }, { status: 502 });
   }
 
-  return Response.json({ token });
+  let decayState = "no active decay tags";
+  try {
+    decayState = formatDecayState(await recallForUser(resolveUserId(request)));
+  } catch {
+    decayState = "no active decay tags";
+  }
+
+  return Response.json({ token, decayState });
 }

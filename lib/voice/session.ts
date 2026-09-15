@@ -8,6 +8,7 @@ import {
   pcm16ToBase64,
   resample,
 } from "@/lib/voice/audio";
+import { bandFromStart, scoreSalience } from "@/lib/memory/decay";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 
 export type VoicePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking";
@@ -128,6 +129,8 @@ export class VoiceSession {
   private by = "client";
   private decaySentForTurn = false;
   private ignoreOutputAudio = false;
+  private lastPersisted = "";
+  private pendingPersist = false;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -152,12 +155,19 @@ export class VoiceSession {
         },
         body: JSON.stringify({ sessionId: this.id }),
       });
-      const body = (await response.json()) as { token?: string; error?: string };
+      const body = (await response.json()) as {
+        token?: string;
+        error?: string;
+        decayState?: string;
+      };
       if (!response.ok || !body.token) {
         throw new Error(body.error || "Could not start a voice session.");
       }
       token = body.token;
-      this.logger.log("token.ok", { ms: Date.now() - tokenStarted });
+      this.logger.log("token.ok", {
+        ms: Date.now() - tokenStarted,
+        decay: typeof body.decayState === "string" ? body.decayState : undefined,
+      });
     } catch (error) {
       this.logger.error("token", error, { ms: Date.now() - tokenStarted });
       this.fail(error);
@@ -341,6 +351,7 @@ export class VoiceSession {
         const itemId = typeof event.item_id === "string" ? event.item_id : "";
         const transcript = typeof event.transcript === "string" ? event.transcript : "";
         if (itemId) this.upsert({ id: itemId, role: "user", text: transcript });
+        if (this.pendingPersist) this.persistTurn();
         break;
       }
       case "response.created":
@@ -351,19 +362,22 @@ export class VoiceSession {
         this.outBytes = 0;
         this.player?.resetTurn();
         break;
-      case "response.output_audio_transcript.delta": {
+      case "response.output_audio_transcript.delta":
+      case "response.output_text.delta":
+      case "response.text.delta": {
         const delta = typeof event.delta === "string" ? event.delta : "";
-        const responseId = typeof event.response_id === "string" ? event.response_id : "assistant";
-        const existing = this.rows.find((row) => row.id === responseId);
-        this.upsert({
-          id: responseId,
-          role: "assistant",
-          text: `${existing?.text ?? ""}${delta}`,
-        });
+        if (delta) this.appendAssistantDelta(event, delta);
         break;
       }
-      case "response.output_audio_transcript.done": {
-        const transcript = typeof event.transcript === "string" ? event.transcript : "";
+      case "response.output_audio_transcript.done":
+      case "response.output_text.done":
+      case "response.text.done": {
+        const transcript =
+          typeof event.transcript === "string"
+            ? event.transcript
+            : typeof event.text === "string"
+              ? event.text
+              : "";
         const responseId = typeof event.response_id === "string" ? event.response_id : "assistant";
         if (transcript) this.upsert({ id: responseId, role: "assistant", text: transcript });
         break;
@@ -385,6 +399,11 @@ export class VoiceSession {
         });
         this.decaySentForTurn = false;
         this.setPhase("listening");
+        const status = typeof response.status === "string" ? response.status : "";
+        if (status !== "cancelled" && status !== "failed" && status !== "incomplete") {
+          this.pendingPersist = true;
+          this.persistTurn();
+        }
         break;
       }
       case "error": {
@@ -424,6 +443,58 @@ export class VoiceSession {
       this.setPhase("speaking");
     }
     this.player.play(bytes);
+  }
+
+  private persistTurn() {
+    const user = [...this.rows].reverse().find((row) => row.role === "user" && row.text.trim());
+    const assistant = [...this.rows]
+      .reverse()
+      .find((row) => row.role === "assistant" && row.text.trim());
+    if (!user || !assistant) return;
+    const key = `${user.id}:${assistant.id}`;
+    if (this.lastPersisted === key) return;
+    this.lastPersisted = key;
+    this.pendingPersist = false;
+    const userText = user.text.trim();
+    const assistantText = assistant.text.trim();
+    const startSalience = scoreSalience(userText, assistantText);
+    const userId = clientUserId();
+    this.logger.log("memory.write", { user_id: user.id, assistant_id: assistant.id, startSalience });
+    void fetch("/api/memory", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-lexi-user-id": userId,
+        "ngrok-skip-browser-warning": "1",
+      },
+      body: JSON.stringify({
+        userId,
+        memoryKey: `turn:${key}`,
+        rawText: `User: ${userText}\nAssistant: ${assistantText}`,
+        weightedText: `[salience ${startSalience} ${bandFromStart(startSalience)}] ${userText} → ${assistantText}`,
+        startSalience,
+      }),
+    })
+      .then(async (response) => {
+        let body: { memory?: { id?: string }; error?: string } = {};
+        try {
+          body = (await response.json()) as { memory?: { id?: string }; error?: string };
+        } catch {
+          body = {};
+        }
+        if (!response.ok || !body.memory) {
+          this.lastPersisted = "";
+          this.pendingPersist = true;
+          this.logger.log("memory.write.fail", { status: response.status, error: body.error });
+          return;
+        }
+        this.logger.log("memory.write.ok", { id: body.memory.id });
+      })
+      .catch((error) => {
+        this.lastPersisted = "";
+        this.pendingPersist = true;
+        this.logger.error("memory.write", error);
+      });
   }
 
   private async refreshDecayState() {
@@ -515,11 +586,22 @@ export class VoiceSession {
     this.inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0 };
   }
 
+  private appendAssistantDelta(event: Record<string, unknown>, delta: string) {
+    const responseId = typeof event.response_id === "string" ? event.response_id : "assistant";
+    const existing = this.rows.find((row) => row.id === responseId);
+    this.upsert({
+      id: responseId,
+      role: "assistant",
+      text: `${existing?.text ?? ""}${delta}`,
+    });
+  }
+
   private upsert(row: TranscriptRow) {
     const index = this.rows.findIndex((item) => item.id === row.id);
     if (index >= 0) this.rows[index] = { ...this.rows[index], ...row };
-    else this.rows = [...this.rows, row];
-    this.handlers.onTranscripts(this.rows);
+    else this.rows.push(row);
+    // New array each time so React setState cannot skip the incremental render.
+    this.handlers.onTranscripts([...this.rows]);
   }
 
   private setPhase(phase: VoicePhase) {
