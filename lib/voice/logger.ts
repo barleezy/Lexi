@@ -39,6 +39,10 @@ function redact(value: unknown, depth = 0): unknown {
       out.bytes = decodedBytes(item);
       continue;
     }
+    if (key === "image_url" || key === "image") {
+      out[key] = typeof item === "string" ? `[image ${item.length} chars]` : redact(item, depth + 1);
+      continue;
+    }
     out[key] = redact(item, depth + 1);
   }
   return out;

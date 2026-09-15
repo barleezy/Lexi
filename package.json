@@ -7,9 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "voice:logs": "node scripts/voice-logs.mjs"
+    "voice:logs": "node scripts/voice-logs.mjs",
+    "memory:check-decay": "node --experimental-strip-types scripts/check-decay.mjs",
+    "memory:check-extract": "node --experimental-strip-types scripts/check-extract.mjs"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8"
