@@ -1,4 +1,12 @@
-import { formatDecayState, formatMemoryInstructions, recallForUser } from "@/lib/memory/store";
+import {
+  createOrResumeSession,
+  endSession,
+  formatDecayState,
+  formatMemoryInstructions,
+  listRecentTurns,
+  recallForUser,
+} from "@/lib/memory/store";
+import { formatPriorChat } from "@/lib/memory/turns";
 import { resolveUserId } from "@/lib/memory/user";
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
 
@@ -28,10 +36,16 @@ export async function POST(request: Request) {
   const started = Date.now();
   let sessionId = "";
   let requestedUserId: string | null = null;
+  let previousSessionId: string | null = null;
   try {
-    const body = (await request.json()) as { sessionId?: unknown; userId?: unknown };
+    const body = (await request.json()) as {
+      sessionId?: unknown;
+      userId?: unknown;
+      previousSessionId?: unknown;
+    };
     if (typeof body.sessionId === "string") sessionId = body.sessionId;
     if (typeof body.userId === "string") requestedUserId = body.userId;
+    if (typeof body.previousSessionId === "string") previousSessionId = body.previousSessionId;
   } catch {
     sessionId = "";
   }
@@ -90,16 +104,41 @@ export async function POST(request: Request) {
     return Response.json({ error: "Could not start a voice session." }, { status: 502 });
   }
 
+  const userId = resolveUserId(request, requestedUserId);
   let decayState = "no active decay tags";
   let memoryInstructions = "";
+  let priorChat = "";
+  let priorTurns: Awaited<ReturnType<typeof listRecentTurns>> = [];
+  let memorySessionId: string | null = null;
   try {
-    const recalled = await recallForUser(resolveUserId(request, requestedUserId));
+    const recalled = await recallForUser(userId);
     decayState = formatDecayState(recalled);
     memoryInstructions = formatMemoryInstructions(recalled);
   } catch {
     decayState = "no active decay tags";
     memoryInstructions = "";
   }
+  try {
+    priorTurns = await listRecentTurns(userId);
+    priorChat = formatPriorChat(priorTurns);
+  } catch {
+    priorTurns = [];
+    priorChat = "";
+  }
+  try {
+    if (previousSessionId) await endSession(userId, previousSessionId);
+    const session = await createOrResumeSession(userId, null);
+    memorySessionId = session?.id ?? null;
+  } catch {
+    memorySessionId = null;
+  }
 
-  return Response.json({ token, decayState, memoryInstructions });
+  return Response.json({
+    token,
+    decayState,
+    memoryInstructions,
+    priorChat,
+    priorTurns,
+    sessionId: memorySessionId,
+  });
 }

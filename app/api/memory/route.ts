@@ -4,7 +4,7 @@ import {
   extractFacts,
   userTextFromBlob,
 } from "@/lib/memory/extract";
-import { isMemoryStoreConfigured, recallForUser, recordExchange } from "@/lib/memory/store";
+import { endSession, isMemoryStoreConfigured, recallForUser, recordExchange } from "@/lib/memory/store";
 import { readUserId, resolveUserId } from "@/lib/memory/user";
 
 export async function GET(request: Request) {
@@ -27,6 +27,8 @@ export async function POST(request: Request) {
     assistantText?: unknown;
     rawText?: unknown;
     startSalience?: unknown;
+    sessionId?: unknown;
+    endSession?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -38,6 +40,17 @@ export async function POST(request: Request) {
     request,
     typeof body.userId === "string" ? body.userId : null,
   );
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : null;
+  if (body.endSession === true) {
+    if (!sessionId) {
+      return Response.json({ error: "sessionId is required." }, { status: 400 });
+    }
+    if (!isMemoryStoreConfigured()) {
+      return Response.json({ error: "Memory store is not configured." }, { status: 503 });
+    }
+    const ended = await endSession(userId, sessionId);
+    return Response.json({ userId, sessionId, ended: Boolean(ended), session: ended });
+  }
   const rawText = typeof body.rawText === "string" ? body.rawText.trim() : "";
   const userText =
     typeof body.userText === "string" && body.userText.trim()
@@ -62,12 +75,14 @@ export async function POST(request: Request) {
     assistantText,
     facts: extracted,
     affect,
+    sessionId,
   });
   if (!recorded.turn) {
     return Response.json({ error: "Memory store is not configured." }, { status: 503 });
   }
   return Response.json({
     userId,
+    sessionId: recorded.turn.session_id,
     facts: recorded.facts,
     extracted,
     turn: recorded.turn,

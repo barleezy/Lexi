@@ -1,6 +1,8 @@
 import { neon } from "@neondatabase/serverless";
 import { bandFromStart, bumpAffect, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
 import { extractNameFromBlob, FACT_KEYS, isIdentityKey, type FactKey } from "@/lib/memory/extract";
+import { parseSessionId } from "@/lib/memory/session-id";
+import { PRIOR_TURN_CAP, type ChatTurn } from "@/lib/memory/turns";
 import { defaultUserId, normalizeUserId } from "@/lib/memory/user";
 
 export type FactRow = {
@@ -25,6 +27,13 @@ export type DecayLine = {
   days: number;
   t0: string;
   kind: "fact" | "legacy";
+};
+
+export type SessionRow = {
+  id: string;
+  user_id: string;
+  started_at: string;
+  ended_at: string | null;
 };
 
 export type MigrateResult =
@@ -208,6 +217,18 @@ async function migrateTable() {
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS turns_user_id_idx ON turns (user_id)`);
 
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      ended_at timestamptz
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions (user_id)`);
+  await db.query(`ALTER TABLE turns ADD COLUMN IF NOT EXISTS session_id uuid`);
+  await db.query(`CREATE INDEX IF NOT EXISTS turns_session_id_idx ON turns (session_id)`);
+
   const renamedUserIds = await renameDefaultUserIds(db);
   const nameFactsBackfilled = await backfillNameFacts(db);
   const legacyCount = (await db.query(`SELECT COUNT(*)::int AS n FROM memories`)) as { n: number }[];
@@ -255,7 +276,11 @@ async function renameDefaultUserIds(db: NonNullable<ReturnType<typeof sql>>) {
     `UPDATE turns SET user_id = $1 WHERE lower(user_id) = lower($1) AND user_id <> $1 RETURNING id`,
     [target],
   )) as { id: string }[];
-  return memories.length + facts.length + turns.length;
+  const sessions = (await db.query(
+    `UPDATE sessions SET user_id = $1 WHERE lower(user_id) = lower($1) AND user_id <> $1 RETURNING id`,
+    [target],
+  )) as { id: string }[];
+  return memories.length + facts.length + turns.length + sessions.length;
 }
 
 async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
@@ -288,19 +313,69 @@ async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
   return inserted;
 }
 
+export async function createOrResumeSession(userId: string, sessionId?: string | null) {
+  const db = await ensureTable();
+  if (!db) return null;
+  const id = normalizeUserId(userId);
+  const existing = parseSessionId(sessionId);
+  if (existing) {
+    const rows = (await db.query(
+      `SELECT id, user_id, started_at, ended_at FROM sessions WHERE id = $1 AND user_id = $2`,
+      [existing, id],
+    )) as SessionRow[];
+    if (rows[0] && !rows[0].ended_at) return rows[0];
+  }
+  const created = (await db.query(
+    `INSERT INTO sessions (user_id) VALUES ($1) RETURNING id, user_id, started_at, ended_at`,
+    [id],
+  )) as SessionRow[];
+  return created[0] ?? null;
+}
+
+export async function endSession(userId: string, sessionId: string) {
+  const db = await ensureTable();
+  if (!db) return null;
+  const existing = parseSessionId(sessionId);
+  if (!existing) return null;
+  const rows = (await db.query(
+    `UPDATE sessions
+     SET ended_at = now()
+     WHERE id = $1 AND user_id = $2 AND ended_at IS NULL
+     RETURNING id, user_id, started_at, ended_at`,
+    [existing, normalizeUserId(userId)],
+  )) as SessionRow[];
+  return rows[0] ?? null;
+}
+
 export async function insertTurn(input: {
   userId: string;
   userText: string;
   assistantText: string;
+  sessionId?: string | null;
 }) {
   const db = await ensureTable();
   if (!db) return null;
+  const userId = normalizeUserId(input.userId);
+  let sessionId = parseSessionId(input.sessionId);
+  if (sessionId) {
+    const existing = (await db.query(
+      `SELECT id FROM sessions WHERE id = $1 AND user_id = $2`,
+      [sessionId, userId],
+    )) as { id: string }[];
+    if (!existing[0]) {
+      const created = await createOrResumeSession(userId, null);
+      sessionId = created?.id ?? null;
+    }
+  } else {
+    const created = await createOrResumeSession(userId, null);
+    sessionId = created?.id ?? null;
+  }
   const rows = (await db.query(
-    `INSERT INTO turns (user_id, user_text, assistant_text)
-     VALUES ($1, $2, $3)
-     RETURNING id, user_id, created_at`,
-    [normalizeUserId(input.userId), input.userText, input.assistantText],
-  )) as { id: string; user_id: string; created_at: string }[];
+    `INSERT INTO turns (user_id, user_text, assistant_text, session_id)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, user_id, session_id, created_at`,
+    [userId, input.userText, input.assistantText, sessionId],
+  )) as { id: string; user_id: string; session_id: string | null; created_at: string }[];
   return rows[0] ?? null;
 }
 
@@ -344,11 +419,13 @@ export async function recordExchange(input: {
   assistantText: string;
   facts: { memoryKey: FactKey; value: string }[];
   affect: number;
+  sessionId?: string | null;
 }) {
   const turn = await insertTurn({
     userId: input.userId,
     userText: input.userText,
     assistantText: input.assistantText,
+    sessionId: input.sessionId,
   });
   const rows: FactRow[] = [];
   for (const fact of input.facts) {
@@ -361,6 +438,21 @@ export async function recordExchange(input: {
     if (row) rows.push(row);
   }
   return { turn, facts: rows };
+}
+
+export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): Promise<ChatTurn[]> {
+  const db = await ensureTable();
+  if (!db) return [];
+  const cap = Math.min(20, Math.max(1, Math.floor(limit)));
+  const rows = (await db.query(
+    `SELECT id, user_text, assistant_text
+     FROM turns
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [normalizeUserId(userId), cap],
+  )) as { id: string; user_text: string; assistant_text: string }[];
+  return [...rows].reverse();
 }
 
 export async function recallForUser(userId: string, at = new Date()): Promise<DecayLine[]> {

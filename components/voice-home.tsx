@@ -7,6 +7,11 @@ import {
   type TranscriptRow,
   type VoicePhase,
 } from "@/lib/voice/session";
+import {
+  readVoiceSessionStore,
+  writeVoiceSessionStore,
+} from "@/lib/voice/persist";
+import { DEFAULT_USER_ID } from "@/lib/memory/user";
 
 const HINTS: Record<VoicePhase, string> = {
   idle: "Talk to Lexi",
@@ -104,9 +109,15 @@ export function VoiceHome() {
     setRows(snapshot);
     setCaption(live);
     setStreamTick((tick) => tick + 1);
+    writeVoiceSessionStore({ caption: live, rows: snapshot });
   }
 
   useEffect(() => {
+    const persisted = readVoiceSessionStore();
+    if (persisted.rows.length || persisted.caption) {
+      setRows(persisted.rows);
+      setCaption(persisted.caption);
+    }
     return () => {
       sessionRef.current?.stop();
     };
@@ -139,8 +150,25 @@ export function VoiceHome() {
   }
 
   async function stopSession() {
+    const persisted = readVoiceSessionStore();
     sessionRef.current?.stop();
     clearSession();
+    writeVoiceSessionStore({ sessionId: null, started: false });
+    if (persisted.sessionId) {
+      void fetch("/api/memory", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-lexi-user-id": persisted.userId || DEFAULT_USER_ID,
+          "ngrok-skip-browser-warning": "1",
+        },
+        body: JSON.stringify({
+          userId: persisted.userId || DEFAULT_USER_ID,
+          sessionId: persisted.sessionId,
+          endSession: true,
+        }),
+      });
+    }
   }
 
   async function onComposerSubmit(event: FormEvent<HTMLFormElement>) {
@@ -152,7 +180,6 @@ export function VoiceHome() {
       setError(null);
       let session = sessionRef.current;
       if (!session) {
-        commitRows([]);
         session = await startSession();
       }
       session.sendText(text);
@@ -164,7 +191,6 @@ export function VoiceHome() {
       return;
     }
 
-    commitRows([]);
     await startSession();
   }
 

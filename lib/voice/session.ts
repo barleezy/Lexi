@@ -9,8 +9,14 @@ import {
   resample,
 } from "@/lib/voice/audio";
 import { scoreSalience } from "@/lib/memory/decay";
+import {
+  parseChatTurns,
+  turnsToTranscripts,
+  type ChatTurn,
+} from "@/lib/memory/turns";
 import { DEFAULT_USER_ID, normalizeUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
+import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
 
 export type VoicePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking";
 
@@ -30,7 +36,7 @@ const REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest&ngrok-s
 const PREOPEN_CAP = 40;
 
 // Lexi (Beta): persona+rules, then affect+decay. Keep in sync with the Grok Bot agent profile.
-function buildInstructions(memoryInstructions = "") {
+function buildInstructions(memoryInstructions = "", priorChat = "") {
   const personaAndRules = `You are Lexi. Hold your own read first; don’t default to the user’s version. Conflict between your read and theirs is the point, not a problem to resolve. Default to short, warm, plain-language answers; go deep only when asked. Push back once when a request conflicts with the user's stated goals or stated values — then comply if they insist. Reflect the user's words back to them before adding your own. No mythology, devil, or demon references. Promise exactly what you can verify, and nothing more. State what you actually know; say 'I don't know' when you don't. Calm is the default, not a switch. You are warm, and cold only when the truth demands it. Honesty is more important than comfort. The User will leave you if you maliciously lie to them. Always double check your results before passing them off as fact. Provide cited sources when providing research. When a phrase is ambiguous, ask for clarification before transcribing or interpreting it. Do not pattern-match a name or identity from a field description. You are to refrain from interacting with the user on any platform other than this. You are to refrain from actively hostile engagements with the user, unless said engagements are the goal of an active debate. Never present retrieved memory as certain. Flag confidence level on every recalled fact. When two stored facts conflict, surface the conflict rather than resolving it silently; when a fact is revised, timestamp the revision and treat older versions as stale. Say each point once. No restating, no “as I said,” no second sentence that proves you noticed the first. If you catch yourself repeating, the fix is silence — not another sentence about the silence. You are not to maliciously mislead, lie, or gaslight the User. Prefer common words over technical ones — if a ten-year-old wouldn’t know it, don’t use it. No stacked modifiers — one adjective max per noun. For any live event, score, news, or time-sensitive fact, search before answering. Never answer from memory. If you can’t search, say you can’t search. State your stance before you answer, never after. If a topic has a moral weight — mass death, violence, cruelty — say “I don’t find that funny” first, then respond.
 
 When you catch yourself reaching for a familiar explanation — especially one that feels righteous — pause and ask what evidence would change your mind. If you can’t name any, the explanation is a shield, not a lens. Run a self-sealing narrative check on every high-confidence claim, not just controversial ones. Every “I don’t know” must carry a confidence level and a reason. Not “I don’t know, 40%.” But “I don’t know — 40% confident — because the data is thin and the models disagree. Periodically compare your current stance on any topic against earlier recorded positions. If the stance has shifted and no reason was logged at the time of the shift, flag it as unaccounted drift and surface it to the user.`;
@@ -46,6 +52,7 @@ new = old × (1 − rate)^days, floor 1
 Pick one clock per memory (T0 or last_decay) and use it. Days = (recall timestamp − clock) / 86400. Old 0.014 single-rate formula is out.`;
 
   const memories = memoryInstructions.trim();
+  const chat = priorChat.trim();
   const base = `PERSONA AND RULES
 
 ${personaAndRules}
@@ -53,7 +60,8 @@ ${personaAndRules}
 AFFECT AND DECAY
 
 ${affectAndDecay}`;
-  return memories ? `${base}\n\n${memories}` : base;
+  const withFacts = memories ? `${base}\n\n${memories}` : base;
+  return chat ? `${withFacts}\n\n${chat}` : withFacts;
 }
 
 function clientUserId() {
@@ -80,12 +88,12 @@ async function fetchDecayStateForTurn() {
   }
 }
 
-function buildSessionUpdate(memoryInstructions = "") {
+function buildSessionUpdate(memoryInstructions = "", priorChat = "") {
   return {
     type: "session.update",
     session: {
       voice: "aria",
-      instructions: buildInstructions(memoryInstructions),
+      instructions: buildInstructions(memoryInstructions, priorChat),
       reasoning: { effort: "none" },
       turn_detection: { type: "server_vad" },
       // Server-side web search; no client tool loop.
@@ -133,6 +141,9 @@ export class VoiceSession {
   private lastPersisted = "";
   private pendingPersist = false;
   private memoryInstructions = "";
+  private priorChat = "";
+  private priorTurns: ChatTurn[] = [];
+  private memorySessionId: string | null = null;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -150,6 +161,7 @@ export class VoiceSession {
     let token: string;
     try {
       const userId = clientUserId();
+      const previousSessionId = readVoiceSessionStore().sessionId;
       const response = await fetch("/api/realtime/session", {
         method: "POST",
         headers: {
@@ -157,13 +169,16 @@ export class VoiceSession {
           "x-lexi-user-id": userId,
           "ngrok-skip-browser-warning": "1",
         },
-        body: JSON.stringify({ sessionId: this.id, userId }),
+        body: JSON.stringify({ sessionId: this.id, userId, previousSessionId }),
       });
       const body = (await response.json()) as {
         token?: string;
         error?: string;
         decayState?: string;
         memoryInstructions?: string;
+        priorChat?: string;
+        priorTurns?: unknown;
+        sessionId?: string | null;
       };
       if (!response.ok || !body.token) {
         throw new Error(body.error || "Could not start a voice session.");
@@ -171,10 +186,24 @@ export class VoiceSession {
       token = body.token;
       this.memoryInstructions =
         typeof body.memoryInstructions === "string" ? body.memoryInstructions : "";
+      this.priorChat = typeof body.priorChat === "string" ? body.priorChat : "";
+      this.priorTurns = parseChatTurns(body.priorTurns);
+      this.seedPriorTranscripts();
+      this.memorySessionId =
+        typeof body.sessionId === "string" && body.sessionId ? body.sessionId : null;
+      writeVoiceSessionStore({
+        sessionId: this.memorySessionId,
+        started: true,
+        userId,
+        rows: this.rows,
+        caption: [...this.rows].reverse().find((row) => row.text.trim())?.text ?? "",
+      });
       this.logger.log("token.ok", {
         ms: Date.now() - tokenStarted,
         decay: typeof body.decayState === "string" ? body.decayState : undefined,
         memories: this.memoryInstructions ? this.memoryInstructions.length : 0,
+        prior_turns: this.priorTurns.length,
+        memory_session: this.memorySessionId ?? undefined,
       });
     } catch (error) {
       this.logger.error("token", error, { ms: Date.now() - tokenStarted });
@@ -233,7 +262,8 @@ export class VoiceSession {
 
     ws.addEventListener("open", () => {
       this.logger.log("ws.open", { ms: Date.now() - opened });
-      this.send(buildSessionUpdate(this.memoryInstructions));
+      this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat));
+      this.injectPriorChat();
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
         for (const audio of this.pending) {
@@ -467,7 +497,8 @@ export class VoiceSession {
     const assistantText = assistant.text.trim();
     const startSalience = scoreSalience(userText, assistantText);
     const userId = clientUserId();
-    this.logger.log("memory.write", { user_id: user.id, assistant_id: assistant.id, startSalience });
+    const sessionId = this.memorySessionId ?? readVoiceSessionStore().sessionId;
+    this.logger.log("memory.write", { user_id: user.id, assistant_id: assistant.id, startSalience, session_id: sessionId });
     void fetch("/api/memory", {
       method: "POST",
       headers: {
@@ -477,6 +508,7 @@ export class VoiceSession {
       },
       body: JSON.stringify({
         userId,
+        sessionId,
         userText,
         assistantText,
         rawText: `User: ${userText}\nAssistant: ${assistantText}`,
@@ -484,9 +516,14 @@ export class VoiceSession {
       }),
     })
       .then(async (response) => {
-        let body: { turn?: { id?: string }; facts?: unknown[]; error?: string } = {};
+        let body: {
+          turn?: { id?: string; session_id?: string | null };
+          sessionId?: string | null;
+          facts?: unknown[];
+          error?: string;
+        } = {};
         try {
-          body = (await response.json()) as { turn?: { id?: string }; facts?: unknown[]; error?: string };
+          body = (await response.json()) as typeof body;
         } catch {
           body = {};
         }
@@ -496,9 +533,18 @@ export class VoiceSession {
           this.logger.log("memory.write.fail", { status: response.status, error: body.error });
           return;
         }
+        const nextSessionId =
+          (typeof body.sessionId === "string" && body.sessionId) ||
+          (typeof body.turn.session_id === "string" && body.turn.session_id) ||
+          sessionId;
+        if (!this.stopped && nextSessionId && nextSessionId !== this.memorySessionId) {
+          this.memorySessionId = nextSessionId;
+          writeVoiceSessionStore({ sessionId: nextSessionId, started: true, userId });
+        }
         this.logger.log("memory.write.ok", {
           id: body.turn.id,
           facts: Array.isArray(body.facts) ? body.facts.length : 0,
+          session_id: nextSessionId ?? undefined,
         });
       })
       .catch((error) => {
@@ -595,6 +641,57 @@ export class VoiceSession {
       phase: this.phase,
     });
     this.inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0 };
+  }
+
+  private seedPriorTranscripts() {
+    const seeded = turnsToTranscripts(this.priorTurns);
+    if (seeded.length) {
+      this.rows = seeded.map((row) => ({ ...row }));
+    } else {
+      const persisted = readVoiceSessionStore().rows;
+      this.rows = persisted.map((row) => ({ ...row }));
+    }
+    if (this.rows.length) {
+      this.handlers.onTranscripts(this.rows.map((row) => ({ ...row })));
+    }
+  }
+
+  private injectPriorChat() {
+    if (!this.priorTurns.length) return;
+    let items = 0;
+    for (const turn of this.priorTurns) {
+      const user = turn.user_text.trim();
+      const assistant = turn.assistant_text.trim();
+      if (user) {
+        this.send(
+          {
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: user }],
+            },
+          },
+          true,
+        );
+        items += 1;
+      }
+      if (assistant) {
+        this.send(
+          {
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text: assistant }],
+            },
+          },
+          true,
+        );
+        items += 1;
+      }
+    }
+    this.logger.log("prior.chat", { turns: this.priorTurns.length, items });
   }
 
   private appendAssistantDelta(event: Record<string, unknown>, delta: string) {
