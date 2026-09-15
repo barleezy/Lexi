@@ -14,7 +14,7 @@ import {
   setFactAffect,
   writeFactFromTool,
 } from "@/lib/memory/store";
-import { resolveUserId } from "@/lib/memory/user";
+import { requireSignedInUserId } from "@/lib/memory/user";
 
 function parseOptionalAffect(raw: unknown): { ok: true; value?: number } | { ok: false } {
   if (raw === undefined || raw === null || raw === "") return { ok: true };
@@ -38,10 +38,13 @@ async function factToolResponse(
   const tool = body.tool === "upsert_fact" || body.tool === "set_affect" ? body.tool : null;
   if (!tool) return null;
 
-  const userId = resolveUserId(
+  const userId = requireSignedInUserId(
     request,
     typeof body.userId === "string" ? body.userId : null,
   );
+  if (!userId) {
+    return Response.json({ error: "Sign in first." }, { status: 401 });
+  }
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : null;
   const memoryKey = parseFactKey(body.memory_key ?? body.memoryKey);
   if (!memoryKey) {
@@ -121,10 +124,13 @@ export async function POST(request: Request) {
   const toolReply = await factToolResponse(request, body);
   if (toolReply) return toolReply;
 
-  const userId = resolveUserId(
+  const userId = requireSignedInUserId(
     request,
     typeof body.userId === "string" ? body.userId : null,
   );
+  if (!userId) {
+    return Response.json({ error: "Sign in first." }, { status: 401 });
+  }
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : null;
   if (body.endSession === true) {
     if (!sessionId) {

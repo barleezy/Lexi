@@ -11,7 +11,14 @@ import {
   PINNED_AFFECT,
   PINNED_KEYS,
 } from "../lib/memory/extract.ts";
-import { DEFAULT_USER_ID, normalizeUserId, resolveUserId } from "../lib/memory/user.ts";
+import {
+  ADMIN_USER_IDS,
+  DEFAULT_USER_ID,
+  IAN_USER_ID,
+  isAdminUserId,
+  normalizeUserId,
+  resolveUserId,
+} from "../lib/memory/user.ts";
 
 function storedAffect(key, incoming, existing) {
   if (isPinnedKey(key)) return PINNED_AFFECT;
@@ -29,17 +36,25 @@ function expectEqual(actual, expected, label) {
   if (left !== right) throw new Error(`${label}: ${left} !== ${right}`);
 }
 
-expectEqual(DEFAULT_USER_ID, "Ian", "default user id");
+expectEqual(DEFAULT_USER_ID, "Ian", "Ian account id");
+expectEqual(IAN_USER_ID, "Ian", "Ian user id");
+expectEqual(ADMIN_USER_IDS.includes("Ian"), true, "Ian is admin");
+expectEqual(isAdminUserId("Ian"), true, "Ian admin");
+expectEqual(isAdminUserId("ian"), true, "ian admin");
+expectEqual(isAdminUserId("Alex"), false, "Alex is not admin");
+expectEqual(isAdminUserId(""), false, "blank is not admin");
 expectEqual(normalizeUserId("ian"), "Ian", "normalize ian");
 expectEqual(normalizeUserId("IAN"), "Ian", "normalize IAN");
 expectEqual(normalizeUserId(" Ian "), "Ian", "normalize padded");
-expectEqual(normalizeUserId(""), "Ian", "normalize empty");
-expectEqual(normalizeUserId(null), "Ian", "normalize null");
+expectEqual(normalizeUserId(""), "", "normalize empty");
+expectEqual(normalizeUserId(null), "", "normalize null");
+expectEqual(normalizeUserId("Alex"), "Alex", "normalize other user");
 
 const bare = new Request("http://localhost/api/memory");
-expectEqual(resolveUserId(bare, null), "Ian", "GET defaults to Ian");
+expectEqual(resolveUserId(bare, null), "", "GET does not invent Ian");
 expectEqual(resolveUserId(bare, "ian"), "Ian", "query ian");
 expectEqual(resolveUserId(bare, "IAN"), "Ian", "query IAN");
+expectEqual(resolveUserId(bare, "Alex"), "Alex", "query other user");
 expectEqual(
   resolveUserId(new Request("http://localhost/api/memory", { headers: { "x-lexi-user-id": "ian" } }), null),
   "Ian",

@@ -151,7 +151,9 @@ const mail = parseEmailInbound({ data: { from: "a@b.c", subject: "Hi", text: "bo
 expect(mail.from === "a@b.c" && mail.text.includes("body"), "email inbound");
 
 const inbound = parseInboundPayload({ platform: "telegram", text: "  ping  ", userId: "Ian" });
-expect(inbound.platform === "telegram" && inbound.text === "ping", "inbound payload");
+expect(inbound.platform === "telegram" && inbound.text === "ping" && inbound.userId === "Ian", "inbound payload");
+const inboundAnon = parseInboundPayload({ platform: "telegram", text: "ping" });
+expect(inboundAnon.userId === "", "inbound does not invent Ian");
 
 expect(CHAT_COMPLETIONS_URL === "https://api.x.ai/v1/chat/completions", "chat url");
 expect(DEFAULT_CHAT_MODEL === "grok-4.6", "default chat model");

@@ -27,6 +27,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     @Published private(set) var channelNames: [String] = []
 
     private var connectGeneration = 0
+    private var refreshGeneration = 0
+    private var authRefreshCount = 0
     private var cancellables = Set<AnyCancellable>()
 
     var phaseLabel: String {
@@ -160,13 +162,23 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         guard !trimmed.isEmpty else { return }
         draft = ""
         lastError = ""
-        if !realtime.isLive {
-            connectCall()
-            for _ in 0..<40 where !realtime.isLive && lastError.isEmpty {
+        if !realtime.isReady {
+            if !realtime.isLive && !isConnecting {
+                connectCall()
+            }
+            for _ in 0..<80 where !realtime.isReady && lastError.isEmpty {
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
         }
-        guard realtime.isLive else { return }
+        if !lastError.isEmpty {
+            refreshStatus()
+            return
+        }
+        guard realtime.isReady else {
+            lastError = "Voice link did not open."
+            refreshStatus()
+            return
+        }
         toys.noteUtterance(trimmed)
         realtime.sendText(trimmed)
         refreshStatus()
@@ -200,6 +212,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         }
         lastError = ""
         connectGeneration += 1
+        authRefreshCount = 0
         let gen = connectGeneration
         isConnecting = true
         refreshStatus()
@@ -214,41 +227,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
                 return
             }
             do {
-                let session = try await api.startRealtimeSession(
-                    sessionId: realtime.memorySessionId,
-                    previousSessionId: nil,
-                    timeZone: TimeZone.current.identifier,
-                    location: location.payload(),
-                    musicPlaying: music.playing,
-                    musicTitle: music.title,
-                    musicSource: music.source
-                )
-                guard gen == connectGeneration else { return }
-                realtime.memorySessionId = session.sessionId
-                var update = session.sessionUpdate
-                if update == nil {
-                    update = [
-                        "type": "session.update",
-                        "session": [
-                            "voice": "aria",
-                            "instructions": session.instructions ?? "",
-                            "turn_detection": ["type": "server_vad"],
-                        ],
-                    ]
-                }
-                isConnecting = false
-                realtime.start(
-                    token: session.token,
-                    realtimeURL: session.realtimeUrl ?? "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
-                    sessionUpdate: update ?? [:]
-                )
-                if watch.isLoaded {
-                    realtime.notifyVideo(active: true, title: watch.title)
-                }
-                if camera.isOn {
-                    realtime.notifyVision(source: "camera", active: true)
-                }
-                refreshStatus()
+                try await openRealtime(generation: gen)
             } catch {
                 guard gen == connectGeneration else { return }
                 isConnecting = false
@@ -267,6 +246,76 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         toys.reset()
         refreshStatus()
         Task { await api.endMemorySession(sessionId: sessionId) }
+    }
+
+    private func openRealtime(generation gen: Int) async throws {
+        let session = try await api.startRealtimeSession(
+            sessionId: realtime.memorySessionId,
+            previousSessionId: nil,
+            timeZone: TimeZone.current.identifier,
+            location: location.payload(),
+            musicPlaying: music.playing,
+            musicTitle: music.title,
+            musicSource: music.source
+        )
+        guard gen == connectGeneration else { return }
+        realtime.memorySessionId = session.sessionId
+        var update = session.sessionUpdate
+        if update == nil {
+            update = [
+                "type": "session.update",
+                "session": [
+                    "voice": "aria",
+                    "instructions": session.instructions ?? "",
+                    "turn_detection": ["type": "server_vad"],
+                ],
+            ]
+        }
+        isConnecting = false
+        realtime.start(
+            token: session.token,
+            realtimeURL: session.realtimeUrl ?? "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
+            sessionUpdate: update ?? [:]
+        )
+        if watch.isLoaded {
+            realtime.notifyVideo(active: true, title: watch.title)
+        }
+        if camera.isOn {
+            realtime.notifyVision(source: "camera", active: true)
+        }
+        refreshStatus()
+    }
+
+    private func refreshVoiceSession() {
+        guard account.isSignedIn else {
+            lastError = "Sign-in expired. Sign in again."
+            refreshStatus()
+            return
+        }
+        if authRefreshCount >= 1 {
+            lastError = "Voice auth failed. Sign in again."
+            refreshStatus()
+            return
+        }
+        authRefreshCount += 1
+        refreshGeneration += 1
+        let refresh = refreshGeneration
+        connectGeneration += 1
+        let gen = connectGeneration
+        isConnecting = true
+        lastError = ""
+        realtime.stop(notify: false)
+        refreshStatus()
+        Task {
+            do {
+                try await openRealtime(generation: gen)
+            } catch {
+                guard refresh == refreshGeneration, gen == connectGeneration else { return }
+                isConnecting = false
+                lastError = error.localizedDescription
+                refreshStatus()
+            }
+        }
     }
 
     func connectAppleMusic() {
@@ -337,7 +386,15 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             self.isLive = session.isLive
             self.phase = session.phase
             self.isConnecting = false
-            self.camera.stop(notify: false)
+            if !session.isLive {
+                self.camera.stop(notify: false)
+            }
+        }
+    }
+
+    nonisolated func realtimeNeedsSessionRefresh(_ session: RealtimeSession) {
+        Task { @MainActor in
+            self.refreshVoiceSession()
         }
     }
 

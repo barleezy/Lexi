@@ -150,7 +150,7 @@ export async function POST(request: Request) {
         ok: false,
         configured: true,
         connected: false,
-        error: "Ian needs to connect Apple Music first — tap Connect Apple Music and sign in.",
+        error: "Connect Apple Music first — tap Connect Apple Music and sign in.",
       },
       { status: 401 },
     );

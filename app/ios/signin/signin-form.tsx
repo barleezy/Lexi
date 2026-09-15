@@ -50,6 +50,7 @@ export function IosSignInForm({
           name="userId"
           value={userId}
           onChange={(event) => setUserId(event.target.value)}
+          placeholder="Your account"
           autoComplete="username"
           className="rounded-xl border border-neutral-300 bg-transparent px-4 py-3 text-base outline-none focus:border-neutral-900 dark:border-neutral-700 dark:focus:border-white"
         />
@@ -62,10 +63,10 @@ export function IosSignInForm({
       {error ? <p className="text-sm text-red-500">{error}</p> : null}
       <button
         type="submit"
-        disabled={pending || !callbackOk}
+        disabled={pending || !callbackOk || !userId.trim()}
         className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
       >
-        {pending ? "Continuing…" : `Continue as ${userId || "Ian"}`}
+        {pending ? "Continuing…" : userId.trim() ? `Continue as ${userId.trim()}` : "Continue"}
       </button>
     </form>
   );

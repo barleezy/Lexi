@@ -3,12 +3,11 @@ import {
   LEXI_USER_COOKIE,
   LEXI_USER_COOKIE_MAX_AGE,
   callbackURLWithToken,
-  defaultIosUserId,
   iosSigningSecret,
   parseCallbackURI,
   signIosToken,
 } from "@/lib/ios/auth";
-import { normalizeUserId, resolveUserId } from "@/lib/memory/user";
+import { isAdminUserId, normalizeUserId, resolveUserId } from "@/lib/memory/user";
 
 export const maxDuration = 15;
 
@@ -29,7 +28,7 @@ export async function GET(request: Request) {
     ok: true,
     host: "talktolexi.app",
     userId,
-    defaultUserId: defaultIosUserId(),
+    isAdmin: isAdminUserId(userId),
     configured: Boolean(iosSigningSecret()),
     callbackSchemes: ["talktolexi", "app.talktolexi.ios"],
   });
@@ -72,6 +71,9 @@ export async function POST(request: Request) {
   const userId = normalizeUserId(
     typeof body.userId === "string" ? body.userId : resolveUserId(request, null),
   );
+  if (!userId) {
+    return Response.json({ error: "Account is required." }, { status: 400 });
+  }
   const token = signIosToken(userId);
   if (!token) {
     return Response.json({ error: "Could not sign an iOS session." }, { status: 500 });

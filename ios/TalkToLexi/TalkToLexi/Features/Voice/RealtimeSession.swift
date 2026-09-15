@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum VoicePhase: String {
     case idle
@@ -21,9 +22,19 @@ protocol RealtimeSessionDelegate: AnyObject {
     func realtime(_ session: RealtimeSession, error: String)
     func realtime(_ session: RealtimeSession, handleTool name: String, callId: String, arguments: [String: Any]) async -> String
     func realtime(_ session: RealtimeSession, completedTurn user: String, assistant: String)
+    func realtimeNeedsSessionRefresh(_ session: RealtimeSession)
+}
+
+extension RealtimeSessionDelegate {
+    func realtimeNeedsSessionRefresh(_ session: RealtimeSession) {}
 }
 
 final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
+    private static let log = Logger(subsystem: "app.talktolexi.ios", category: "realtime")
+    private static let createStall: TimeInterval = 1.8
+    private static let expectStall: TimeInterval = 8
+    private static let openTimeout: TimeInterval = 12
+
     private(set) var phase: VoicePhase = .idle {
         didSet {
             if oldValue != phase {
@@ -33,6 +44,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     }
 
     private(set) var isLive = false
+    private(set) var isReady = false
     var memorySessionId: String?
     private(set) var caption = ""
     private(set) var rows: [TranscriptRow] = []
@@ -43,10 +55,18 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     private var urlSession: URLSession?
     private var socket: URLSessionWebSocketTask?
     private var pendingAudio: [Data] = []
+    private var pendingOutbound: [[String: Any]] = []
+    private var queuedSessionUpdate: [String: Any] = [:]
     private var deferredLiveFrames: [(source: String, dataUrl: String, timeSec: Double?)] = []
     private var userText = ""
     private var assistantText = ""
     private var generation = 0
+    private var expectSpoken = false
+    private var createInFlight = false
+    private var createAttempts = 0
+    private var stallWork: DispatchWorkItem?
+    private var openTimeoutWork: DispatchWorkItem?
+    private var connectHost = ""
 
     var voiceDucked: Bool = false {
         didSet { audio.setVoiceDucked(voiceDucked) }
@@ -58,6 +78,12 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         let gen = generation
         phase = .connecting
         isLive = true
+        isReady = false
+        expectSpoken = false
+        createInFlight = false
+        createAttempts = 0
+        pendingOutbound.removeAll()
+        queuedSessionUpdate = sessionUpdate
         userText = ""
         assistantText = ""
         caption = ""
@@ -77,7 +103,12 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             stop()
             return
         }
+        connectHost = url.host ?? ""
+        Self.log.info("ws.connect host=\(self.connectHost, privacy: .public) path=\(url.path, privacy: .public)")
         var request = URLRequest(url: url)
+        request.timeoutInterval = Self.openTimeout
+        // URLSession often drops Authorization on the WS handshake. Match the web client.
+        request.setValue("xai-client-secret.\(token)", forHTTPHeaderField: "Sec-WebSocket-Protocol")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         urlSession = session
@@ -85,24 +116,24 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         socket = task
         task.resume()
         receiveLoop(generation: gen)
-        sendJSON(sessionUpdate)
-        for chunk in pendingAudio {
-            sendJSON(["type": "input_audio_buffer.append", "audio": chunk.base64EncodedString()])
-        }
-        pendingAudio.removeAll()
-        phase = .listening
+        armOpenTimeout(generation: gen)
     }
 
     func stop(notify: Bool = true) {
         generation += 1
+        clearWatchdogs()
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
         audio.stop()
         pendingAudio.removeAll()
+        pendingOutbound.removeAll()
         deferredLiveFrames.removeAll()
         isLive = false
+        isReady = false
+        expectSpoken = false
+        createInFlight = false
         phase = .idle
         if notify {
             delegate?.realtime(self, caption: "")
@@ -114,6 +145,9 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         guard !trimmed.isEmpty else { return }
         lastUserUtterance = trimmed
         appendRow(role: "user", text: trimmed)
+        expectSpoken = true
+        createAttempts = 0
+        phase = .thinking
         sendJSON([
             "type": "conversation.item.create",
             "item": [
@@ -122,7 +156,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
                 "content": [["type": "input_text", "text": trimmed]],
             ],
         ])
-        sendJSON(["type": "response.create"])
+        requestSpokenResponse()
     }
 
     func sendVisionFrame(source: String, dataUrl: String, timeSec: Double? = nil, respond: Bool = false) {
@@ -152,7 +186,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             }
         }
         let preface = watchTotal > 0
-            ? "The user is watching a video with you. These are separate recent stills from that video. Talk while it plays. On-screen voices are not Ian. Soundtrack may be absent. "
+            ? "The user is watching a video with you. These are separate recent stills from that video. Talk while it plays. On-screen voices are not the user. Soundtrack may be absent. "
             : ""
         content.append(["type": "input_text", "text": "\(preface)\(labels.joined(separator: " "))"])
         sendJSON([
@@ -164,13 +198,16 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             ],
         ])
         if respond {
-            sendJSON(["type": "response.create"])
+            expectSpoken = true
+            createAttempts = 0
+            phase = .thinking
+            requestSpokenResponse()
         }
     }
 
     func notifyVideo(active: Bool, title: String) {
         let text = active
-            ? "The user is watching a video with you titled \(title.isEmpty ? "Watch together" : title). Talk while it plays. On-screen voices are not Ian. Soundtrack may be absent."
+            ? "The user is watching a video with you titled \(title.isEmpty ? "Watch together" : title). Talk while it plays. On-screen voices are not the user. Soundtrack may be absent."
             : "The watch-together video stopped."
         sendJSON([
             "type": "conversation.item.create",
@@ -208,8 +245,17 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else { return }
-        if let socket {
-            socket.send(.string(text)) { _ in }
+        let type = (object["type"] as? String) ?? "unknown"
+        guard let socket, isReady else {
+            pendingOutbound.append(object)
+            Self.log.info("ws.queue type=\(type, privacy: .public) pending=\(self.pendingOutbound.count, privacy: .public)")
+            return
+        }
+        Self.log.info("ws.send type=\(type, privacy: .public)")
+        socket.send(.string(text)) { [weak self] error in
+            guard let error else { return }
+            Self.log.error("ws.send.fail type=\(type, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            self?.failOpen("Voice send failed: \(error.localizedDescription)")
         }
     }
 
@@ -238,8 +284,9 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
                 }
             case .failure(let error):
                 if self.isLive {
-                    self.delegate?.realtime(self, error: error.localizedDescription)
-                    self.stop()
+                    let timedOut = (error as NSError).code == NSURLErrorTimedOut
+                    Self.log.error("ws.recv.fail timeout=\(timedOut, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    self.failOpen(timedOut ? "Voice link timed out." : error.localizedDescription, auth: Self.isAuthMessage(error.localizedDescription))
                 }
                 return
             @unknown default:
@@ -255,6 +302,8 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
               let type = object["type"] as? String else { return }
 
         switch type {
+        case "session.updated", "session.created":
+            Self.log.info("ws.event type=\(type, privacy: .public)")
         case "input_audio_buffer.speech_started":
             audio.stopPlayback()
             assistantText = ""
@@ -262,14 +311,23 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             flushDeferredLiveFrames()
         case "input_audio_buffer.speech_stopped", "input_audio_buffer.committed":
             if phase == .listening { phase = .thinking }
+            expectSpoken = true
+            createAttempts = 0
+            armSpokenWatchdog()
         case "conversation.item.input_audio_transcription.updated",
              "conversation.item.input_audio_transcription.completed":
             if let transcript = object["transcript"] as? String {
                 userText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                 lastUserUtterance = userText
             }
+        case "response.created":
+            createInFlight = false
+            createAttempts = 0
+            if phase != .speaking { phase = .thinking }
+            Self.log.info("ws.event type=response.created")
         case "response.output_audio.delta":
             phase = .speaking
+            clearWatchdogs()
             if let audioB64 = object["delta"] as? String, let pcm = Data(base64Encoded: audioB64) {
                 audio.schedulePCM16(pcm)
             }
@@ -288,6 +346,9 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         case "response.function_call_arguments.done":
             handleTool(object)
         case "response.done":
+            expectSpoken = false
+            createInFlight = false
+            clearWatchdogs()
             finishTurn()
             if isLive {
                 phase = .listening
@@ -297,7 +358,17 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             let message = ((object["error"] as? [String: Any])?["message"] as? String)
                 ?? (object["message"] as? String)
                 ?? "Realtime error"
-            delegate?.realtime(self, error: message)
+            Self.log.error("ws.event type=error error=\(message, privacy: .public)")
+            if Self.isIgnorable(message) { return }
+            if Self.isAuthMessage(message) {
+                failOpen(message, auth: true)
+                return
+            }
+            if expectSpoken, !createInFlight {
+                requestSpokenResponse()
+                return
+            }
+            leaveThinking(message)
         default:
             break
         }
@@ -325,8 +396,97 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
                     "output": output,
                 ],
             ])
-            self.sendJSON(["type": "response.create"])
+            self.expectSpoken = true
+            self.createAttempts = 0
+            self.requestSpokenResponse()
         }
+    }
+
+    private func requestSpokenResponse() {
+        if createInFlight {
+            Self.log.info("ws.response.create skip in_flight")
+            armSpokenWatchdog()
+            return
+        }
+        expectSpoken = true
+        createInFlight = true
+        createAttempts += 1
+        if phase == .listening || phase == .connecting { phase = .thinking }
+        sendJSON(["type": "response.create"])
+        armSpokenWatchdog()
+    }
+
+    private func armSpokenWatchdog() {
+        stallWork?.cancel()
+        let gen = generation
+        let started = Date()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, gen == self.generation, self.expectSpoken else { return }
+            if self.phase == .speaking { return }
+            if Date().timeIntervalSince(started) >= Self.expectStall || self.createAttempts >= 2 {
+                Self.log.error("ws.recover reason=expect_stall attempts=\(self.createAttempts, privacy: .public)")
+                self.expectSpoken = false
+                self.createInFlight = false
+                self.phase = .listening
+                DispatchQueue.main.async {
+                    self.delegate?.realtime(self, error: "No reply from Lexi. Try again.")
+                }
+                return
+            }
+            Self.log.info("ws.recover reason=create_stall attempt=\(self.createAttempts + 1, privacy: .public)")
+            self.createInFlight = false
+            self.requestSpokenResponse()
+        }
+        stallWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.createStall, execute: work)
+    }
+
+    private func armOpenTimeout(generation gen: Int) {
+        openTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, gen == self.generation, !self.isReady else { return }
+            Self.log.error("ws.open.timeout host=\(self.connectHost, privacy: .public)")
+            self.failOpen("Voice link timed out.")
+        }
+        openTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.openTimeout, execute: work)
+    }
+
+    private func clearWatchdogs() {
+        stallWork?.cancel()
+        stallWork = nil
+        openTimeoutWork?.cancel()
+        openTimeoutWork = nil
+    }
+
+    private func flushPending() {
+        let queued = pendingOutbound
+        pendingOutbound.removeAll()
+        for object in queued {
+            sendJSON(object)
+        }
+        for chunk in pendingAudio {
+            sendJSON(["type": "input_audio_buffer.append", "audio": chunk.base64EncodedString()])
+        }
+        pendingAudio.removeAll()
+    }
+
+    private func failOpen(_ message: String, auth: Bool = false) {
+        let authFail = auth || Self.isAuthMessage(message)
+        Self.log.error("ws.fail auth=\(authFail, privacy: .public) error=\(message, privacy: .public)")
+        leaveThinking(message)
+        if authFail {
+            DispatchQueue.main.async { self.delegate?.realtimeNeedsSessionRefresh(self) }
+        }
+        if isLive { stop() }
+    }
+
+    private func leaveThinking(_ message: String) {
+        expectSpoken = false
+        createInFlight = false
+        clearWatchdogs()
+        if phase == .thinking { phase = isReady ? .listening : .idle }
+        DispatchQueue.main.async { self.delegate?.realtime(self, error: message) }
     }
 
     private func finishTurn() {
@@ -351,7 +511,6 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         parts: [(source: String, dataUrl: String, timeSec: Double?)]
     ) -> Bool {
         if respond || phase != .thinking { return false }
-        // Camera / screen stay live for the whole share. Only watch stills wait out thinking.
         if parts.contains(where: { $0.source == "upload" || $0.source == "camera" || $0.source == "screen" }) {
             return false
         }
@@ -378,10 +537,51 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
+    private static func isAuthMessage(_ message: String) -> Bool {
+        message.range(of: #"401|403|unauthor|expired|invalid.?token|forbidden"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func isIgnorable(_ message: String) -> Bool {
+        message.range(
+            of: #"cancel|no (active|in[- ]progress) response|nothing to cancel|response not found|already.{0,40}(active|in[- ]progress)"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        guard isLive else { return }
+        let negotiated = `protocol`?.isEmpty == false
+        Self.log.info("ws.open host=\(self.connectHost, privacy: .public) protocol_set=\(negotiated, privacy: .public)")
+        isReady = true
+        openTimeoutWork?.cancel()
+        openTimeoutWork = nil
+        sendJSON(queuedSessionUpdate)
+        flushPending()
+        if phase == .connecting { phase = .listening }
+    }
+
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        let code = closeCode.rawValue
+        Self.log.error("ws.close code=\(code, privacy: .public)")
         if isLive {
-            delegate?.realtime(self, error: "Voice socket closed.")
-            stop()
+            failOpen("Voice socket closed (\(code)).", auth: code == 1008 || code == 4001)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let status = (task.response as? HTTPURLResponse)?.statusCode ?? -1
+        if status > 0 {
+            Self.log.info("ws.handshake status=\(status, privacy: .public)")
+        }
+        if let error, isLive, !isReady {
+            let timedOut = (error as NSError).code == NSURLErrorTimedOut
+            Self.log.error("ws.handshake.fail status=\(status, privacy: .public) timeout=\(timedOut, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            failOpen(
+                timedOut ? "Voice link timed out." : error.localizedDescription,
+                auth: status == 401 || status == 403 || Self.isAuthMessage(error.localizedDescription)
+            )
+        } else if (status == 401 || status == 403), isLive, !isReady {
+            failOpen("Voice auth failed (\(status)).", auth: true)
         }
     }
 }

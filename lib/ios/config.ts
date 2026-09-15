@@ -17,10 +17,10 @@ export function iosSigningSecret(env: NodeJS.ProcessEnv = process.env) {
   return env.IOS_SESSION_SECRET?.trim() || env.XAI_API_KEY?.trim() || "";
 }
 
-/** Same rule as lib/memory/user: blank or any-case ian → Ian. */
+/** Same rule as lib/memory/user: blank stays blank; ian/Ian/IAN stay Ian. */
 export function iosNormalizeUserId(raw?: string | null) {
   const trimmed = raw?.trim() ?? "";
-  if (!trimmed) return "Ian";
+  if (!trimmed) return "";
   if (trimmed.toLowerCase() === "ian") return "Ian";
   return trimmed;
 }
@@ -65,8 +65,10 @@ export function signIosToken(
 ) {
   const secret = iosSigningSecret(env);
   if (!secret) return null;
+  const signedUserId = iosNormalizeUserId(userId);
+  if (!signedUserId) return null;
   const body: TokenBody = {
-    userId: iosNormalizeUserId(userId),
+    userId: signedUserId,
     exp: Math.floor(nowMs / 1000) + IOS_TOKEN_TTL_SEC,
     v: 1,
   };
@@ -100,7 +102,7 @@ export function verifyIosToken(
     return null;
   }
   if (body.v !== 1 || typeof body.exp !== "number" || body.exp * 1000 <= nowMs) return null;
-  if (typeof body.userId !== "string" || !body.userId.trim()) return null;
+  if (typeof body.userId !== "string" || !iosNormalizeUserId(body.userId)) return null;
   return { userId: iosNormalizeUserId(body.userId), exp: body.exp };
 }
 

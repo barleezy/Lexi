@@ -1,5 +1,6 @@
 import { isSmsConfigured, readEnv } from "@/lib/channels/config";
 import { handleInboundText } from "@/lib/channels/inbound";
+import { IAN_USER_ID } from "@/lib/memory/user";
 import {
   isIanSmsNumber,
   parseTwilioInbound,
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
   const result = await handleInboundText({
     platform: "sms",
     text: inbound.text,
+    userId: IAN_USER_ID,
     sendReply: false,
   });
   if (!result.ok) {

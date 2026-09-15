@@ -1,8 +1,11 @@
 import { formatDecayState, isMemoryStoreConfigured, recallForUser } from "@/lib/memory/store";
-import { resolveUserId } from "@/lib/memory/user";
+import { requireSignedInUserId } from "@/lib/memory/user";
 
 export async function memoryFactsResponse(request: Request, rawUserId?: string | null) {
-  const userId = resolveUserId(request, rawUserId);
+  const userId = requireSignedInUserId(request, rawUserId);
+  if (!userId) {
+    return Response.json({ error: "Sign in first." }, { status: 401 });
+  }
   if (!isMemoryStoreConfigured()) {
     return Response.json({ error: "Memory store is not configured." }, { status: 503 });
   }
@@ -11,7 +14,10 @@ export async function memoryFactsResponse(request: Request, rawUserId?: string |
 }
 
 export async function memoryDecayResponse(request: Request, rawUserId?: string | null) {
-  const userId = resolveUserId(request, rawUserId);
+  const userId = requireSignedInUserId(request, rawUserId);
+  if (!userId) {
+    return Response.json({ error: "Sign in first." }, { status: 401 });
+  }
   if (!isMemoryStoreConfigured()) {
     return Response.json({ error: "Memory store is not configured." }, { status: 503 });
   }

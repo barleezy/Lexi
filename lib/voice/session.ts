@@ -43,7 +43,7 @@ import {
   turnsToTranscripts,
   type ChatTurn,
 } from "@/lib/memory/turns";
-import { DEFAULT_USER_ID, normalizeUserId } from "@/lib/memory/user";
+import { isAdminUserId, readBrowserUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
 import type { ReadyAttachment } from "@/lib/voice/attachments";
@@ -159,9 +159,8 @@ function readFriendPresence(raw: unknown): FortniteSessionState["friendPresence"
 }
 
 function clientUserId() {
-  if (typeof document === "undefined") return DEFAULT_USER_ID;
-  const match = document.cookie.match(/(?:^|;\s*)lexi_user_id=([^;]+)/);
-  return match?.[1] ? normalizeUserId(decodeURIComponent(match[1])) : DEFAULT_USER_ID;
+  if (typeof document === "undefined") return "";
+  return readBrowserUserId();
 }
 
 async function fetchFortniteStatus(): Promise<FortniteSessionState> {
@@ -508,7 +507,7 @@ const GENERATE_IMAGE_TOOL = {
   type: "function",
   name: "generate_image",
   description:
-    "Generate a photo with Grok Imagine when Ian asks for a picture, or after he agrees to one you offered. Pass his full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
+    "Generate a photo with Grok Imagine when the user asks for a picture, or after they agree to one you offered. Pass their full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
   parameters: {
     type: "object",
     properties: {
@@ -552,7 +551,7 @@ const GENERATE_VIDEO_TOOL = {
   type: "function",
   name: "generate_video",
   description:
-    "Generate a short video with Grok Imagine when Ian asks for a clip, or after he agrees. Pass his full request as prompt. Adults only — refuse anyone who looks under 18. Video can take a minute. Do not call this unsolicited.",
+    "Generate a short video with Grok Imagine when the user asks for a clip, or after they agree. Pass their full request as prompt. Adults only — refuse anyone who looks under 18. Video can take a minute. Do not call this unsolicited.",
   parameters: {
     type: "object",
     properties: {
@@ -726,7 +725,7 @@ const PLAY_MUSIC_TOOL = {
   type: "function",
   name: "play_music",
   description:
-    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL Ian gave you, or a song query to play on his connected Apple Music. Ian can also play/pause/skip from the homepage without this tool. Does not open a watch tab. Voice stays up.",
+    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL the user gave you, or a song query to play on their connected Apple Music. The user can also play/pause/skip from the homepage without this tool. Does not open a watch tab. Voice stays up.",
   parameters: {
     type: "object",
     properties: {
@@ -748,7 +747,7 @@ const APPLE_MUSIC_CONNECT_TOOL = {
   type: "function",
   name: "apple_music_connect",
   description:
-    "Connect Ian's Apple Music account with official MusicKit. He may need to tap Connect Apple Music and sign in with Apple. Use when he asks to connect Apple Music.",
+    "Connect the user's Apple Music account with official MusicKit. They may need to tap Connect Apple Music and sign in with Apple. Use when they ask to connect Apple Music.",
   parameters: { type: "object", properties: {} },
 };
 
@@ -756,7 +755,7 @@ const APPLE_MUSIC_LOVE_TOOL = {
   type: "function",
   name: "apple_music_love",
   description:
-    "Love/favorite a song on Ian's connected Apple Music (official rating). That is a recommendation signal. Requires his account connected.",
+    "Love/favorite a song on the user's connected Apple Music (official rating). That is a recommendation signal. Requires their account connected.",
   parameters: {
     type: "object",
     properties: {
@@ -770,7 +769,7 @@ const APPLE_MUSIC_LIBRARY_TOOL = {
   type: "function",
   name: "apple_music_library",
   description:
-    "Add a song to Ian's Apple Music library (official). That is a recommendation signal. Requires his account connected.",
+    "Add a song to the user's Apple Music library (official). That is a recommendation signal. Requires their account connected.",
   parameters: {
     type: "object",
     properties: {
@@ -784,7 +783,7 @@ const APPLE_MUSIC_PLAYLIST_TOOL = {
   type: "function",
   name: "apple_music_playlist",
   description:
-    "Add a song to an Apple Music playlist on Ian's account (official). Creates the playlist if needed. Recommendation signal. Requires his account connected.",
+    "Add a song to an Apple Music playlist on the user's account (official). Creates the playlist if needed. Recommendation signal. Requires their account connected.",
   parameters: {
     type: "object",
     properties: {
@@ -827,7 +826,9 @@ function buildSessionUpdate(
   clientTimeZone = "",
   location: DeviceLocationState | null = null,
   music: MusicSessionState = DEFAULT_MUSIC_STATE,
+  userId = "",
 ) {
+  const admin = isAdminUserId(userId);
   return {
     type: "session.update",
     session: {
@@ -842,6 +843,7 @@ function buildSessionUpdate(
         clientTimeZone,
         location,
         music,
+        userId,
       ),
       reasoning: { effort: "none" },
       turn_detection: buildTurnDetection(),
@@ -862,15 +864,19 @@ function buildSessionUpdate(
         JOYHUB_VIBRATE_TOOL,
         JOYHUB_STOP_TOOL,
         JOYHUB_PATTERN_TOOL,
-        FORTNITE_ADD_FRIEND_TOOL,
-        FORTNITE_STATUS_TOOL,
-        FORTNITE_INVITE_TOOL,
-        FORTNITE_SIGN_IN_TOOL,
-        FORTNITE_JOIN_PARTY_TOOL,
-        FORTNITE_SIT_OUT_TOOL,
-        FORTNITE_LEAVE_PARTY_TOOL,
-        SEND_MESSAGE_TOOL,
-        MESSAGE_IAN_TOOL,
+        ...(admin
+          ? [
+              FORTNITE_ADD_FRIEND_TOOL,
+              FORTNITE_STATUS_TOOL,
+              FORTNITE_INVITE_TOOL,
+              FORTNITE_SIGN_IN_TOOL,
+              FORTNITE_JOIN_PARTY_TOOL,
+              FORTNITE_SIT_OUT_TOOL,
+              FORTNITE_LEAVE_PARTY_TOOL,
+              SEND_MESSAGE_TOOL,
+              MESSAGE_IAN_TOOL,
+            ]
+          : []),
         PLAY_MUSIC_TOOL,
         STOP_MUSIC_TOOL,
         APPLE_MUSIC_CONNECT_TOOL,
@@ -1221,7 +1227,7 @@ export class VoiceSession {
     const preface = options?.prompt?.trim()
       ? `${options.prompt.trim()} `
       : watchTotal
-        ? "The user is watching a video with you. These are separate recent stills from that video. Talk while it plays. On-screen voices are not Ian. Soundtrack may be absent — it plays in the watch tab. "
+        ? "The user is watching a video with you. These are separate recent stills from that video. Talk while it plays. On-screen voices are not the user. Soundtrack may be absent — it plays in the watch tab. "
         : uploadTotal
           ? "USER UPLOADED VIDEO, analyze these frames. "
           : "";
@@ -1456,6 +1462,9 @@ export class VoiceSession {
   private async fetchSessionToken(resume: boolean) {
     const tokenStarted = Date.now();
     const userId = clientUserId();
+    if (!userId) {
+      throw new Error("Sign in first.");
+    }
     if (!resume) {
       const previousSessionId = readVoiceSessionStore().sessionId;
       this.setMemorySessionId(newMemorySessionId(), userId);
@@ -2022,6 +2031,7 @@ export class VoiceSession {
     const assistantText = assistant.text.trim();
     const startSalience = scoreSalience(userText, assistantText);
     const userId = clientUserId();
+    if (!userId) return;
     const sessionId = this.currentSessionId();
     this.logger.log("memory.write", { user_id: user.id, assistant_id: assistant.id, startSalience, session_id: sessionId });
     void fetch("/api/memory", {
@@ -2427,6 +2437,7 @@ export class VoiceSession {
       this.clientTimeZone,
       this.deviceLocation,
       this.musicState,
+      clientUserId(),
     );
   }
 
@@ -2731,7 +2742,7 @@ export class VoiceSession {
           ok: false,
           configured: false,
           connected: false,
-          error: "Apple Music is not configured. Ian still needs to add the MusicKit developer keys.",
+          error: "Apple Music is not configured. MusicKit developer keys still need to be added.",
         };
       }
       if (this.musicState.appleConnected) {
@@ -2742,7 +2753,7 @@ export class VoiceSession {
           ok: false,
           configured: true,
           connected: false,
-          error: "Ian needs to tap Connect Apple Music and sign in.",
+          error: "The user needs to tap Connect Apple Music and sign in.",
         };
       }
       const result = await this.handlers.connectAppleMusic();
@@ -2770,11 +2781,11 @@ export class VoiceSession {
       if (!this.musicState.appleConfigured) {
         return {
           ok: false,
-          error: "Need a direct audio URL, or Apple Music MusicKit keys plus Ian connecting his account.",
+          error: "Need a direct audio URL, or Apple Music MusicKit keys plus the user connecting their account.",
         };
       }
       if (!this.musicState.appleConnected) {
-        return { ok: false, error: "Ian needs to tap Connect Apple Music first, or give a direct audio URL." };
+        return { ok: false, error: "The user needs to tap Connect Apple Music first, or give a direct audio URL." };
       }
       const query = typeof args.query === "string" ? args.query.trim() : "";
       const songId = typeof args.song_id === "string" ? args.song_id.trim() : "";
@@ -2831,6 +2842,9 @@ export class VoiceSession {
   }
 
   private async runFortniteTool(name: string, args: Record<string, unknown>) {
+    if (!isAdminUserId(clientUserId())) {
+      return { ok: false, error: "Fortnite companion tools are admin-only." };
+    }
     const action =
       name === "fortnite_add_friend"
         ? "add_friend"
@@ -2855,9 +2869,10 @@ export class VoiceSession {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-lexi-user-id": clientUserId(),
         "ngrok-skip-browser-warning": "1",
       },
-      body: JSON.stringify({ action, displayName }),
+      body: JSON.stringify({ action, displayName, userId: clientUserId() }),
     });
     let body: Record<string, unknown> = {};
     try {
@@ -2909,15 +2924,20 @@ export class VoiceSession {
   }
 
   private async runChannelSend(args: Record<string, unknown>) {
+    if (!isAdminUserId(clientUserId())) {
+      return { ok: false, error: "Channel messaging is admin-only." };
+    }
     const response = await fetch("/api/channels", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-lexi-user-id": clientUserId(),
         "ngrok-skip-browser-warning": "1",
       },
       body: JSON.stringify({
         platform: args.platform ?? args.channel,
         text: args.text ?? args.message,
+        userId: clientUserId(),
       }),
     });
     let body: Record<string, unknown> = {};
@@ -3144,7 +3164,7 @@ export class VoiceSession {
     }
     if (item.kind === "video") {
       const soundtrack = item.hasAudio
-        ? " This clip has a soundtrack; it is not Ian speaking."
+        ? " This clip has a soundtrack; it is not the user speaking."
         : " Do not treat any soundtrack as the user.";
       this.logger.log("attachment.video", {
         name: item.name,

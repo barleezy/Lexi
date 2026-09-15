@@ -11,7 +11,7 @@ import {
 } from "@/lib/memory/extract";
 import { parseSessionId } from "@/lib/memory/session-id";
 import { PRIOR_TURN_CAP, type ChatTurn } from "@/lib/memory/turns";
-import { defaultUserId, normalizeUserId } from "@/lib/memory/user";
+import { defaultUserId, isIanUserId, normalizeUserId } from "@/lib/memory/user";
 
 export type FactRow = {
   id: string;
@@ -327,6 +327,8 @@ async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
 }
 
 async function ensurePinnedFacts(db: NonNullable<ReturnType<typeof sql>>, userId: string) {
+  const id = normalizeUserId(userId);
+  if (!isIanUserId(id)) return;
   await db.query(
     `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
      VALUES ($1, 'our_song', $2, $3, now())
@@ -334,7 +336,19 @@ async function ensurePinnedFacts(db: NonNullable<ReturnType<typeof sql>>, userId
        affect = $3,
        updated_at = now()
      WHERE facts.affect IS DISTINCT FROM $3`,
-    [normalizeUserId(userId), OUR_SONG_VALUE, PINNED_AFFECT],
+    [id, OUR_SONG_VALUE, PINNED_AFFECT],
+  );
+  await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+     VALUES ($1, 'name', 'Ian', 10, now())
+     ON CONFLICT (user_id, memory_key) DO NOTHING`,
+    [id],
+  );
+  await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+     VALUES ($1, 'nicknames', 'daddy, barleezy, menace, barleezus, leezy', 10, now())
+     ON CONFLICT (user_id, memory_key) DO NOTHING`,
+    [id],
   );
 }
 
@@ -342,6 +356,7 @@ export async function createOrResumeSession(userId: string, sessionId?: string |
   const db = await ensureTable();
   if (!db) return null;
   const id = normalizeUserId(userId);
+  if (!id) return null;
   const existing = parseSessionId(sessionId);
   if (existing) {
     const rows = (await db.query(
@@ -369,12 +384,14 @@ export async function createOrResumeSession(userId: string, sessionId?: string |
 export async function latestOpenSession(userId: string) {
   const db = await ensureTable();
   if (!db) return null;
+  const id = normalizeUserId(userId);
+  if (!id) return null;
   const rows = (await db.query(
     `SELECT id, user_id, started_at, ended_at FROM sessions
      WHERE lower(user_id) = lower($1) AND ended_at IS NULL
      ORDER BY started_at DESC
      LIMIT 1`,
-    [normalizeUserId(userId)],
+    [id],
   )) as SessionRow[];
   return rows[0] ?? null;
 }
@@ -382,6 +399,8 @@ export async function latestOpenSession(userId: string) {
 export async function endSession(userId: string, sessionId: string) {
   const db = await ensureTable();
   if (!db) return null;
+  const id = normalizeUserId(userId);
+  if (!id) return null;
   const existing = parseSessionId(sessionId);
   if (!existing) return null;
   const rows = (await db.query(
@@ -389,7 +408,7 @@ export async function endSession(userId: string, sessionId: string) {
      SET ended_at = now()
      WHERE id = $1 AND lower(user_id) = lower($2) AND ended_at IS NULL
      RETURNING id, user_id, started_at, ended_at`,
-    [existing, normalizeUserId(userId)],
+    [existing, id],
   )) as SessionRow[];
   return rows[0] ?? null;
 }
@@ -403,6 +422,7 @@ export async function insertTurn(input: {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  if (!userId) return null;
   let sessionId = parseSessionId(input.sessionId);
   if (sessionId) {
     const existing = (await db.query(
@@ -439,6 +459,7 @@ export async function upsertFact(input: {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  if (!userId) return null;
   const sessionId = parseSessionId(input.sessionId);
   const incoming = Math.min(10, Math.max(1, input.affect));
   const existing = (await db.query(
@@ -525,6 +546,7 @@ export async function setFactAffect(input: {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  if (!userId) return null;
   const sessionId = parseSessionId(input.sessionId);
   const affect = isPinnedKey(input.memoryKey) ? PINNED_AFFECT : clampAffect(input.affect);
   const rows = (await db.query(
@@ -572,6 +594,8 @@ export async function recordExchange(input: {
 export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): Promise<ChatTurn[]> {
   const db = await ensureTable();
   if (!db) return [];
+  const id = normalizeUserId(userId);
+  if (!id) return [];
   const cap = Math.min(32, Math.max(1, Math.floor(limit)));
   const rows = (await db.query(
     `SELECT id, user_text, assistant_text
@@ -579,7 +603,7 @@ export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): P
      WHERE lower(user_id) = lower($1)
      ORDER BY created_at DESC
      LIMIT $2`,
-    [normalizeUserId(userId), cap],
+    [id, cap],
   )) as { id: string; user_text: string; assistant_text: string }[];
   return [...rows].reverse();
 }
@@ -588,6 +612,7 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   const db = await ensureTable();
   if (!db) return [];
   const id = normalizeUserId(userId);
+  if (!id) return [];
   await ensurePinnedFacts(db, id);
   const rows = (await db.query(
     `SELECT * FROM facts

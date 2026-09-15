@@ -4,7 +4,7 @@ export const APPLE_MUSIC_USER_COOKIE = "lexi_apple_music_user";
 export const APPLE_MUSIC_USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 180;
 export const OUR_SONG_SEARCH = "Down Low Astrid S";
 export const APPLE_MUSIC_SETUP =
-  "Set APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, and APPLE_MUSIC_PRIVATE_KEY (the .p8 MusicKit key) in .env.local. Create a MusicKit identifier in Apple Developer. Ian then taps Connect Apple Music and signs in. Never commit the key.";
+  "Set APPLE_MUSIC_TEAM_ID, APPLE_MUSIC_KEY_ID, and APPLE_MUSIC_PRIVATE_KEY (the .p8 MusicKit key) in .env.local. Create a MusicKit identifier in Apple Developer. The signed-in user then taps Connect Apple Music and signs in. Never commit the key.";
 
 export const APPLE_MUSIC_ACTIONS = [
   "connect",

@@ -1,6 +1,7 @@
 import { inboundSecret, isEmailConfigured, verifyInboundSecret } from "@/lib/channels/config";
 import { isIanEmail, parseEmailInbound } from "@/lib/channels/email";
 import { handleInboundText } from "@/lib/channels/inbound";
+import { IAN_USER_ID } from "@/lib/memory/user";
 
 export const maxDuration = 60;
 
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
   const result = await handleInboundText({
     platform: "email",
     text: inbound.text,
+    userId: IAN_USER_ID,
     sendReply: true,
   });
   if (!result.ok) {

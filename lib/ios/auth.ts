@@ -1,4 +1,4 @@
-import { DEFAULT_USER_ID } from "../memory/user";
+import { LEXI_USER_COOKIE, LEXI_USER_COOKIE_MAX_AGE } from "../memory/user";
 import {
   IOS_AUTH_PATH,
   IOS_CALLBACK_SCHEMES,
@@ -19,8 +19,7 @@ export {
   verifyIosToken,
 };
 
-export const LEXI_USER_COOKIE = "lexi_user_id";
-export const LEXI_USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 180;
+export { LEXI_USER_COOKIE, LEXI_USER_COOKIE_MAX_AGE };
 
 export function readBearerToken(request: Request) {
   const auth = request.headers.get("authorization") ?? "";
@@ -36,5 +35,5 @@ export function readIosSession(request: Request, env: NodeJS.ProcessEnv = proces
 }
 
 export function defaultIosUserId() {
-  return DEFAULT_USER_ID;
+  return "";
 }

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct IosSessionResponse {
     var token: String
@@ -50,6 +51,8 @@ struct GeneratedMediaItem: Identifiable, Equatable {
 }
 
 final class LexiAPIClient {
+    private static let log = Logger(subsystem: "app.talktolexi.ios", category: "http")
+
     private let account: AccountStore
     private let session: URLSession
 
@@ -58,8 +61,18 @@ final class LexiAPIClient {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 30
         self.session = URLSession(configuration: config)
+    }
+
+    static func isAuthError(_ error: Error) -> Bool {
+        let code = (error as NSError).code
+        if code == 401 || code == 403 { return true }
+        return error.localizedDescription.range(
+            of: #"401|403|unauthor|expired|sign-?in"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     func startRealtimeSession(
@@ -212,22 +225,22 @@ final class LexiAPIClient {
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
-        let (data, response) = try await session.data(for: authorized(path, method: "GET"))
-        try throwIfNeeded(response, data: data)
+        let (data, http) = try await perform(authorized(path, method: "GET"))
+        try throwIfNeeded(http, data: data)
         return try JSONDecoder().decode(T.self, from: data)
     }
 
     private func getJSON(_ path: String) async throws -> [String: Any] {
-        let (data, response) = try await session.data(for: authorized(path, method: "GET"))
-        try throwIfNeeded(response, data: data)
+        let (data, http) = try await perform(authorized(path, method: "GET"))
+        try throwIfNeeded(http, data: data)
         return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
     private func postJSON(_ path: String, body: [String: Any]) async throws -> [String: Any] {
         var request = authorized(path, method: "POST")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
-        try throwIfNeeded(response, data: data)
+        let (data, http) = try await perform(request)
+        try throwIfNeeded(http, data: data)
         let raw = try JSONSerialization.jsonObject(with: data)
         return raw as? [String: Any] ?? ["ok": true]
     }
@@ -237,6 +250,7 @@ final class LexiAPIClient {
         let url = URL(string: root + path)!
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(account.userId, forHTTPHeaderField: "x-lexi-user-id")
         if !account.token.isEmpty {
@@ -246,11 +260,46 @@ final class LexiAPIClient {
         return request
     }
 
-    private func throwIfNeeded(_ response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse else { return }
+    private func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let method = request.httpMethod ?? "GET"
+        let path = request.url?.path ?? "?"
+        Self.log.info("http.send \(method, privacy: .public) \(path, privacy: .public)")
+        let started = Date()
+        do {
+            let (data, response) = try await session.data(for: request)
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? -1
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            Self.log.info("http.recv \(method, privacy: .public) \(path, privacy: .public) status=\(status, privacy: .public) ms=\(ms, privacy: .public)")
+            guard let http else {
+                throw NSError(domain: "LexiAPI", code: -1, userInfo: [NSLocalizedDescriptionKey: "No HTTP response from \(path)."])
+            }
+            return (data, http)
+        } catch {
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            let timedOut = (error as? URLError)?.code == .timedOut
+            Self.log.error("http.fail \(method, privacy: .public) \(path, privacy: .public) timeout=\(timedOut, privacy: .public) ms=\(ms, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            if timedOut {
+                throw NSError(
+                    domain: "LexiAPI",
+                    code: NSURLErrorTimedOut,
+                    userInfo: [NSLocalizedDescriptionKey: "\(path) timed out."]
+                )
+            }
+            throw error
+        }
+    }
+
+    private func throwIfNeeded(_ http: HTTPURLResponse, data: Data) throws {
         if (200...299).contains(http.statusCode) { return }
         let body = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        let message = (body["error"] as? String) ?? "HTTP \(http.statusCode)"
+        let server = (body["error"] as? String) ?? "HTTP \(http.statusCode)"
+        let message: String
+        if http.statusCode == 401 || http.statusCode == 403 {
+            message = "Sign-in expired. Sign in again. (\(http.statusCode))"
+        } else {
+            message = server
+        }
         throw NSError(domain: "LexiAPI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

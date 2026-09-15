@@ -21,7 +21,7 @@ final class AccountStore {
            let url = URL(string: bundled) {
             return url
         }
-        return URL(string: "https://talktolexi.app")!
+        return URL(string: "https://www.talktolexi.app")!
     }
 
     var userId: String {

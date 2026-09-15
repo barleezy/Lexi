@@ -10,7 +10,7 @@ import {
   recordExchange,
 } from "../memory/store";
 import { formatPriorChat } from "../memory/turns";
-import { DEFAULT_USER_ID } from "../memory/user";
+import { normalizeUserId } from "../memory/user";
 import {
   DEFAULT_FORTNITE_STATE,
   DEFAULT_TOYS_STATE,
@@ -47,7 +47,10 @@ export async function replyOnChannel(input: {
     return { ok: true as const, reply: safety.error, refused: true, persisted: false };
   }
 
-  const userId = input.userId?.trim() || DEFAULT_USER_ID;
+  const userId = normalizeUserId(input.userId);
+  if (!userId) {
+    return { ok: false as const, status: 401, error: "Sign in first.", reply: "" };
+  }
   const [recalled, prior, session] = await Promise.all([
     recallForUser(userId).catch(() => []),
     listRecentTurns(userId).catch(() => []),
@@ -62,6 +65,10 @@ export async function replyOnChannel(input: {
     DEFAULT_TOYS_STATE,
     DEFAULT_FORTNITE_STATE,
     channelStatus(),
+    "",
+    null,
+    undefined,
+    userId,
   );
   const decay = formatDecayState(recalled);
   const withDecay =

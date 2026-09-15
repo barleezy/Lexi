@@ -20,7 +20,7 @@ For local API work, set it to `http://127.0.0.1:3000` (ATS allows local networki
 
 ASWebAuthenticationSession opens `https://talktolexi.app/ios/signin?redirect_uri=talktolexi://auth`.
 
-That page sets the same `lexi_user_id` cookie the web app already uses, then `POST /api/ios/auth` mints a HMAC token and redirects to `talktolexi://auth?token=…&userId=Ian`.
+That page sets the same `lexi_user_id` cookie the web app already uses, then `POST /api/ios/auth` mints a HMAC token and redirects to `talktolexi://auth?token=…&userId=<signed-in id>`. Ian is admin, not the only user.
 
 The app stores the token and sends `Authorization: Bearer` plus `x-lexi-user-id` on later calls. This is not a second account system.
 

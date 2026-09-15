@@ -29,6 +29,9 @@ export async function POST(request: Request) {
   }
 
   const parsed = parseInboundPayload(body);
+  if (!parsed.userId) {
+    return Response.json({ error: "userId is required." }, { status: 400 });
+  }
   const result = await handleInboundText({
     platform: parsed.platform ?? "inbound",
     text: parsed.text,

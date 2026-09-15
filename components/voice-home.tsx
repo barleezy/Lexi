@@ -12,7 +12,7 @@ import {
   readVoiceSessionStore,
   writeVoiceSessionStore,
 } from "@/lib/voice/persist";
-import { DEFAULT_USER_ID } from "@/lib/memory/user";
+import { isAdminUserId, readBrowserUserId, writeBrowserUserId } from "@/lib/memory/user";
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
@@ -307,6 +307,8 @@ export function VoiceHome() {
   const [phase, setPhase] = useState<VoicePhase>("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [accountId, setAccountId] = useState("");
+  const [accountDraft, setAccountDraft] = useState("");
   const [rows, setRows] = useState<TranscriptRow[]>([]);
   const [caption, setCaption] = useState("");
   const [streamTick, setStreamTick] = useState(0);
@@ -401,6 +403,13 @@ export function VoiceHome() {
 
   useEffect(() => {
     const persisted = readVoiceSessionStore();
+    const signedIn = readBrowserUserId() || persisted.userId;
+    if (signedIn) {
+      const id = writeBrowserUserId(signedIn);
+      setAccountId(id);
+      setAccountDraft(id);
+      writeVoiceSessionStore({ userId: id });
+    }
     if (persisted.sessionId) setSessionId(persisted.sessionId);
     if (persisted.rows.length || persisted.caption) {
       setRows(persisted.rows);
@@ -1272,7 +1281,26 @@ export function VoiceHome() {
       });
   }
 
+  function signInAccount(raw: string) {
+    const id = writeBrowserUserId(raw);
+    setAccountId(id);
+    setAccountDraft(id);
+    writeVoiceSessionStore({ userId: id });
+    return id;
+  }
+
+  function signOutAccount() {
+    writeBrowserUserId("");
+    setAccountId("");
+    setAccountDraft("");
+    writeVoiceSessionStore({ userId: "" });
+  }
+
   async function startSession() {
+    if (!accountId && !signInAccount(accountDraft)) {
+      setError("Sign in first.");
+      return null;
+    }
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: commitRows,
@@ -1374,16 +1402,16 @@ export function VoiceHome() {
     sessionRef.current?.stop();
     clearSession();
     writeVoiceSessionStore({ sessionId: null, started: false });
-    if (persisted.sessionId) {
+    if (persisted.sessionId && (persisted.userId || accountId)) {
       void fetch("/api/memory", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-lexi-user-id": persisted.userId || DEFAULT_USER_ID,
+          "x-lexi-user-id": persisted.userId || accountId,
           "ngrok-skip-browser-warning": "1",
         },
         body: JSON.stringify({
-          userId: persisted.userId || DEFAULT_USER_ID,
+          userId: persisted.userId || accountId,
           sessionId: persisted.sessionId,
           endSession: true,
         }),
@@ -1404,6 +1432,7 @@ export function VoiceHome() {
       if (!session) {
         session = await startSession();
       }
+      if (!session) return;
       if (unsent.length) {
         sendReadyAttachments(
           unsent.map((chip) => chip.payload),
@@ -1471,8 +1500,45 @@ export function VoiceHome() {
         />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-background/30 to-background sm:bg-gradient-to-r sm:from-background sm:via-background/40 sm:to-transparent" />
       </div>
-      <header className="relative z-10 flex items-center justify-between px-6 py-5 sm:px-10">
+      <header className="relative z-10 flex items-center justify-between gap-4 px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
+        {accountId ? (
+          <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <span>
+              Signed in as {accountId}
+              {isAdminUserId(accountId) ? " · admin" : ""}
+            </span>
+            <button
+              type="button"
+              onClick={signOutAccount}
+              className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-600 dark:border-zinc-500 dark:text-zinc-300"
+            >
+              Sign out
+            </button>
+          </div>
+        ) : (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!signInAccount(accountDraft)) setError("Enter an account.");
+            }}
+          >
+            <input
+              value={accountDraft}
+              onChange={(event) => setAccountDraft(event.target.value)}
+              placeholder="Account"
+              autoComplete="username"
+              className="w-32 rounded-full border border-zinc-400 bg-transparent px-3 py-1 text-xs outline-none dark:border-zinc-500"
+            />
+            <button
+              type="submit"
+              className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-600 dark:border-zinc-500 dark:text-zinc-300"
+            >
+              Sign in
+            </button>
+          </form>
+        )}
       </header>
       <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">

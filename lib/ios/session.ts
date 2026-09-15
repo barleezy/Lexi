@@ -27,7 +27,7 @@ const UPSTREAM = "https://api.x.ai/v1/realtime/client_secrets";
 
 const PHONE_NOTE = `IOS PHONE
 
-This turn is the native iPhone app, not the website tab. Hold the voice call here. There is no CarPlay scene. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not Ian. Adults only: porn 18+, voice roleplay 21+, refuse minors.`;
+This turn is the native iPhone app, not the website tab. Hold the voice call here. There is no CarPlay scene. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not the user. Adults only: porn 18+, voice roleplay 21+, refuse minors.`;
 
 export async function mintXaiClientSecret(apiKey: string) {
   const upstream = await fetch(UPSTREAM, {
@@ -101,7 +101,7 @@ export function iosRealtimeTools() {
     {
       type: "function",
       name: "apple_music_connect",
-      description: "Connect Ian's Apple Music with official MusicKit. He may need to authorize on the phone.",
+      description: "Connect the user's Apple Music with official MusicKit. They may need to authorize on the phone.",
       parameters: { type: "object", properties: {} },
     },
     {
@@ -116,7 +116,7 @@ export function iosRealtimeTools() {
     {
       type: "function",
       name: "apple_music_library",
-      description: "Add a song to Ian's Apple Music library.",
+      description: "Add a song to the user's Apple Music library.",
       parameters: {
         type: "object",
         properties: { query: { type: "string" }, song_id: { type: "string" } },
@@ -139,7 +139,7 @@ export function iosRealtimeTools() {
       type: "function",
       name: "generate_image",
       description:
-        "Generate a photo with Grok Imagine when Ian asks for a picture, or after he agrees. Pass his full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
+        "Generate a photo with Grok Imagine when the user asks for a picture, or after they agree. Pass their full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
       parameters: {
         type: "object",
         properties: {
@@ -154,7 +154,7 @@ export function iosRealtimeTools() {
       type: "function",
       name: "generate_video",
       description:
-        "Generate a short video with Grok Imagine when Ian asks for a clip, or after he agrees. Pass his full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
+        "Generate a short video with Grok Imagine when the user asks for a clip, or after they agree. Pass their full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
       parameters: {
         type: "object",
         properties: {
@@ -308,6 +308,7 @@ export async function buildIosSession(input: {
     input.clientTimeZone ?? "",
     input.location ?? null,
     music,
+    userId,
   )}\n\n${PHONE_NOTE}`;
   return {
     userId,

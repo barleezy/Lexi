@@ -42,7 +42,7 @@ export function parseInboundPayload(body: {
 }) {
   const platform = parseChannelPlatform(body.platform ?? body.channel);
   const text = parseChannelText(body.text ?? body.message);
-  const userId = typeof body.userId === "string" && body.userId.trim() ? body.userId.trim() : "Ian";
+  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
   const sendReply = body.replyOnChannel !== false && body.replyOnChannel !== "false";
   return { platform, text, userId, sendReply };
 }

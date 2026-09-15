@@ -8,7 +8,7 @@ import {
 } from "@/lib/memory/store";
 import { formatSessionIdLine, parseSessionId } from "@/lib/memory/session-id";
 import { formatPriorChat } from "@/lib/memory/turns";
-import { resolveUserId } from "@/lib/memory/user";
+import { requireSignedInUserId } from "@/lib/memory/user";
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
 
 const UPSTREAM = "https://api.x.ai/v1/realtime/client_secrets";
@@ -115,7 +115,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "Could not start a voice session." }, { status: 502 });
   }
 
-  const userId = resolveUserId(request, requestedUserId);
+  const userId = requireSignedInUserId(request, requestedUserId);
+  if (!userId) {
+    return Response.json({ error: "Sign in first." }, { status: 401 });
+  }
   let decayState = "no active decay tags";
   let memoryInstructions = "";
   let priorChat = "";

@@ -81,6 +81,7 @@ expectEqual(memory["lexi.started"], "1", "started flag");
 clearVoiceSessionStore();
 expectEqual(readVoiceSessionStore().sessionId, null, "cleared session");
 expectEqual(readVoiceSessionStore().started, false, "cleared started");
+expectEqual(readVoiceSessionStore().userId, "", "cleared user is not Ian");
 
 expectEqual(PRIOR_TURN_CAP, 32, "prior turn cap");
 const turns = parseChatTurns([

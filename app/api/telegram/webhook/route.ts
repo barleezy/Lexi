@@ -1,5 +1,6 @@
 import { isTelegramConfigured } from "@/lib/channels/config";
 import { handleInboundText } from "@/lib/channels/inbound";
+import { IAN_USER_ID } from "@/lib/memory/user";
 import {
   isIanTelegramChat,
   parseTelegramUpdate,
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
   const result = await handleInboundText({
     platform: "telegram",
     text: update.text,
+    userId: IAN_USER_ID,
     sendReply: true,
   });
   if (!result.ok) {

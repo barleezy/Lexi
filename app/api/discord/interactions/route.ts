@@ -12,6 +12,7 @@ import {
   verifyDiscordSignature,
 } from "@/lib/channels/discord";
 import { handleInboundText } from "@/lib/channels/inbound";
+import { IAN_USER_ID } from "@/lib/memory/user";
 
 export const maxDuration = 60;
 
@@ -63,7 +64,7 @@ export async function POST(request: Request) {
   if (!isIanDiscordUser(interaction.userId)) {
     return Response.json({
       type: 4,
-      data: { content: "I only talk to Ian here.", flags: 64 },
+      data: { content: "This bot only talks to its admin account.", flags: 64 },
     });
   }
 
@@ -79,6 +80,7 @@ export async function POST(request: Request) {
     const result = await handleInboundText({
       platform: "discord",
       text,
+      userId: IAN_USER_ID,
       sendReply: false,
     });
     const reply = result.ok ? result.reply : result.error || "I could not reply.";

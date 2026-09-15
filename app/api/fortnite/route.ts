@@ -1,3 +1,4 @@
+import { requireAdminUserId } from "@/lib/memory/user";
 import {
   fortniteErrorMessage,
   fortniteErrorStatus,
@@ -24,11 +25,15 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let body: FortniteCommandInput;
+  let body: FortniteCommandInput & { userId?: unknown };
   try {
-    body = (await request.json()) as FortniteCommandInput;
+    body = (await request.json()) as FortniteCommandInput & { userId?: unknown };
   } catch {
     return Response.json({ error: "Invalid JSON", canPlayInGame: false }, { status: 400 });
+  }
+
+  if (!requireAdminUserId(request, typeof body.userId === "string" ? body.userId : null)) {
+    return Response.json({ error: "Fortnite companion tools are admin-only.", canPlayInGame: false }, { status: 403 });
   }
 
   try {
