@@ -8,6 +8,9 @@
  *
  * 48 kHz PCM stays. CarPlay/HFP resamples in the OS; dropping the wire rate
  * would not cut duplex latency and would lose consonants on the phone path.
+ *
+ * Input device selection lives in `car-mic.ts` — pick the car/HFP mic when
+ * this route is active. Safari has no CarPlay device API.
  */
 
 export type LiveVisionActivity = {

@@ -6,6 +6,7 @@ import {
   base64ToBytes,
   createAudioContext,
   floatToPcm16,
+  inspectLiveMicRoute,
   isPrimaryMicEnergy,
   micTrackUsable,
   openUserMic,
@@ -14,7 +15,9 @@ import {
   resumeAudioContext,
   startDestinationKeepAlive,
   updateMicNoiseFloor,
+  type CarMicRoute,
 } from "@/lib/voice/audio";
+import { listMediaAudioInputs, shouldDeferCarMicSwitch } from "@/lib/voice/car-mic";
 import {
   applyPlayAndRecordSession,
   claimMediaSession,
@@ -138,6 +141,7 @@ type SessionHandlers = {
   onToyControlRequest?: (pending: boolean) => void;
   onMicNeedsGesture?: () => void;
   onMicRecovered?: () => void;
+  onMicRoute?: (route: CarMicRoute) => void;
   onGeneratedMedia?: (item: GeneratedMediaItem) => void;
   onMusicState?: (state: MusicSessionState) => void;
   connectAppleMusic?: () => Promise<{ ok: boolean; connected?: boolean; error?: string }>;
@@ -993,6 +997,8 @@ export class VoiceSession {
   private micPendingReason: MicRecoveryReason | null = null;
   private micPermissionDenied = false;
   private micRouteChanged = false;
+  private carMicResolved = false;
+  private lastCarMicLog = "";
   private audioWasInterrupted = false;
   private clientTimeZone = detectClientTimeZone();
   private deviceLocation: DeviceLocationState | null = null;
@@ -1061,15 +1067,24 @@ export class VoiceSession {
 
     const micStarted = Date.now();
     try {
-      this.stream = await openUserMic();
+      applyPlayAndRecordSession();
+      const opened = await openUserMic(this.micOpenOptions());
+      this.stream = opened.stream;
       this.bindMic(this.stream);
       const track = this.stream.getAudioTracks()[0];
       const settings = track?.getSettings() ?? {};
+      this.carMicResolved = true;
+      this.publishMicRoute(opened.route, "mic.ok");
       this.logger.log("mic.ok", {
         ms: Date.now() - micStarted,
         label: track?.label ?? "",
         content_hint: track && "contentHint" in track ? track.contentHint : undefined,
         settings,
+        car: opened.route.kind,
+        car_reason: opened.route.reason,
+        car_prefer: opened.route.preferCar,
+        car_fallback: opened.route.fallback ?? "",
+        car_listed: opened.route.listed ?? 0,
       });
     } catch (error) {
       this.logger.error("mic", error, { ms: Date.now() - micStarted });
@@ -1114,7 +1129,9 @@ export class VoiceSession {
       audioContextState: () => this.ctx?.state,
       onRouteChange: () => {
         this.micRouteChanged = true;
+        this.carMicResolved = false;
         this.logger.log("mic.route", {});
+        void this.noteCarMicRoute("devicechange");
       },
       onCoexist: (state) => {
         if (state.interrupted) this.audioWasInterrupted = true;
@@ -1522,6 +1539,8 @@ export class VoiceSession {
     this.micPendingReason = null;
     this.micPermissionDenied = false;
     this.micRouteChanged = false;
+    this.carMicResolved = false;
+    this.lastCarMicLog = "";
     this.audioWasInterrupted = false;
     this.videoContextProvider = null;
     this.by = by;
@@ -1814,6 +1833,70 @@ export class VoiceSession {
     };
   }
 
+  private micOpenOptions() {
+    return {
+      ios: isIOSWebKit(),
+      voiceOnly:
+        this.voiceOnlyRoute ||
+        isInCarStyleRoute({
+          pageHidden: pageIsHidden() || this.pageHidden,
+          ios: isIOSWebKit(),
+          cameraActive: this.liveVision.camera,
+          screenActive: this.liveVision.screen,
+          watchActive: this.liveWatch,
+        }),
+    };
+  }
+
+  private publishMicRoute(route: CarMicRoute, kind: "mic.ok" | "mic.reacquire" | "mic.car.select" | "mic.car.defer") {
+    const signature = `${kind}:${route.kind}:${route.reason}:${route.label}:${route.fallback ?? ""}`;
+    if (signature === this.lastCarMicLog) return;
+    this.lastCarMicLog = signature;
+    this.logger.log(kind === "mic.ok" || kind === "mic.reacquire" ? "mic.car.select" : kind, {
+      kind: route.kind,
+      reason: route.reason,
+      label: route.label,
+      prefer: route.preferCar,
+      fallback: route.fallback ?? "",
+      listed: route.listed ?? 0,
+      constraint: route.constraint ?? "default",
+    });
+    this.handlers.onMicRoute?.(route);
+  }
+
+  private async noteCarMicRoute(source: string, hidden = pageIsHidden() || this.pageHidden) {
+    const inputs = hidden ? [] : await listMediaAudioInputs();
+    const inspect = inspectLiveMicRoute(this.stream?.getAudioTracks()[0], inputs, {
+      ...this.micOpenOptions(),
+      pageHidden: hidden,
+    });
+    if (hidden && shouldDeferCarMicSwitch({
+      pageHidden: true,
+      preferCar: inspect.preferCar,
+      currentKind: inspect.current.kind,
+      hasCarDevice: Boolean(inspect.pick.chosen),
+    })) {
+      this.publishMicRoute(inspect.route, inspect.current.kind === "car" ? "mic.car.select" : "mic.car.defer");
+      return;
+    }
+    if (inspect.current.kind === "car" || inspect.preferCar) {
+      this.publishMicRoute(inspect.route, "mic.car.select");
+    }
+    this.logger.log("mic.car.inspect", { source, hidden, kind: inspect.current.kind, replace: inspect.shouldReplace });
+  }
+
+  private async shouldSwitchToCarMic(track?: MediaStreamTrack) {
+    if (this.carMicResolved && !this.micRouteChanged) return false;
+    const inputs = await listMediaAudioInputs();
+    const inspect = inspectLiveMicRoute(track, inputs, this.micOpenOptions());
+    if (!inspect.shouldReplace) {
+      this.carMicResolved = true;
+      if (inspect.preferCar || inspect.current.kind === "car") this.publishMicRoute(inspect.route, "mic.car.select");
+      return false;
+    }
+    return true;
+  }
+
   private voiceAudioInterrupted() {
     return isVoiceAudioInterrupted({
       audioContextState: this.ctx?.state,
@@ -1845,12 +1928,13 @@ export class VoiceSession {
     if (shouldDeferMicReacquire({ pageHidden: pageIsHidden() || this.pageHidden, reason })) {
       this.micPendingReason = reason;
       this.logger.log("mic.defer", { reason, hidden: true });
+      void this.noteCarMicRoute(reason, true);
       return;
     }
 
     const track = this.stream?.getAudioTracks()[0];
     const needsReplace = micTrackNeedsReplace(track) || !micTrackUsable(track);
-    const force =
+    let force =
       opts.force ||
       shouldForceMicReacquire({
         reason,
@@ -1861,11 +1945,15 @@ export class VoiceSession {
       });
 
     if (!force && micTrackUsable(track)) {
-      // Do not applyConstraints on every iOS keepalive tick — that glitches
-      // HFP/CarPlay capture and resets server VAD.
-      this.micPendingReason = null;
-      this.handlers.onMicRecovered?.();
-      return;
+      const switchToCar = await this.shouldSwitchToCarMic(track);
+      if (!switchToCar) {
+        // Do not applyConstraints on every iOS keepalive tick — that glitches
+        // HFP/CarPlay capture and resets server VAD.
+        this.micPendingReason = null;
+        this.handlers.onMicRecovered?.();
+        return;
+      }
+      force = true;
     }
 
     if (
@@ -1891,7 +1979,9 @@ export class VoiceSession {
     this.micInFlight = true;
     this.lastMicAttemptMs = Date.now();
     try {
-      const next = await openUserMic();
+      applyPlayAndRecordSession();
+      const opened = await openUserMic(this.micOpenOptions());
+      const next = opened.stream;
       if (this.stopped) {
         next.getTracks().forEach((item) => item.stop());
         return;
@@ -1906,12 +1996,18 @@ export class VoiceSession {
       }
       this.micPermissionDenied = false;
       this.micRouteChanged = false;
+      this.carMicResolved = true;
       this.audioWasInterrupted = false;
       this.micPendingReason = null;
+      this.publishMicRoute(opened.route, "mic.reacquire");
       this.logger.log("mic.reacquire", {
         reason,
         label: next.getAudioTracks()[0]?.label ?? "",
         state: next.getAudioTracks()[0]?.readyState,
+        car: opened.route.kind,
+        car_reason: opened.route.reason,
+        car_prefer: opened.route.preferCar,
+        car_fallback: opened.route.fallback ?? "",
       });
       this.handlers.onMicRecovered?.();
     } catch (error) {
