@@ -114,8 +114,9 @@ export function buildVideoContextInput(frames: VideoContextFrame[], question: st
   content.push({
     type: "input_text",
     text:
-      question.trim() ||
-      "Describe what is happening on screen right now. Name visible people, objects, text, setting, and action. Two or three short sentences.",
+      (question.trim() ||
+        "Describe what is happening on screen right now. Name visible people, objects, text, setting, and action. Two or three short sentences.") +
+      " Adults-only porn/media: if anyone on screen looks under 18, or is a minor, refuse and stop. Voice roleplay age rules are separate.",
   });
   return [
     {

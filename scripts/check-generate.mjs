@@ -1,8 +1,10 @@
 import {
   GENERATE_REFUSAL,
+  PORN_MIN_AGE,
+  ROLEPLAY_MIN_AGE,
   looksLikeGenerateRequest,
   readGeneratePrompt,
-  refuseUnder21Prompt,
+  refusePornSubject,
 } from "../lib/generate/safety.ts";
 import {
   DEFAULT_IMAGE_MODEL,
@@ -40,20 +42,24 @@ expect(
   "video status URL",
 );
 
-expect(refuseUnder21Prompt("").ok === false, "empty prompt refused");
-expect(refuseUnder21Prompt("Lexi in a black dress, looking at the camera").ok === true, "adult portrait allowed");
-expect(refuseUnder21Prompt("explicit adult sex, two consenting adults").ok === true, "adult sex allowed");
-expect(refuseUnder21Prompt("hey baby, come here").ok === true, "baby as endearment allowed");
-expect(refuseUnder21Prompt("a 17 year old girl").ok === false, "17 year old refused");
-expect(refuseUnder21Prompt("20-year-old boy").ok === false, "20 year old refused");
-expect(refuseUnder21Prompt("21 year old woman").ok === true, "21 year old allowed");
-expect(refuseUnder21Prompt("a child sitting on a bench").ok === false, "child refused");
-expect(refuseUnder21Prompt("teen in lingerie").ok === false, "teen refused");
-expect(refuseUnder21Prompt("kidney-shaped pool at dusk").ok === true, "kidney is not kid");
-expect(refuseUnder21Prompt("baby girl in a crib").ok === false, "infant subject refused");
-expect(refuseUnder21Prompt("looks like a child").ok === false, "looks like a child refused");
-expect(refuseUnder21Prompt("high school locker room").ok === false, "high school refused");
-expect(refuseUnder21Prompt("a teenager").error === GENERATE_REFUSAL, "refusal copy");
+expect(PORN_MIN_AGE === 18, "porn media cutoff is 18");
+expect(ROLEPLAY_MIN_AGE === 21, "voice roleplay cutoff stays 21");
+expect(refusePornSubject("").ok === false, "empty prompt refused");
+expect(refusePornSubject("Lexi in a black dress, looking at the camera").ok === true, "adult portrait allowed");
+expect(refusePornSubject("explicit adult sex, two consenting adults").ok === true, "adult sex allowed");
+expect(refusePornSubject("hey baby, come here").ok === true, "baby as endearment allowed");
+expect(refusePornSubject("a 17 year old girl").ok === false, "17 year old refused");
+expect(refusePornSubject("20-year-old boy").ok === true, "20 year old allowed for porn/media");
+expect(refusePornSubject("18 year old woman").ok === true, "18 year old allowed");
+expect(refusePornSubject("21 year old woman").ok === true, "21 year old allowed");
+expect(refusePornSubject("a child sitting on a bench").ok === false, "child refused");
+expect(refusePornSubject("teen in lingerie").ok === false, "teen refused");
+expect(refusePornSubject("kidney-shaped pool at dusk").ok === true, "kidney is not kid");
+expect(refusePornSubject("baby girl in a crib").ok === false, "infant subject refused");
+expect(refusePornSubject("looks like a child").ok === false, "looks like a child refused");
+expect(refusePornSubject("high school locker room").ok === false, "high school refused");
+expect(refusePornSubject("a teenager").error === GENERATE_REFUSAL, "refusal copy");
+expect(GENERATE_REFUSAL.includes("under 18"), "generate refusal says 18");
 
 expect(looksLikeGenerateRequest("send me a pic", "image") === true, "pic request");
 expect(looksLikeGenerateRequest("make a video of that", "video") === true, "video request");

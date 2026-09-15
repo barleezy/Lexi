@@ -24,6 +24,7 @@ import {
   captureVideoShot,
   isPageLikeVideoUrl,
   isVideoFile,
+  directVideoHref,
   playableVideoSrc,
   snapshotFromFrames,
   snapshotFromVideo,
@@ -34,6 +35,7 @@ import {
   watchPlaysInHomeTab,
   type VideoSourceKind,
 } from "@/lib/voice/video";
+import { isAdultPageUrl } from "@/lib/voice/watch-adult";
 import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
   canShareScreen,
@@ -46,6 +48,14 @@ import {
   type VisionSource,
 } from "@/lib/voice/vision";
 import { openWatchChannel, watchTabHref } from "@/lib/voice/watch-channel";
+import {
+  GEO_WATCH_OPTIONS,
+  locationFromPosition,
+  placeFromCoords,
+  readGeoPermission,
+  shouldPublishLocation,
+  type DeviceLocationState,
+} from "@/lib/voice/location";
 
 const HINTS: Record<VoicePhase, string> = {
   idle: "Talk to Lexi",
@@ -216,6 +226,36 @@ function ComposerButton({
   return <StrokedWaveformIcon />;
 }
 
+function LiveClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const clock = now.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const spoken = now.toLocaleString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return (
+    <time
+      dateTime={now.toISOString()}
+      title={spoken}
+      aria-label={spoken}
+      className="shrink-0 tabular-nums text-[11px] text-zinc-500"
+    >
+      {clock}
+    </time>
+  );
+}
+
 export function VoiceHome() {
   const sessionRef = useRef<VoiceSession | null>(null);
   const [phase, setPhase] = useState<VoicePhase>("idle");
@@ -260,9 +300,15 @@ export function VoiceHome() {
   const [micResume, setMicResume] = useState(false);
   const [generated, setGenerated] = useState<GeneratedMediaItem[]>([]);
   const [channelNames, setChannelNames] = useState<string[]>([]);
+  const [locationOn, setLocationOn] = useState(false);
+  const [locationHint, setLocationHint] = useState<string | null>(null);
+  const locationWatch = useRef<number | null>(null);
+  const lastLocation = useRef<DeviceLocationState | null>(null);
+  const lastLocationPublish = useRef(0);
   const videoPolls = useRef(new Set<string>());
   const generatedStills = useRef(new Set<string>());
   const videoSrcRef = useRef<string | null>(null);
+  const videoProxyTried = useRef(false);
   const watchTabActiveRef = useRef(false);
   const watchPlayingRef = useRef(false);
   const watchTimeRef = useRef(0);
@@ -386,6 +432,10 @@ export function VoiceHome() {
       if (videoObjectUrl.current) URL.revokeObjectURL(videoObjectUrl.current);
       visionBatcher.current.dispose();
       channel?.close();
+      if (locationWatch.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(locationWatch.current);
+      }
+      locationWatch.current = null;
       sessionRef.current?.stop();
     };
   }, []);
@@ -646,6 +696,7 @@ export function VoiceHome() {
     const hadVideo = Boolean(videoMeta.current.source);
     videoMeta.current = { title: "", source: null };
     videoSrcRef.current = null;
+    videoProxyTried.current = false;
     setVideoSrc(null);
     setVideoTitle("");
     setVideoHint(null);
@@ -672,7 +723,11 @@ export function VoiceHome() {
       setVideoHint("YouTube will not play here. Open the watch tab and upload a file, or paste a direct video URL.");
       return;
     }
-    const src = playableVideoSrc(trimmed);
+    if (isAdultPageUrl(trimmed)) {
+      setVideoHint("Adult site pages play in the watch tab so Lexi can see frames. Open watch tab.");
+      return;
+    }
+    const src = directVideoHref(trimmed);
     if (!src) {
       setVideoHint("Paste a direct video URL.");
       return;
@@ -681,6 +736,7 @@ export function VoiceHome() {
       setVideoHint("This format plays in the watch tab. Open watch tab to play it.");
       return;
     }
+    videoProxyTried.current = false;
     loadVideoSrc(src, titleFromVideoUrl(trimmed), "url");
   }
 
@@ -700,6 +756,7 @@ export function VoiceHome() {
     }
     const url = URL.createObjectURL(file);
     videoObjectUrl.current = url;
+    videoProxyTried.current = false;
     loadVideoSrc(url, file.name, "file");
     return true;
   }
@@ -796,6 +853,85 @@ export function VoiceHome() {
     setMicResume(false);
   }
 
+  function stopLocationWatch() {
+    if (locationWatch.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(locationWatch.current);
+    }
+    locationWatch.current = null;
+    setLocationOn(false);
+  }
+
+  function publishLocation(next: DeviceLocationState, force = false) {
+    if (
+      !force &&
+      !shouldPublishLocation(lastLocation.current, next, lastLocationPublish.current)
+    ) {
+      return;
+    }
+    lastLocation.current = next;
+    lastLocationPublish.current = Date.now();
+    sessionRef.current?.setDeviceLocation(next);
+  }
+
+  async function applyGeoPosition(position: GeolocationPosition, force = false) {
+    const place = await placeFromCoords(position.coords.latitude, position.coords.longitude);
+    publishLocation(locationFromPosition(position.coords, place), force);
+    setLocationOn(true);
+    setLocationHint(null);
+  }
+
+  function startLocationWatch(forcePrompt: boolean) {
+    if (!navigator.geolocation) {
+      setLocationHint("Location is not available in this browser.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        void applyGeoPosition(position, true);
+        if (locationWatch.current != null) return;
+        locationWatch.current = navigator.geolocation.watchPosition(
+          (next) => {
+            void applyGeoPosition(next);
+          },
+          (error) => {
+            if (error.code === error.PERMISSION_DENIED) {
+              stopLocationWatch();
+              lastLocation.current = null;
+              sessionRef.current?.setDeviceLocation(null);
+              setLocationHint("Location is blocked in the browser.");
+              return;
+            }
+            setLocationHint(error.message || "Could not update location.");
+          },
+          GEO_WATCH_OPTIONS,
+        );
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          stopLocationWatch();
+          lastLocation.current = null;
+          sessionRef.current?.setDeviceLocation(null);
+          setLocationHint("Location is blocked in the browser.");
+          return;
+        }
+        if (!forcePrompt) return;
+        setLocationHint(error.message || "Could not read location.");
+      },
+      GEO_WATCH_OPTIONS,
+    );
+  }
+
+  function toggleLocation() {
+    if (locationOn) {
+      stopLocationWatch();
+      lastLocation.current = null;
+      sessionRef.current?.setDeviceLocation(null);
+      setLocationHint(null);
+      return;
+    }
+    startLocationWatch(true);
+  }
+
   async function startSession() {
     const session = new VoiceSession({
       onPhase: setPhase,
@@ -813,7 +949,14 @@ export function VoiceHome() {
       },
     });
     attach(session);
+    if (lastLocation.current) session.setDeviceLocation(lastLocation.current);
     await session.start();
+    const permission = await readGeoPermission();
+    if (locationOn || lastLocation.current || permission === "granted") {
+      startLocationWatch(false);
+    } else if (permission !== "denied") {
+      startLocationWatch(true);
+    }
     return session;
   }
 
@@ -822,6 +965,7 @@ export function VoiceHome() {
   async function stopSession() {
     const persisted = readVoiceSessionStore();
     releaseVision(undefined, true);
+    stopLocationWatch();
     sessionRef.current?.stop();
     clearSession();
     writeVoiceSessionStore({ sessionId: null, started: false });
@@ -984,6 +1128,18 @@ export function VoiceHome() {
                   }
                 }}
                 onError={() => {
+                  const raw = videoDraft.trim();
+                  const proxy = playableVideoSrc(raw);
+                  if (
+                    videoMeta.current.source === "url" &&
+                    !videoProxyTried.current &&
+                    proxy &&
+                    proxy !== videoSrcRef.current
+                  ) {
+                    videoProxyTried.current = true;
+                    loadVideoSrc(proxy, titleFromVideoUrl(raw), "url");
+                    return;
+                  }
                   setVideoHint(
                     "Could not play that video here. Open the watch tab for avi/flv/wmv/mpeg, or use a direct mp4/webm URL.",
                   );
@@ -1215,39 +1371,56 @@ export function VoiceHome() {
               ))}
             </ul>
           ) : null}
-          {live ? (
-            <div className="flex items-center justify-between gap-2 px-1">
-              {micResume ? (
-                <button
-                  type="button"
-                  onClick={() => void sessionRef.current?.reclaim()}
-                  className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
-                >
-                  Tap to resume mic
-                </button>
-              ) : (
-                <p className="text-[11px] text-zinc-500">
-                  {gameHasFocus
-                    ? "Still live — talk while Fortnite is up."
-                    : "Stays live if you switch to Fortnite, change tabs, or open the watch tab."}
-                </p>
-              )}
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <LiveClock />
+              {live ? (
+                micResume ? (
+                  <button
+                    type="button"
+                    onClick={() => void sessionRef.current?.reclaim()}
+                    className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Tap to resume mic
+                  </button>
+                ) : (
+                  <p className="truncate text-[11px] text-zinc-500">
+                    {gameHasFocus
+                      ? "Still live — talk while Fortnite is up."
+                      : "Stays live if you switch to Fortnite, change tabs, or open the watch tab."}
+                  </p>
+                )
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                onClick={() => {
-                  const session = sessionRef.current;
-                  if (!session) return;
-                  if (toyControl) {
-                    session.setUserToyControl(false);
-                    return;
-                  }
-                  session.sendText("Give Lexi toy control");
-                }}
-                className="shrink-0 rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                onClick={toggleLocation}
+                className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
               >
-                {toyControl ? "Revoke" : "Give Lexi toy control"}
+                {locationOn ? "Location on" : "Share location"}
               </button>
+              {live ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const session = sessionRef.current;
+                    if (!session) return;
+                    if (toyControl) {
+                      session.setUserToyControl(false);
+                      return;
+                    }
+                    session.sendText("Give Lexi toy control");
+                  }}
+                  className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  {toyControl ? "Revoke" : "Give Lexi toy control"}
+                </button>
+              ) : null}
             </div>
+          </div>
+          {locationHint ? (
+            <p className="px-1 text-[11px] text-zinc-500">{locationHint}</p>
           ) : null}
         <form
           onSubmit={(event) => void onComposerSubmit(event)}

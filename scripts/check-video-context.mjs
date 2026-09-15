@@ -39,6 +39,9 @@ if (request.model !== "grok-4.6") throw new Error("request model");
 if (request.store !== false) throw new Error("must not store image history");
 if (request.reasoning?.effort !== "none") throw new Error("reasoning should stay off for voice turns");
 if (request.search_parameters?.mode !== "off") throw new Error("frame analysis must not web-search");
+if (!String(request.input[0].content.at(-1)?.text ?? "").includes("under 18")) {
+  throw new Error("video context porn frames refuse under 18");
+}
 if (!Array.isArray(request.input[0].content)) throw new Error("input content");
 if (request.input[0].content[0].type !== "input_image") throw new Error("input_image missing");
 

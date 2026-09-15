@@ -25,9 +25,11 @@ async function getFfmpeg(onStatus?: (message: string) => void) {
   }
   try {
     return await loading;
-  } catch (error) {
+  } catch {
     loading = null;
-    throw error;
+    throw new Error(
+      "Could not load the video converter. Try an mp4 or webm, or upload a smaller file.",
+    );
   }
 }
 
@@ -40,9 +42,22 @@ async function readMp4(ffmpeg: FFmpeg) {
   return new Blob([copy], { type: "video/mp4" });
 }
 
+async function readFetchError(response: Response) {
+  const type = response.headers.get("content-type") ?? "";
+  if (type.includes("application/json")) {
+    try {
+      const body = (await response.json()) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.trim()) return body.error;
+    } catch {
+      // Fall through to the status text.
+    }
+  }
+  return "Could not load the video.";
+}
+
 export async function fetchWatchBlob(url: string) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error("Could not load the video.");
+  if (!response.ok) throw new Error(await readFetchError(response));
   const length = Number(response.headers.get("content-length") || 0);
   const lengthError = watchSizeError(length);
   if (lengthError) throw new Error(lengthError);
@@ -50,6 +65,25 @@ export async function fetchWatchBlob(url: string) {
   const sizeError = watchSizeError(blob.size);
   if (sizeError) throw new Error(sizeError);
   return blob;
+}
+
+export async function fetchWatchSource(raw: string, playable?: string) {
+  const tried = new Set<string>();
+  let lastError: Error | null = null;
+  for (const url of [raw.trim(), playable?.trim() ?? ""]) {
+    if (!url || tried.has(url)) continue;
+    tried.add(url);
+    try {
+      return await fetchWatchBlob(url);
+    } catch (caught) {
+      lastError = caught instanceof Error ? caught : new Error("Could not load the video.");
+    }
+  }
+  throw lastError ?? new Error("Could not load the video.");
+}
+
+export async function resolveWatchMediaUrl(raw: string, playable?: string) {
+  return URL.createObjectURL(await fetchWatchSource(raw, playable));
 }
 
 export async function remuxWatchVideo(

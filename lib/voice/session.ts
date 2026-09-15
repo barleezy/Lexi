@@ -67,6 +67,16 @@ import {
 import type { GeneratedMediaItem } from "@/lib/generate/media";
 import { readGeneratePrompt } from "@/lib/generate/safety";
 import {
+  CLOCK_REFRESH_MS,
+  detectClientTimeZone,
+  formatCurrentTimeLine,
+  resolveVoiceTimeZone,
+} from "@/lib/voice/clock";
+import {
+  formatDeviceLocationLine,
+  type DeviceLocationState,
+} from "@/lib/voice/location";
+import {
   DEFAULT_CHANNEL_STATE,
   DEFAULT_FORTNITE_STATE,
   DEFAULT_TOYS_STATE,
@@ -449,7 +459,7 @@ const GENERATE_IMAGE_TOOL = {
   type: "function",
   name: "generate_image",
   description:
-    "Generate a photo with Grok Imagine when Ian asks for a picture, or after he agrees to one you offered. Pass his full request as prompt. Adults only — refuse anyone who looks under 21. Do not call this unsolicited.",
+    "Generate a photo with Grok Imagine when Ian asks for a picture, or after he agrees to one you offered. Pass his full request as prompt. Adults only — refuse anyone who looks under 18. Do not call this unsolicited.",
   parameters: {
     type: "object",
     properties: {
@@ -493,7 +503,7 @@ const GENERATE_VIDEO_TOOL = {
   type: "function",
   name: "generate_video",
   description:
-    "Generate a short video with Grok Imagine when Ian asks for a clip, or after he agrees. Pass his full request as prompt. Adults only — refuse anyone who looks under 21. Video can take a minute. Do not call this unsolicited.",
+    "Generate a short video with Grok Imagine when Ian asks for a clip, or after he agrees. Pass his full request as prompt. Adults only — refuse anyone who looks under 18. Video can take a minute. Do not call this unsolicited.",
   parameters: {
     type: "object",
     properties: {
@@ -692,12 +702,23 @@ function buildSessionUpdate(
   toys: ToysSessionState = DEFAULT_TOYS_STATE,
   fortnite: FortniteSessionState = DEFAULT_FORTNITE_STATE,
   channels: ChannelSessionState = DEFAULT_CHANNEL_STATE,
+  clientTimeZone = "",
+  location: DeviceLocationState | null = null,
 ) {
   return {
     type: "session.update",
     session: {
       voice: "aria",
-      instructions: buildInstructions(memoryInstructions, priorChat, sessionId, toys, fortnite, channels),
+      instructions: buildInstructions(
+        memoryInstructions,
+        priorChat,
+        sessionId,
+        toys,
+        fortnite,
+        channels,
+        clientTimeZone,
+        location,
+      ),
       reasoning: { effort: "none" },
       turn_detection: buildTurnDetection(),
       // web_search is server-side; client tools include memory, video context, generate, toys, Fortnite, and channels.
@@ -820,6 +841,10 @@ export class VoiceSession {
   private fortniteState: FortniteSessionState = { ...DEFAULT_FORTNITE_STATE };
   private fortniteStateChanged = false;
   private channelState: ChannelSessionState = { ...DEFAULT_CHANNEL_STATE };
+  private clientTimeZone = detectClientTimeZone();
+  private deviceLocation: DeviceLocationState | null = null;
+  private lastClockLine = "";
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
   private keepAliveStop: (() => void) | null = null;
   private destKeepAliveStop: (() => void) | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -929,6 +954,15 @@ export class VoiceSession {
     this.fortniteState = await fortnitePromise;
     this.channelState = await channelsPromise;
     this.openWebSocket(token, false);
+    this.startClockRefresh();
+  }
+
+  setDeviceLocation(location: DeviceLocationState | null) {
+    if (formatDeviceLocationLine(location) === formatDeviceLocationLine(this.deviceLocation)) {
+      return;
+    }
+    this.deviceLocation = location;
+    this.pushSilentSessionUpdate();
   }
 
   sendText(text: string) {
@@ -1203,6 +1237,7 @@ export class VoiceSession {
   stop(by: "client" | "error" = "client") {
     if (this.stopped) return;
     this.stopped = true;
+    this.stopClockRefresh();
     this.pendingVisionNotices = [];
     this.pendingVideoNotices = [];
     this.pendingAttachments = [];
@@ -1601,6 +1636,7 @@ export class VoiceSession {
       }
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
+        this.refreshClock();
         this.setPhase("thinking");
         break;
       case "input_audio_buffer.committed": {
@@ -1996,7 +2032,39 @@ export class VoiceSession {
       },
       this.fortniteState,
       this.channelState,
+      this.clientTimeZone,
+      this.deviceLocation,
     );
+  }
+
+  private voiceTimeZone() {
+    return resolveVoiceTimeZone(this.memoryInstructions, this.clientTimeZone);
+  }
+
+  private startClockRefresh() {
+    this.stopClockRefresh();
+    this.lastClockLine = formatCurrentTimeLine(this.voiceTimeZone());
+    this.clockTimer = setInterval(() => this.refreshClock(), CLOCK_REFRESH_MS);
+  }
+
+  private stopClockRefresh() {
+    if (this.clockTimer) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
+  }
+
+  private refreshClock(force = false) {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const line = formatCurrentTimeLine(this.voiceTimeZone());
+    if (!force && line === this.lastClockLine) return;
+    this.lastClockLine = line;
+    this.pushSilentSessionUpdate();
+  }
+
+  private pushSilentSessionUpdate() {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.send(this.sessionUpdate(), true);
   }
 
   private applyUserToyControl(granted: boolean) {
@@ -2509,6 +2577,7 @@ export class VoiceSession {
 
   private emitText(text: string) {
     this.decaySentForTurn = false;
+    this.refreshClock();
     this.sendCachedDecay();
     this.send({
       type: "conversation.item.create",
@@ -2597,6 +2666,7 @@ export class VoiceSession {
     if (!queued.length && !attachments.length) return false;
     this.logger.log("text.flush", { messages: queued.length, attachments: attachments.length });
     this.decaySentForTurn = false;
+    this.refreshClock();
     this.sendCachedDecay();
     for (const item of attachments) this.emitAttachment(item);
     for (const text of queued) {

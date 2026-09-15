@@ -1,4 +1,5 @@
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
+import { refusePornSubject } from "@/lib/generate/safety";
 import {
   VIDEO_CONTEXT_ENDPOINT,
   VIDEO_CONTEXT_MODEL,
@@ -65,6 +66,10 @@ export async function POST(request: Request) {
 
   const question = typeof body.question === "string" ? body.question : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
+  const titleSafety = title ? refusePornSubject(title) : { ok: true as const };
+  if (!titleSafety.ok) {
+    return Response.json({ error: titleSafety.error }, { status: 400 });
+  }
   const currentTime = typeof body.currentTime === "number" ? body.currentTime : frames[frames.length - 1]?.timeSec;
   const duration = typeof body.duration === "number" ? body.duration : null;
   const playing = body.playing === true;

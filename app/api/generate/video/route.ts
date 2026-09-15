@@ -9,7 +9,7 @@ import {
   videoModelFromEnv,
   videoStatusUrl,
 } from "@/lib/generate/media";
-import { refuseUnder21Prompt } from "@/lib/generate/safety";
+import { refusePornSubject } from "@/lib/generate/safety";
 
 export const maxDuration = 60;
 
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
   }
 
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const safety = refuseUnder21Prompt(prompt);
+  const safety = refusePornSubject(prompt);
   if (!safety.ok) {
     return Response.json({ error: safety.error }, { status: 400 });
   }

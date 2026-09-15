@@ -1,6 +1,7 @@
 export const WATCH_VIDEO_MAX_BYTES = 1024 * 1024 * 1024;
 
 export const VIDEO_ACCEPT = [
+  "video/*",
   "video/mp4",
   "video/webm",
   "video/ogg",
@@ -61,6 +62,26 @@ const REMUX_MIME = new Set([
   "video/matroska",
 ]);
 
+export function directVideoHref(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (
+    trimmed.startsWith("blob:") ||
+    trimmed.startsWith("data:") ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith(".")
+  ) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.href;
+  } catch {
+    return "";
+  }
+}
+
 export function videoExtension(nameOrUrl: string) {
   const trimmed = nameOrUrl.trim();
   if (!trimmed) return "";
@@ -102,8 +123,6 @@ export function watchPlaysInHomeTab(file: { name: string; type?: string }) {
 }
 
 export function watchShouldRemuxOnNativeError(file: { name: string; type?: string }) {
-  const ext = videoExtension(file.name);
-  if (ext === "mp4" || ext === "webm") return false;
   return watchPlaybackKind(file) !== "mpegts";
 }
 

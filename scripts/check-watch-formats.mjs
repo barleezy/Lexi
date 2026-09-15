@@ -10,8 +10,15 @@ import {
   watchPlaysInHomeTab,
   watchShouldRemuxOnNativeError,
   watchSizeError,
+  directVideoHref,
 } from "../lib/voice/watch-formats.ts";
 import { looksLikeVideoContentType } from "../lib/voice/video-proxy.ts";
+import {
+  adultEmbedUrl,
+  extractAdultMediaFromHtml,
+  isAdultPageUrl,
+  proxiedWatchMedia,
+} from "../lib/voice/watch-adult.ts";
 
 function expect(condition, label) {
   if (!condition) throw new Error(label);
@@ -65,7 +72,7 @@ expect(watchPlaysInHomeTab({ name: "a.mp4", type: "" }), "mp4 stays on home");
 expect(!watchPlaysInHomeTab({ name: "a.avi", type: "" }), "avi goes to watch tab");
 expect(!watchPlaysInHomeTab({ name: "a.flv", type: "" }), "flv goes to watch tab");
 
-expect(!watchShouldRemuxOnNativeError({ name: "a.mp4", type: "" }), "mp4 error stays native");
+expect(watchShouldRemuxOnNativeError({ name: "a.mp4", type: "" }), "mp4 can remux on decode error");
 expect(watchShouldRemuxOnNativeError({ name: "a.mov", type: "" }), "mov can remux on error");
 expect(!watchShouldRemuxOnNativeError({ name: "a.flv", type: "" }), "flv uses mpegts first");
 expect(watchShouldRemuxOnNativeError({ name: "https://cdn.example/file", type: "" }), "unknown url remux on error");
@@ -83,6 +90,71 @@ expect(looksLikeVideoContentType("video/x-msvideo"), "avi mime");
 expect(looksLikeVideoContentType("application/x-matroska"), "mkv app mime");
 expect(looksLikeVideoContentType("application/vnd.ms-asf"), "wmv asf mime");
 expect(looksLikeVideoContentType("application/x-flv"), "flv app mime");
+expect(looksLikeVideoContentType("binary/octet-stream"), "binary octet");
+expect(looksLikeVideoContentType("text/plain", "https://cdn.example/clip.mp4"), "plain mp4 allowed");
+expect(!looksLikeVideoContentType("text/plain", "https://cdn.example/notes.txt"), "plain text rejected");
 expect(!looksLikeVideoContentType("text/html"), "html rejected");
+
+expect(VIDEO_ACCEPT.startsWith("video/*"), "accept includes video/*");
+expectEqual(directVideoHref("https://cdn.example/a.mp4"), "https://cdn.example/a.mp4", "direct href");
+expectEqual(directVideoHref("not a url"), "", "invalid url");
+expectEqual(directVideoHref("https://cdn.example/a.mp4?dl=1"), "https://cdn.example/a.mp4?dl=1", "keeps query");
+
+expect(isAdultPageUrl("https://www.pornhub.com/view_video.php?viewkey=phabc"), "pornhub page");
+expect(isAdultPageUrl("https://www.xvideos.com/video12345/clip"), "xvideos page");
+expect(isAdultPageUrl("https://www.xnxx.com/video-abc12/clip"), "xnxx page");
+expect(isAdultPageUrl("https://xhamster.com/videos/clip-99"), "xhamster page");
+expect(isAdultPageUrl("https://www.redtube.com/12345"), "redtube host");
+expect(isAdultPageUrl("https://spankbang.com/ab12/video/clip"), "spankbang page");
+expect(isAdultPageUrl("https://www.ashemaletube.com/videos/12345/clip/"), "ashemaletube www");
+expect(isAdultPageUrl("https://ashemaletube.com/videos/12345/clip/"), "ashemaletube apex");
+expect(isAdultPageUrl("https://m.ashemaletube.com/videos/12345/clip/"), "ashemaletube mobile");
+expectEqual(
+  adultEmbedUrl("https://www.ashemaletube.com/videos/12345/clip/"),
+  "https://www.ashemaletube.com/embed/12345",
+  "ashemaletube embed",
+);
+expect(isAdultPageUrl("https://www.transangels.com/en/video/clip/12345"), "transangels www");
+expect(isAdultPageUrl("https://transangels.com/en/video/clip/12345"), "transangels apex");
+expect(isAdultPageUrl("https://m.transangels.com/en/video/clip/12345"), "transangels mobile");
+expect(isAdultPageUrl("https://www.adulttime.com/en/video/clip/12345"), "adulttime player host");
+expect(isAdultPageUrl("https://embed.adulttime.com/en/embed/12345"), "adulttime embed host");
+expectEqual(
+  adultEmbedUrl("https://www.transangels.com/en/video/clip/12345"),
+  "https://www.transangels.com/en/embed/12345",
+  "transangels embed",
+);
+expect(isAdultPageUrl("https://www.thegay.com/video?id=12345"), "thegay www");
+expect(isAdultPageUrl("https://thegay.com/videos/12345"), "thegay apex");
+expect(isAdultPageUrl("https://m.thegay.com/videos/12345"), "thegay mobile");
+expectEqual(
+  adultEmbedUrl("https://www.thegay.com/video?id=12345"),
+  "https://www.thegay.com/embed/12345",
+  "thegay embed",
+);
+expect(!isAdultPageUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "youtube is not adult resolve");
+expect(!isAdultPageUrl("https://vimeo.com/123"), "vimeo is not adult resolve");
+expectEqual(
+  adultEmbedUrl("https://www.pornhub.com/view_video.php?viewkey=phabc"),
+  "https://www.pornhub.com/embed/phabc",
+  "pornhub embed",
+);
+expect(
+  proxiedWatchMedia("https://cdn.example/a.mp4", "https://www.pornhub.com/view_video.php?viewkey=phabc").includes(
+    "referer=",
+  ),
+  "proxy keeps page referer",
+);
+
+const extracted = extractAdultMediaFromHtml(
+  `<title>Adult clip</title><script>html5player.setVideoUrlHigh('https://cdn.example/a.mp4');</script>`,
+  "https://www.xvideos.com/video123/clip",
+);
+expectEqual(extracted.title, "Adult clip", "title from page");
+expectEqual(extracted.media?.href, "https://cdn.example/a.mp4", "xvideos mp4");
+expectEqual(extracted.embedUrl, "https://www.xvideos.com/embedframe/123", "xvideos embed");
+
+expect(looksLikeVideoContentType("application/vnd.apple.mpegurl"), "hls mime");
+expect(looksLikeVideoContentType("text/plain", "https://cdn.example/a.m3u8"), "plain m3u8");
 
 console.log("watch format checks ok");

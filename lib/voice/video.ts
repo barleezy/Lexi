@@ -1,8 +1,10 @@
 import { captureJpegDataUrl } from "@/lib/voice/vision";
+import { directVideoHref } from "@/lib/voice/watch-formats";
 
 export {
   VIDEO_ACCEPT,
   WATCH_VIDEO_MAX_BYTES,
+  directVideoHref,
   isVideoFile,
   watchPlaybackKind,
   watchPlaysInHomeTab,
@@ -86,6 +88,14 @@ export function playableVideoSrc(raw: string) {
   } catch {
     return trimmed;
   }
+}
+
+export function nextWatchPlaybackSrc(raw: string, failedSrc: string) {
+  const direct = directVideoHref(raw);
+  const proxy = playableVideoSrc(raw);
+  if (!failedSrc) return direct;
+  if (direct && failedSrc === direct && proxy && proxy !== direct) return proxy;
+  return "";
 }
 
 export class VideoFrameBuffer {

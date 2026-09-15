@@ -55,15 +55,38 @@ export function isRedirectStatus(status: number) {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-export function looksLikeVideoContentType(value: string | null | undefined) {
+export function looksLikeVideoContentType(value: string | null | undefined, sourceUrl?: string) {
   const type = (value ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
   if (!type) return true;
   if (type.startsWith("video/")) return true;
-  if (type === "application/octet-stream") return true;
+  if (type === "application/octet-stream" || type === "binary/octet-stream") return true;
   if (type === "application/mp4") return true;
   if (type === "application/vnd.ms-asf" || type === "application/x-ms-asf") return true;
   if (type === "application/x-matroska") return true;
   if (type === "application/x-flv") return true;
   if (type === "application/mpeg" || type === "application/mp2t") return true;
+  if (type.includes("mpegurl") || type === "application/x-mpegurl") return true;
+  if (type === "text/plain" && sourceUrl) {
+    const ext = (sourceUrl.split("#")[0] ?? sourceUrl).split("?")[0]?.split(".").pop()?.toLowerCase() ?? "";
+    return Boolean(
+      ext &&
+        [
+          "mp4",
+          "webm",
+          "mov",
+          "m4v",
+          "mkv",
+          "avi",
+          "flv",
+          "ts",
+          "m2ts",
+          "mts",
+          "mpeg",
+          "mpg",
+          "wmv",
+          "m3u8",
+        ].includes(ext),
+    );
+  }
   return false;
 }

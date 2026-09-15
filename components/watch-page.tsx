@@ -3,8 +3,10 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   captureVideoShot,
+  directVideoHref,
   isPageLikeVideoUrl,
   isVideoFile,
+  nextWatchPlaybackSrc,
   playableVideoSrc,
   titleFromVideoUrl,
   VIDEO_ACCEPT,
@@ -18,6 +20,7 @@ import {
   watchShouldRemuxOnNativeError,
   watchSizeError,
 } from "@/lib/voice/watch-formats";
+import { isAdultPageUrl, proxiedWatchMedia } from "@/lib/voice/watch-adult";
 import { iosLacksMsePlayback } from "@/lib/voice/watch-mpegts";
 import {
   openWatchChannel,
@@ -56,9 +59,11 @@ export function WatchPage() {
   const objectUrl = useRef<string | null>(null);
   const remuxUrl = useRef<string | null>(null);
   const mpegtsHandle = useRef<{ destroy: () => void } | null>(null);
+  const hlsHandle = useRef<{ destroy: () => void } | null>(null);
   const sourceRef = useRef<WatchSource | null>(null);
   const copiedRemux = useRef(false);
   const remuxAttempted = useRef(false);
+  const urlStage = useRef<"direct" | "proxy" | "blob" | null>(null);
   const loadGen = useRef(0);
   const stopCapture = useRef<(() => void) | null>(null);
   const meta = useRef<{ title: string; source: VideoSourceKind | null }>({
@@ -70,12 +75,14 @@ export function WatchPage() {
   const [mpegtsSrc, setMpegtsSrc] = useState<{ url: string; type: "flv" | "mpegts" } | null>(
     null,
   );
+  const [hlsSrc, setHlsSrc] = useState<string | null>(null);
+  const [embedSrc, setEmbedSrc] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [hint, setHint] = useState<string | null>(null);
   const [linked, setLinked] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const hasPlayer = Boolean(nativeSrc || mpegtsSrc);
+  const hasPlayer = Boolean(nativeSrc || mpegtsSrc || hlsSrc || embedSrc);
 
   function post(message: WatchChannelMessage) {
     try {
@@ -88,7 +95,7 @@ export function WatchPage() {
   function startCapture() {
     stopCapture.current?.();
     const video = videoRef.current;
-    if (!video || !meta.current.source) return;
+    if (!video || !meta.current.source || embedSrc) return;
     let lastSend = 0;
     const timer = setInterval(() => {
       if (video.paused || video.ended || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -128,6 +135,8 @@ export function WatchPage() {
   function revokeLocals() {
     mpegtsHandle.current?.destroy();
     mpegtsHandle.current = null;
+    hlsHandle.current?.destroy();
+    hlsHandle.current = null;
     if (objectUrl.current) {
       URL.revokeObjectURL(objectUrl.current);
       objectUrl.current = null;
@@ -145,9 +154,12 @@ export function WatchPage() {
     sourceRef.current = null;
     copiedRemux.current = false;
     remuxAttempted.current = false;
+    urlStage.current = null;
     meta.current = { title: "", source: null };
     setNativeSrc(null);
     setMpegtsSrc(null);
+    setHlsSrc(null);
+    setEmbedSrc(null);
     setTitle("");
     setHint(null);
     setBusy(false);
@@ -156,6 +168,8 @@ export function WatchPage() {
 
   function showNative(next: string, nextTitle: string, source: VideoSourceKind) {
     setMpegtsSrc(null);
+    setHlsSrc(null);
+    setEmbedSrc(null);
     meta.current = { title: nextTitle, source };
     setNativeSrc(next);
     setTitle(nextTitle);
@@ -165,6 +179,8 @@ export function WatchPage() {
 
   function showMpegts(url: string, type: "flv" | "mpegts", nextTitle: string, source: VideoSourceKind) {
     setNativeSrc(null);
+    setHlsSrc(null);
+    setEmbedSrc(null);
     meta.current = { title: nextTitle, source };
     setMpegtsSrc({ url, type });
     setTitle(nextTitle);
@@ -178,9 +194,9 @@ export function WatchPage() {
     setBusy(true);
     setHint(forceTranscode ? "Converting video…" : "Preparing video…");
     try {
-      const { remuxWatchVideo, fetchWatchBlob } = await import("@/lib/voice/watch-transcode");
+      const { remuxWatchVideo, fetchWatchSource } = await import("@/lib/voice/watch-transcode");
       const input =
-        source.kind === "file" ? source.file : await fetchWatchBlob(source.playable);
+        source.kind === "file" ? source.file : await fetchWatchSource(source.raw, source.playable);
       if (gen !== loadGen.current) return;
       const name = source.kind === "file" ? source.file.name : source.raw;
       const result = await remuxWatchVideo(input, name, setHint, forceTranscode);
@@ -216,14 +232,107 @@ export function WatchPage() {
     showNative(href, source.title, origin);
   }
 
+  function showHls(url: string, nextTitle: string, source: VideoSourceKind) {
+    setNativeSrc(null);
+    setMpegtsSrc(null);
+    setEmbedSrc(null);
+    meta.current = { title: nextTitle, source };
+    setHlsSrc(url);
+    setTitle(nextTitle);
+    setBusy(false);
+    setHint("Tap play if it does not start. Keep the Lexi tab open.");
+  }
+
+  function showEmbed(url: string, nextTitle: string, blockedEyes: boolean) {
+    setNativeSrc(null);
+    setMpegtsSrc(null);
+    setHlsSrc(null);
+    meta.current = { title: nextTitle, source: "url" };
+    setEmbedSrc(url);
+    setTitle(nextTitle);
+    setBusy(false);
+    setHint(
+      blockedEyes
+        ? "Playing the site embed. Lexi cannot see these frames — upload a file or try another video."
+        : "Tap play if it does not start. Keep the Lexi tab open.",
+    );
+  }
+
+  async function loadAdultPage(raw: string) {
+    const gen = loadGen.current + 1;
+    loadGen.current = gen;
+    stopCapture.current?.();
+    revokeLocals();
+    copiedRemux.current = false;
+    remuxAttempted.current = false;
+    urlStage.current = "direct";
+    setBusy(true);
+    setHint("Opening video page…");
+    try {
+      const response = await fetch(`/api/video/resolve?url=${encodeURIComponent(raw)}`);
+      let body: {
+        error?: string;
+        title?: string;
+        mediaUrl?: string;
+        kind?: string;
+        embedUrl?: string;
+        pageUrl?: string;
+      } = {};
+      try {
+        body = (await response.json()) as typeof body;
+      } catch {
+        body = {};
+      }
+      if (gen !== loadGen.current) return;
+      if (!response.ok) {
+        if (body.embedUrl) {
+          const title = body.title || titleFromVideoUrl(raw);
+          sourceRef.current = { kind: "url", raw, playable: "", title };
+          showEmbed(body.embedUrl, title, true);
+          return;
+        }
+        setBusy(false);
+        setHint(typeof body.error === "string" ? body.error : "Could not open that adult video page.");
+        return;
+      }
+      const title = body.title || titleFromVideoUrl(raw);
+      const media = typeof body.mediaUrl === "string" ? body.mediaUrl : "";
+      const pageUrl = body.pageUrl || raw;
+      const playable = media ? proxiedWatchMedia(media, pageUrl) : "";
+      sourceRef.current = { kind: "url", raw, playable: playable || media, title };
+      if (playable && body.kind === "hls") {
+        showHls(playable, title, "url");
+        return;
+      }
+      if (playable) {
+        showNative(playable, title, "url");
+        return;
+      }
+      if (body.embedUrl) {
+        showEmbed(body.embedUrl, title, true);
+        return;
+      }
+      setBusy(false);
+      setHint("Could not find a playable stream. Upload a file or try another video.");
+    } catch {
+      if (gen !== loadGen.current) return;
+      setBusy(false);
+      setHint("Could not open that adult video page.");
+    }
+  }
+
   function loadUrl(raw: string) {
     const trimmed = raw.trim();
     if (isPageLikeVideoUrl(trimmed)) {
       setHint("YouTube and similar pages will not play here. Upload a file or paste a direct video URL.");
       return;
     }
-    const playable = playableVideoSrc(trimmed);
-    if (!playable) {
+    if (isAdultPageUrl(trimmed)) {
+      void loadAdultPage(trimmed);
+      return;
+    }
+    const direct = directVideoHref(trimmed);
+    if (!direct) {
       setHint("Paste a direct video URL (mp4, webm, mov, mkv, avi, flv, wmv, mpeg, and similar).");
       return;
     }
@@ -232,14 +341,41 @@ export function WatchPage() {
     revokeLocals();
     copiedRemux.current = false;
     remuxAttempted.current = false;
+    urlStage.current = "direct";
     const source: WatchSource = {
       kind: "url",
       raw: trimmed,
-      playable,
+      playable: playableVideoSrc(direct) || direct,
       title: titleFromVideoUrl(trimmed),
     };
     sourceRef.current = source;
-    playIdentified(source, playable);
+    playIdentified(source, direct);
+  }
+
+  async function playUrlBlob(source: Extract<WatchSource, { kind: "url" }>) {
+    const gen = loadGen.current;
+    urlStage.current = "blob";
+    setBusy(true);
+    setHint("Loading video…");
+    try {
+      const { resolveWatchMediaUrl } = await import("@/lib/voice/watch-transcode");
+      const href = await resolveWatchMediaUrl(source.raw, source.playable);
+      if (gen !== loadGen.current) {
+        if (href.startsWith("blob:")) URL.revokeObjectURL(href);
+        return;
+      }
+      if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+      objectUrl.current = href;
+      playIdentified({ ...source, playable: href }, href);
+    } catch (caught) {
+      if (gen !== loadGen.current) return;
+      setBusy(false);
+      setHint(
+        caught instanceof Error
+          ? caught.message
+          : "Could not load that video. Upload the file instead.",
+      );
+    }
   }
 
   function loadFile(file: File) {
@@ -257,6 +393,7 @@ export function WatchPage() {
     revokeLocals();
     copiedRemux.current = false;
     remuxAttempted.current = false;
+    urlStage.current = null;
     const url = URL.createObjectURL(file);
     objectUrl.current = url;
     const source: WatchSource = { kind: "file", file, title: file.name };
@@ -265,8 +402,22 @@ export function WatchPage() {
   }
 
   function onNativeError() {
+    const mediaError = videoRef.current?.error;
+    if (mediaError?.code === MediaError.MEDIA_ERR_ABORTED) return;
     const source = sourceRef.current;
-    if (!source || busy) return;
+    if (!source || busy || !nativeSrc) return;
+    if (source.kind === "url") {
+      const fallback = nextWatchPlaybackSrc(source.raw, nativeSrc);
+      if (fallback && urlStage.current === "direct") {
+        urlStage.current = "proxy";
+        showNative(fallback, source.title, "url");
+        return;
+      }
+      if (urlStage.current === "direct" || urlStage.current === "proxy") {
+        void playUrlBlob(source);
+        return;
+      }
+    }
     const identity = {
       name: source.kind === "file" ? source.file.name : source.raw,
       type: source.kind === "file" ? source.file.type : "",
@@ -281,7 +432,7 @@ export function WatchPage() {
       return;
     }
     setHint(
-      "Could not play that video. Try another file, or a direct video URL the browser can decode.",
+      "Could not play that video. Try another file, or a direct mp4/webm URL. YouTube pages will not play here.",
     );
   }
 
@@ -311,14 +462,14 @@ export function WatchPage() {
   }, []);
 
   useEffect(() => {
-    if (!hasPlayer) return;
+    if (!hasPlayer || embedSrc) return;
     startCapture();
     announceStart();
     return () => {
       stopCapture.current?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recapture when the video src changes
-  }, [nativeSrc, mpegtsSrc]);
+  }, [nativeSrc, mpegtsSrc, hlsSrc, embedSrc]);
 
   useEffect(() => {
     if (!mpegtsSrc) return;
@@ -349,6 +500,36 @@ export function WatchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- attach when the mpegts url changes
   }, [mpegtsSrc]);
 
+  useEffect(() => {
+    if (!hlsSrc) return;
+    const video = videoRef.current;
+    if (!video) return;
+    let dead = false;
+    let handle: { destroy: () => void } | null = null;
+    void import("@/lib/voice/watch-hls").then(({ attachHlsPlayer }) => {
+      if (dead || !videoRef.current) return;
+      return attachHlsPlayer(videoRef.current, hlsSrc, () => {
+        if (dead) return;
+        const source = sourceRef.current;
+        if (source?.kind === "url") {
+          setHint("Could not play that stream. Trying the site embed — Lexi may not see frames.");
+        }
+      }).then((next) => {
+        if (dead) {
+          next.destroy();
+          return;
+        }
+        handle = next;
+        hlsHandle.current = next;
+      });
+    });
+    return () => {
+      dead = true;
+      handle?.destroy();
+      if (hlsHandle.current === handle) hlsHandle.current = null;
+    };
+  }, [hlsSrc]);
+
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     loadUrl(draft);
@@ -366,7 +547,16 @@ export function WatchPage() {
         </a>
       </header>
       <main className="flex flex-1 flex-col">
-        {hasPlayer ? (
+        {embedSrc ? (
+          <iframe
+            src={embedSrc}
+            title={title ? `Watch together: ${title}` : "Watch together embed"}
+            className="max-h-[min(70dvh,100vw)] w-full bg-black"
+            style={{ aspectRatio: "16 / 9", border: 0 }}
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+          />
+        ) : hasPlayer ? (
           <video
             ref={videoRef}
             src={nativeSrc ?? undefined}
@@ -443,10 +633,11 @@ export function WatchPage() {
             </label>
             <input
               id="lexi-watch-url"
-              type="url"
+              type="text"
+              inputMode="url"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Direct video URL"
+              placeholder="Video or adult site URL"
               autoComplete="off"
               className="min-w-0 flex-1 bg-transparent px-1 text-base text-white outline-none placeholder:text-zinc-500"
             />
@@ -472,7 +663,7 @@ export function WatchPage() {
               </button>
             </div>
           ) : null}
-          {hint ? <p className="mx-auto mt-2 max-w-xl px-1 text-xs text-zinc-500">{hint}</p> : null}
+          {hint ? <p className="mx-auto mt-2 max-w-xl px-1 text-xs text-zinc-300">{hint}</p> : null}
         </div>
       </main>
     </div>
