@@ -4,6 +4,7 @@
  */
 
 export type ResponseCreateDecision = "skip" | "create" | "replace";
+export type PlaybackHandoff = "reset" | "continue" | "replace";
 
 /** Floor reserved on response.created when the event has no id yet. */
 export const PENDING_SPEECH_ID = "pending";
@@ -45,17 +46,51 @@ export function lockSpeechId(activeId: string | null, incomingId: string | null)
 
 /**
  * Guard double response.create.
- * skip: already waiting for the server to start one.
+ * skip: already waiting for the server to start one, or a follow-up already began.
  * replace: cancel the in-flight spoken response, then create.
  * create: floor is free.
  */
 export function decideResponseCreate(opts: {
   createInFlight: boolean;
   hasActiveResponse: boolean;
+  ifActive?: "skip" | "replace";
 }): ResponseCreateDecision {
   if (opts.createInFlight) return "skip";
-  if (opts.hasActiveResponse) return "replace";
+  if (opts.hasActiveResponse) return opts.ifActive === "skip" ? "skip" : "replace";
   return "create";
+}
+
+/**
+ * Sequential assistant audio (tool follow-up, second utterance) should append
+ * to whatever is still draining. Only flush when a different live response
+ * is still generating — that is talking over herself.
+ */
+export function decidePlaybackHandoff(opts: {
+  takeFloor: boolean;
+  previousActiveId: string | null;
+  incomingId: string | null;
+  queuedMs: number;
+}): PlaybackHandoff {
+  if (!opts.takeFloor) return "continue";
+  const previousLive =
+    Boolean(opts.previousActiveId) &&
+    opts.previousActiveId !== PENDING_SPEECH_ID &&
+    opts.previousActiveId !== opts.incomingId;
+  if (previousLive) return "replace";
+  if (opts.queuedMs > 0) return "continue";
+  return "reset";
+}
+
+/** User-initiated turn stays open through tool follow-ups. Idle chatter does not. */
+export function shouldClearExpectAfterDone(opts: {
+  toolsThisResponse: boolean;
+  inflightTools: number;
+  toolResponseWaiting: boolean;
+  status: string;
+}) {
+  if (opts.status === "cancelled" || opts.status === "failed") return true;
+  if (opts.inflightTools > 0 || opts.toolResponseWaiting) return false;
+  return !opts.toolsThisResponse;
 }
 
 export function readResponseId(event: Record<string, unknown>): string | null {

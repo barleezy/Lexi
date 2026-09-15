@@ -231,13 +231,18 @@ export class PcmPlayer {
   underruns = 0;
   drainMsMax = 0;
   maxGapMs = 0;
-  queuedMs = 0;
   private next = 0;
   private lastScheduled = 0;
   private started = false;
   private sources: AudioBufferSourceNode[] = [];
   private output: GainNode;
   private ducking = false;
+
+  /** Live remainder — not the value from the last scheduled chunk. */
+  get queuedMs() {
+    if (!this.started || this.next <= 0) return 0;
+    return Math.max(0, (this.next - this.ctx.currentTime) * 1000);
+  }
 
   constructor(
     private ctx: AudioContext,
@@ -271,7 +276,6 @@ export class PcmPlayer {
     this.underruns = 0;
     this.drainMsMax = 0;
     this.maxGapMs = 0;
-    this.queuedMs = 0;
     this.started = false;
     this.next = 0;
     this.lastScheduled = 0;
@@ -307,7 +311,6 @@ export class PcmPlayer {
     this.drainMsMax = Math.max(this.drainMsMax, drain);
     source.start(this.next);
     this.next += buffer.duration;
-    this.queuedMs = Math.max(0, (this.next - now) * 1000);
     this.lastScheduled = now;
     this.sources.push(source);
     source.onended = () => {
@@ -325,7 +328,6 @@ export class PcmPlayer {
     this.started = false;
     this.next = 0;
     this.lastScheduled = 0;
-    this.queuedMs = 0;
     return droppedMs;
   }
 

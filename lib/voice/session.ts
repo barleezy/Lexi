@@ -58,9 +58,11 @@ import { buildInputAudio, readUserTranscript, sanitizeUserText } from "@/lib/voi
 import {
   PENDING_SPEECH_ID,
   claimExclusiveSpeech,
+  decidePlaybackHandoff,
   decideResponseCreate,
   lockSpeechId,
   readResponseId,
+  shouldClearExpectAfterDone,
   shouldPlayOutputAudio,
 } from "@/lib/voice/exclusive-speech";
 import type { GeneratedMediaItem } from "@/lib/generate/media";
@@ -1780,7 +1782,6 @@ export class VoiceSession {
       case "input_audio_buffer.speech_stopped":
         this.speechStoppedT = Date.now();
         this.expectSpokenResponse = true;
-        this.refreshClock();
         this.setPhase("thinking");
         break;
       case "input_audio_buffer.timeout_triggered":
@@ -1821,14 +1822,23 @@ export class VoiceSession {
           this.logger.log("play.stop", { reason: "unprompted" });
           break;
         }
-        this.expectSpokenResponse = false;
         this.ignoreOutputAudio = false;
+        const previousId = this.activeResponseId;
         const claim = claimExclusiveSpeech(this.activeResponseId, incomingId ?? PENDING_SPEECH_ID);
-        if (claim.takeFloor) {
+        const handoff = decidePlaybackHandoff({
+          takeFloor: claim.takeFloor,
+          previousActiveId: previousId,
+          incomingId: incomingId ?? PENDING_SPEECH_ID,
+          queuedMs: this.player?.queuedMs ?? 0,
+        });
+        if (handoff === "replace") {
           const dropped = this.player?.flush() ?? 0;
           if (dropped) this.logger.log("play.stop", { reason: "exclusive", dropped_ms: dropped });
-          this.captionPacer.reset();
+          this.player?.resetTurn();
+        } else if (handoff === "reset") {
+          this.player?.resetTurn();
         }
+        this.captionPacer.reset();
         this.activeResponseId = claim.activeId;
         this.createdT = Date.now();
         this.firstAudio = false;
@@ -1836,8 +1846,6 @@ export class VoiceSession {
         this.outBytes = 0;
         this.toolsThisResponse = false;
         this.factWriteSucceeded = false;
-        this.player?.resetTurn();
-        this.captionPacer.reset();
         break;
       }
       case "response.output_audio_transcript.delta":
@@ -1895,17 +1903,29 @@ export class VoiceSession {
         });
         this.decaySentForTurn = false;
         const status = typeof response.status === "string" ? response.status : "";
-        if (this.toolsThisResponse && status !== "cancelled" && status !== "failed") {
+        const awaitingTools = this.toolsThisResponse && status !== "cancelled" && status !== "failed";
+        if (awaitingTools) {
           this.toolResponseWaiting = true;
           this.flushToolBatch();
         } else {
           this.toolResponseWaiting = false;
+          if (
+            shouldClearExpectAfterDone({
+              toolsThisResponse: this.toolsThisResponse,
+              inflightTools: this.inflightTools.size,
+              toolResponseWaiting: this.toolResponseWaiting,
+              status,
+            })
+          ) {
+            this.expectSpokenResponse = false;
+          }
           this.setPhase("listening");
         }
         if (status !== "cancelled" && status !== "failed") {
-          void this.refreshDecayState();
+          if (!awaitingTools) void this.refreshDecayState();
           this.captionPacer.flush();
         } else {
+          this.expectSpokenResponse = false;
           this.captionPacer.stop();
         }
         if (status !== "cancelled" && status !== "failed" && status !== "incomplete") {
@@ -2148,6 +2168,7 @@ export class VoiceSession {
     }
 
     if (!this.stopped && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.expectSpokenResponse = true;
       this.send({
         type: "conversation.item.create",
         item: {
@@ -2171,15 +2192,16 @@ export class VoiceSession {
       this.musicStateChanged = false;
       this.send(this.sessionUpdate());
     }
-    this.requestSpokenResponse();
+    this.requestSpokenResponse({ ifActive: "skip" });
   }
 
-  private requestSpokenResponse() {
+  private requestSpokenResponse(opts?: { ifActive?: "skip" | "replace" }) {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.expectSpokenResponse = true;
     const decision = decideResponseCreate({
       createInFlight: this.responseCreateInFlight,
       hasActiveResponse: this.activeResponseId !== null,
+      ifActive: opts?.ifActive ?? "replace",
     });
     if (decision === "skip") return;
     if (decision === "replace") {
@@ -2235,6 +2257,7 @@ export class VoiceSession {
 
   private refreshClock(force = false) {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!force && (this.phase === "thinking" || this.phase === "speaking")) return;
     const line = formatCurrentTimeLine(this.voiceTimeZone());
     if (!force && line === this.lastClockLine) return;
     this.lastClockLine = line;
@@ -2844,12 +2867,17 @@ export class VoiceSession {
     this.sendDecayItem(this.lastDecayState);
   }
 
+  private decayUpdateWouldStallSpeech() {
+    return this.expectSpokenResponse || this.phase === "thinking" || this.phase === "speaking";
+  }
+
   private async refreshDecayState() {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.sendCachedDecay();
+    if (!this.decayUpdateWouldStallSpeech()) this.sendCachedDecay();
     const state = await fetchDecayStateForTurn();
     this.lastDecayState = state;
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.decayUpdateWouldStallSpeech()) return;
     if (!this.decaySentForTurn) {
       this.decaySentForTurn = true;
       this.sendDecayItem(state);
@@ -3073,7 +3101,7 @@ export class VoiceSession {
     this.phase = phase;
     this.logger.log("phase", { phase });
     this.handlers.onPhase(phase);
-    if (phase === "speaking" || phase === "listening") this.flushDeferredLiveFrames();
+    if (phase === "listening") this.flushDeferredLiveFrames();
   }
 
   private fail(error: unknown) {

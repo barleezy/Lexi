@@ -1,8 +1,10 @@
 import {
   PENDING_SPEECH_ID,
   claimExclusiveSpeech,
+  decidePlaybackHandoff,
   decideResponseCreate,
   lockSpeechId,
+  shouldClearExpectAfterDone,
   normalizeResponseId,
   readResponseId,
   shouldPlayOutputAudio,
@@ -84,6 +86,108 @@ expectEqual(
   decideResponseCreate({ createInFlight: true, hasActiveResponse: true }),
   "skip",
   "in-flight create wins over a second create",
+);
+expectEqual(
+  decideResponseCreate({ createInFlight: false, hasActiveResponse: true, ifActive: "skip" }),
+  "skip",
+  "tool follow-up does not cancel a response the server already started",
+);
+expectEqual(
+  decideResponseCreate({ createInFlight: false, hasActiveResponse: true, ifActive: "replace" }),
+  "replace",
+  "a new user message still replaces the in-flight reply",
+);
+
+expectEqual(
+  decidePlaybackHandoff({
+    takeFloor: true,
+    previousActiveId: "r1",
+    incomingId: "r2",
+    queuedMs: 400,
+  }),
+  "replace",
+  "overlapping live responses flush so she does not talk over herself",
+);
+expectEqual(
+  decidePlaybackHandoff({
+    takeFloor: true,
+    previousActiveId: null,
+    incomingId: "r2",
+    queuedMs: 400,
+  }),
+  "continue",
+  "sequential follow-up keeps draining audio",
+);
+expectEqual(
+  decidePlaybackHandoff({
+    takeFloor: true,
+    previousActiveId: null,
+    incomingId: "r2",
+    queuedMs: 0,
+  }),
+  "reset",
+  "cold start still uses playback lead",
+);
+expectEqual(
+  decidePlaybackHandoff({
+    takeFloor: false,
+    previousActiveId: "r1",
+    incomingId: "r1",
+    queuedMs: 0,
+  }),
+  "continue",
+  "same response id keeps the scheduler",
+);
+expectEqual(
+  decidePlaybackHandoff({
+    takeFloor: true,
+    previousActiveId: PENDING_SPEECH_ID,
+    incomingId: "r1",
+    queuedMs: 80,
+  }),
+  "continue",
+  "pending floor with queued audio is the same turn",
+);
+
+expectEqual(
+  shouldClearExpectAfterDone({
+    toolsThisResponse: false,
+    inflightTools: 0,
+    toolResponseWaiting: false,
+    status: "completed",
+  }),
+  true,
+  "plain reply closes the spoken turn — no idle chatter",
+);
+expectEqual(
+  shouldClearExpectAfterDone({
+    toolsThisResponse: true,
+    inflightTools: 0,
+    toolResponseWaiting: true,
+    status: "completed",
+  }),
+  false,
+  "keep the turn open while tools still need a spoken follow-up",
+);
+expectEqual(
+  shouldClearExpectAfterDone({
+    toolsThisResponse: true,
+    inflightTools: 1,
+    toolResponseWaiting: false,
+    status: "completed",
+  }),
+  false,
+  "keep the turn open while a tool is in flight",
+);
+expectEqual(
+  shouldClearExpectAfterDone({
+    toolsThisResponse: true,
+    inflightTools: 0,
+    toolResponseWaiting: false,
+    status: "cancelled",
+  }),
+  true,
+  "cancelled reply is not a follow-up window",
 );
 
 expectEqual(
