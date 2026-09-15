@@ -5,3 +5,12 @@ export function parseSessionId(raw?: string | null) {
   const trimmed = raw?.trim() ?? "";
   return SESSION_ID_RE.test(trimmed) ? trimmed : null;
 }
+
+export function formatSessionIdLine(raw?: string | null) {
+  const id = parseSessionId(raw);
+  return id ? `SESSION ID: ${id}` : "";
+}
+
+export function newMemorySessionId() {
+  return crypto.randomUUID();
+}

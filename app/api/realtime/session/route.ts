@@ -6,6 +6,7 @@ import {
   listRecentTurns,
   recallForUser,
 } from "@/lib/memory/store";
+import { formatSessionIdLine, parseSessionId } from "@/lib/memory/session-id";
 import { formatPriorChat } from "@/lib/memory/turns";
 import { resolveUserId } from "@/lib/memory/user";
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
@@ -35,25 +36,35 @@ function readToken(data: SecretBody) {
 export async function POST(request: Request) {
   const started = Date.now();
   let sessionId = "";
+  let logSessionId = "";
   let requestedUserId: string | null = null;
   let previousSessionId: string | null = null;
   try {
     const body = (await request.json()) as {
       sessionId?: unknown;
+      logSessionId?: unknown;
+      memorySessionId?: unknown;
       userId?: unknown;
       previousSessionId?: unknown;
     };
     if (typeof body.sessionId === "string") sessionId = body.sessionId;
+    if (typeof body.logSessionId === "string") logSessionId = body.logSessionId;
+    else if (typeof body.sessionId === "string") logSessionId = body.sessionId;
     if (typeof body.userId === "string") requestedUserId = body.userId;
     if (typeof body.previousSessionId === "string") previousSessionId = body.previousSessionId;
+    const requestedMemory =
+      parseSessionId(typeof body.memorySessionId === "string" ? body.memorySessionId : null) ??
+      parseSessionId(sessionId);
+    if (requestedMemory) sessionId = requestedMemory;
   } catch {
     sessionId = "";
+    logSessionId = "";
   }
 
   const key = process.env.XAI_API_KEY;
   if (!key) {
-    if (isVoiceLogEnabled() && isValidSessionId(sessionId)) {
-      await appendVoiceLog(sessionId, [
+    if (isVoiceLogEnabled() && isValidSessionId(logSessionId)) {
+      await appendVoiceLog(logSessionId, [
         {
           src: "server",
           ts: Date.now(),
@@ -85,8 +96,8 @@ export async function POST(request: Request) {
     data = {};
   }
 
-  if (isVoiceLogEnabled() && isValidSessionId(sessionId)) {
-    await appendVoiceLog(sessionId, [
+  if (isVoiceLogEnabled() && isValidSessionId(logSessionId)) {
+    await appendVoiceLog(logSessionId, [
         {
           src: "server",
           ts: Date.now(),
@@ -126,11 +137,20 @@ export async function POST(request: Request) {
     priorChat = "";
   }
   try {
-    if (previousSessionId) await endSession(userId, previousSessionId);
-    const session = await createOrResumeSession(userId, null);
-    memorySessionId = session?.id ?? null;
+    if (previousSessionId && previousSessionId !== sessionId) {
+      await endSession(userId, previousSessionId);
+    }
+    const session = await createOrResumeSession(userId, sessionId);
+    memorySessionId = session?.id ?? parseSessionId(sessionId);
   } catch {
-    memorySessionId = null;
+    memorySessionId = parseSessionId(sessionId);
+  }
+
+  const sessionLine = formatSessionIdLine(memorySessionId);
+  if (sessionLine && !memoryInstructions.includes(sessionLine)) {
+    memoryInstructions = memoryInstructions
+      ? `${memoryInstructions}\n\n${sessionLine}`
+      : sessionLine;
   }
 
   return Response.json({

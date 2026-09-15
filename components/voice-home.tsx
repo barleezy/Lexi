@@ -114,6 +114,7 @@ export function VoiceHome() {
 
   useEffect(() => {
     const persisted = readVoiceSessionStore();
+    if (persisted.sessionId) setSessionId(persisted.sessionId);
     if (persisted.rows.length || persisted.caption) {
       setRows(persisted.rows);
       setCaption(persisted.caption);
@@ -125,7 +126,6 @@ export function VoiceHome() {
 
   function attach(session: VoiceSession) {
     sessionRef.current = session;
-    setSessionId(session.id);
     setError(null);
   }
 
@@ -139,6 +139,7 @@ export function VoiceHome() {
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: commitRows,
+      onSessionId: setSessionId,
       onError: (message) => {
         setError(message);
         clearSession();

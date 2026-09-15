@@ -1,4 +1,4 @@
-import { parseSessionId } from "../lib/memory/session-id.ts";
+import { formatSessionIdLine, parseSessionId } from "../lib/memory/session-id.ts";
 import {
   formatPriorChat,
   parseChatTurns,
@@ -31,6 +31,8 @@ expectEqual(parseSessionId(` ${uuid} `), uuid, "parse padded uuid");
 expectEqual(parseSessionId("abc123"), null, "reject log id");
 expectEqual(parseSessionId(""), null, "reject empty");
 expectEqual(parseSessionId(null), null, "reject null");
+expectEqual(formatSessionIdLine(uuid), `SESSION ID: ${uuid}`, "session line");
+expectEqual(formatSessionIdLine("abc123"), "", "no line for log id");
 
 expectEqual(parseTranscripts(null), [], "empty raw");
 expectEqual(

@@ -13,6 +13,7 @@ export type FactRow = {
   affect: number;
   t_zero: string;
   last_decay: string | null;
+  session_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -51,6 +52,7 @@ export const MEMORY_INSTRUCTION_CAP = 10;
 const FACT_KEY_SET = new Set<string>(FACT_KEYS);
 
 function databaseUrl() {
+  // Vercel + local env only. Never hardcode the connection string.
   return process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || "";
 }
 
@@ -228,6 +230,8 @@ async function migrateTable() {
   await db.query(`CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions (user_id)`);
   await db.query(`ALTER TABLE turns ADD COLUMN IF NOT EXISTS session_id uuid`);
   await db.query(`CREATE INDEX IF NOT EXISTS turns_session_id_idx ON turns (session_id)`);
+  await db.query(`ALTER TABLE facts ADD COLUMN IF NOT EXISTS session_id uuid`);
+  await db.query(`CREATE INDEX IF NOT EXISTS facts_session_id_idx ON facts (session_id)`);
 
   const renamedUserIds = await renameDefaultUserIds(db);
   const nameFactsBackfilled = await backfillNameFacts(db);
@@ -324,6 +328,14 @@ export async function createOrResumeSession(userId: string, sessionId?: string |
       [existing, id],
     )) as SessionRow[];
     if (rows[0] && !rows[0].ended_at) return rows[0];
+    if (!rows[0]) {
+      const created = (await db.query(
+        `INSERT INTO sessions (id, user_id) VALUES ($1, $2)
+         RETURNING id, user_id, started_at, ended_at`,
+        [existing, id],
+      )) as SessionRow[];
+      return created[0] ?? null;
+    }
   }
   const created = (await db.query(
     `INSERT INTO sessions (user_id) VALUES ($1) RETURNING id, user_id, started_at, ended_at`,
@@ -385,10 +397,12 @@ export async function upsertFact(input: {
   value: string;
   affect: number;
   tZero?: Date;
+  sessionId?: string | null;
 }): Promise<FactRow | null> {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  const sessionId = parseSessionId(input.sessionId);
   const incoming = Math.min(10, Math.max(1, input.affect));
   const existing = (await db.query(
     `SELECT affect FROM facts WHERE user_id = $1 AND memory_key = $2`,
@@ -401,14 +415,15 @@ export async function upsertFact(input: {
       : incoming;
   const tZero = existing[0] ? null : (input.tZero ?? new Date());
   const rows = (await db.query(
-    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero, session_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, now())
      ON CONFLICT (user_id, memory_key) DO UPDATE SET
        value = excluded.value,
        affect = $4,
+       session_id = COALESCE(excluded.session_id, facts.session_id),
        updated_at = now()
      RETURNING *`,
-    [userId, input.memoryKey, input.value, affect, (tZero ?? new Date()).toISOString()],
+    [userId, input.memoryKey, input.value, affect, (tZero ?? new Date()).toISOString(), sessionId],
   )) as FactRow[];
   return rows[0] ?? null;
 }
@@ -434,6 +449,7 @@ export async function recordExchange(input: {
       memoryKey: fact.memoryKey,
       value: fact.value,
       affect: input.affect,
+      sessionId: input.sessionId,
     });
     if (row) rows.push(row);
   }

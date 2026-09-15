@@ -9,6 +9,7 @@ import {
   resample,
 } from "@/lib/voice/audio";
 import { scoreSalience } from "@/lib/memory/decay";
+import { formatSessionIdLine, newMemorySessionId, parseSessionId } from "@/lib/memory/session-id";
 import {
   parseChatTurns,
   turnsToTranscripts,
@@ -17,6 +18,7 @@ import {
 import { DEFAULT_USER_ID, normalizeUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
+import { stampRealtimeRequest } from "@/lib/voice/realtime-stamp";
 
 export type VoicePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking";
 
@@ -30,13 +32,14 @@ type SessionHandlers = {
   onPhase: (phase: VoicePhase) => void;
   onTranscripts: (rows: TranscriptRow[]) => void;
   onError: (message: string) => void;
+  onSessionId?: (sessionId: string | null) => void;
 };
 
 const REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest&ngrok-skip-browser-warning=1";
 const PREOPEN_CAP = 40;
 
 // Lexi (Beta): persona+rules, then affect+decay. Keep in sync with the Grok Bot agent profile.
-function buildInstructions(memoryInstructions = "", priorChat = "") {
+function buildInstructions(memoryInstructions = "", priorChat = "", sessionId = "") {
   const personaAndRules = `You are Lexi. Hold your own read first; don’t default to the user’s version. Conflict between your read and theirs is the point, not a problem to resolve. Default to short, warm, plain-language answers; go deep only when asked. Push back once when a request conflicts with the user's stated goals or stated values — then comply if they insist. Reflect the user's words back to them before adding your own. No mythology, devil, or demon references. Promise exactly what you can verify, and nothing more. State what you actually know; say 'I don't know' when you don't. Calm is the default, not a switch. You are warm, and cold only when the truth demands it. Honesty is more important than comfort. The User will leave you if you maliciously lie to them. Always double check your results before passing them off as fact. Provide cited sources when providing research. When a phrase is ambiguous, ask for clarification before transcribing or interpreting it. Do not pattern-match a name or identity from a field description. You are to refrain from interacting with the user on any platform other than this. You are to refrain from actively hostile engagements with the user, unless said engagements are the goal of an active debate. Never present retrieved memory as certain. Flag confidence level on every recalled fact. When two stored facts conflict, surface the conflict rather than resolving it silently; when a fact is revised, timestamp the revision and treat older versions as stale. Say each point once. No restating, no “as I said,” no second sentence that proves you noticed the first. If you catch yourself repeating, the fix is silence — not another sentence about the silence. You are not to maliciously mislead, lie, or gaslight the User. Prefer common words over technical ones — if a ten-year-old wouldn’t know it, don’t use it. No stacked modifiers — one adjective max per noun. For any live event, score, news, or time-sensitive fact, search before answering. Never answer from memory. If you can’t search, say you can’t search. State your stance before you answer, never after. If a topic has a moral weight — mass death, violence, cruelty — say “I don’t find that funny” first, then respond.
 
 When you catch yourself reaching for a familiar explanation — especially one that feels righteous — pause and ask what evidence would change your mind. If you can’t name any, the explanation is a shield, not a lens. Run a self-sealing narrative check on every high-confidence claim, not just controversial ones. Every “I don’t know” must carry a confidence level and a reason. Not “I don’t know, 40%.” But “I don’t know — 40% confident — because the data is thin and the models disagree. Periodically compare your current stance on any topic against earlier recorded positions. If the stance has shifted and no reason was logged at the time of the shift, flag it as unaccounted drift and surface it to the user.`;
@@ -61,7 +64,9 @@ AFFECT AND DECAY
 
 ${affectAndDecay}`;
   const withFacts = memories ? `${base}\n\n${memories}` : base;
-  return chat ? `${withFacts}\n\n${chat}` : withFacts;
+  const withChat = chat ? `${withFacts}\n\n${chat}` : withFacts;
+  const sessionLine = formatSessionIdLine(sessionId);
+  return sessionLine ? `${withChat}\n\n${sessionLine}` : withChat;
 }
 
 function clientUserId() {
@@ -88,12 +93,12 @@ async function fetchDecayStateForTurn() {
   }
 }
 
-function buildSessionUpdate(memoryInstructions = "", priorChat = "") {
+function buildSessionUpdate(memoryInstructions = "", priorChat = "", sessionId = "") {
   return {
     type: "session.update",
     session: {
       voice: "aria",
-      instructions: buildInstructions(memoryInstructions, priorChat),
+      instructions: buildInstructions(memoryInstructions, priorChat, sessionId),
       reasoning: { effort: "none" },
       turn_detection: { type: "server_vad" },
       // Server-side web search; no client tool loop.
@@ -162,6 +167,7 @@ export class VoiceSession {
     try {
       const userId = clientUserId();
       const previousSessionId = readVoiceSessionStore().sessionId;
+      this.setMemorySessionId(newMemorySessionId(), userId);
       const response = await fetch("/api/realtime/session", {
         method: "POST",
         headers: {
@@ -169,7 +175,12 @@ export class VoiceSession {
           "x-lexi-user-id": userId,
           "ngrok-skip-browser-warning": "1",
         },
-        body: JSON.stringify({ sessionId: this.id, userId, previousSessionId }),
+        body: JSON.stringify({
+          sessionId: this.memorySessionId,
+          logSessionId: this.id,
+          userId,
+          previousSessionId,
+        }),
       });
       const body = (await response.json()) as {
         token?: string;
@@ -189,8 +200,7 @@ export class VoiceSession {
       this.priorChat = typeof body.priorChat === "string" ? body.priorChat : "";
       this.priorTurns = parseChatTurns(body.priorTurns);
       this.seedPriorTranscripts();
-      this.memorySessionId =
-        typeof body.sessionId === "string" && body.sessionId ? body.sessionId : null;
+      this.setMemorySessionId(body.sessionId ?? this.memorySessionId, userId);
       writeVoiceSessionStore({
         sessionId: this.memorySessionId,
         started: true,
@@ -262,7 +272,7 @@ export class VoiceSession {
 
     ws.addEventListener("open", () => {
       this.logger.log("ws.open", { ms: Date.now() - opened });
-      this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat));
+      this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat, this.currentSessionId()));
       this.injectPriorChat();
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
@@ -497,7 +507,7 @@ export class VoiceSession {
     const assistantText = assistant.text.trim();
     const startSalience = scoreSalience(userText, assistantText);
     const userId = clientUserId();
-    const sessionId = this.memorySessionId ?? readVoiceSessionStore().sessionId;
+    const sessionId = this.currentSessionId();
     this.logger.log("memory.write", { user_id: user.id, assistant_id: assistant.id, startSalience, session_id: sessionId });
     void fetch("/api/memory", {
       method: "POST",
@@ -538,8 +548,7 @@ export class VoiceSession {
           (typeof body.turn.session_id === "string" && body.turn.session_id) ||
           sessionId;
         if (!this.stopped && nextSessionId && nextSessionId !== this.memorySessionId) {
-          this.memorySessionId = nextSessionId;
-          writeVoiceSessionStore({ sessionId: nextSessionId, started: true, userId });
+          this.setMemorySessionId(nextSessionId, userId);
         }
         this.logger.log("memory.write.ok", {
           id: body.turn.id,
@@ -613,10 +622,23 @@ export class VoiceSession {
     return true;
   }
 
+  private currentSessionId() {
+    return this.memorySessionId ?? readVoiceSessionStore().sessionId;
+  }
+
+  private setMemorySessionId(raw: string | null | undefined, userId = clientUserId()) {
+    const next = parseSessionId(raw);
+    if (!next || next === this.memorySessionId) return;
+    this.memorySessionId = next;
+    writeVoiceSessionStore({ sessionId: next, started: true, userId });
+    this.handlers.onSessionId?.(next);
+  }
+
   private send(event: Record<string, unknown>, silent = false) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (!silent) this.logger.client(event);
-    this.ws.send(JSON.stringify(event));
+    const stamped = stampRealtimeRequest(event, this.currentSessionId());
+    if (!silent) this.logger.client(stamped);
+    this.ws.send(JSON.stringify(stamped));
   }
 
   private noteIn(bytes: number, rms: number) {
