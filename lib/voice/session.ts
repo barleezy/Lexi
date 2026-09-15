@@ -26,7 +26,7 @@ import {
   KEEPALIVE_SILENCE_MS,
 } from "@/lib/voice/keepalive";
 import { scoreSalience } from "@/lib/memory/decay";
-import { FACT_KEY_LIST, FACT_KEYS } from "@/lib/memory/extract";
+import { FACT_KEY_LIST, FACT_KEYS, isPinnedKey, PINNED_AFFECT } from "@/lib/memory/extract";
 import { newMemorySessionId, parseSessionId } from "@/lib/memory/session-id";
 import {
   parseChatTurns,
@@ -78,12 +78,15 @@ import {
 import {
   DEFAULT_CHANNEL_STATE,
   DEFAULT_FORTNITE_STATE,
+  DEFAULT_MUSIC_STATE,
   DEFAULT_TOYS_STATE,
   buildInstructions,
   type ChannelSessionState,
   type FortniteSessionState,
+  type MusicSessionState,
   type ToysSessionState,
 } from "@/lib/voice/persona";
+import { parseAudioSourceUrl } from "@/lib/voice/background-music";
 
 export type { GeneratedMediaItem };
 
@@ -105,6 +108,15 @@ type SessionHandlers = {
   onMicNeedsGesture?: () => void;
   onMicRecovered?: () => void;
   onGeneratedMedia?: (item: GeneratedMediaItem) => void;
+  onMusicState?: (state: MusicSessionState) => void;
+  connectAppleMusic?: () => Promise<{ ok: boolean; connected?: boolean; error?: string }>;
+  disconnectAppleMusic?: () => Promise<{ ok: boolean; error?: string }>;
+  playBackgroundUrl?: (url: string, title?: string) => Promise<{ ok: boolean; title?: string; error?: string }>;
+  playAppleMusicSong?: (
+    songId: string,
+    title?: string,
+  ) => Promise<{ ok: boolean; title?: string; error?: string }>;
+  stopBackgroundMusic?: () => Promise<void>;
 };
 
 export type VideoContextProvider = () => Promise<VideoContextSnapshot>;
@@ -181,6 +193,21 @@ async function fetchChannelStatus(): Promise<ChannelSessionState> {
   }
 }
 
+async function fetchAppleMusicStatus(): Promise<Pick<MusicSessionState, "appleConfigured" | "appleConnected">> {
+  try {
+    const response = await fetch("/api/apple-music", {
+      headers: { "ngrok-skip-browser-warning": "1" },
+    });
+    const body = (await response.json()) as { configured?: boolean; connected?: boolean };
+    return {
+      appleConfigured: Boolean(body.configured),
+      appleConnected: Boolean(body.connected),
+    };
+  } catch {
+    return { appleConfigured: false, appleConnected: false };
+  }
+}
+
 async function fetchToyProviders() {
   try {
     const response = await fetch("/api/toys", {
@@ -220,7 +247,7 @@ const UPSERT_FACT_TOOL = {
   type: "function",
   name: "upsert_fact",
   description:
-    "Create or update one durable fact the user stated or corrected. One memory_key per call. Do not invent facts. Omit affect to keep the current tag, or default name to 10.",
+    "Create or update one durable fact the user stated or corrected. One memory_key per call. Do not invent facts. Omit affect to keep the current tag, or default name and our_song to 10. our_song stays at 10.",
   parameters: {
     type: "object",
     properties: {
@@ -235,7 +262,7 @@ const UPSERT_FACT_TOOL = {
       },
       affect: {
         type: "number",
-        description: "Optional intensity 1–10. If omitted, name defaults to 10; other keys keep their current tag or start at 5.",
+        description: "Optional intensity 1–10. If omitted, name and our_song default to 10; other keys keep their current tag or start at 5. our_song cannot be lowered.",
       },
     },
     required: ["memory_key", "value"],
@@ -672,11 +699,84 @@ const MESSAGE_IAN_TOOL = {
   },
 };
 
+const PLAY_MUSIC_TOOL = {
+  type: "function",
+  name: "play_music",
+  description:
+    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL Ian gave you, or a song query to play on his connected Apple Music. Does not open a watch tab. Voice stays up.",
+  parameters: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Direct http(s) audio URL (mp3, m4a, aac, ogg, wav, flac)." },
+      query: { type: "string", description: "Song or artist to play on Apple Music when his account is connected." },
+      song_id: { type: "string", description: "Optional Apple Music catalog song id." },
+    },
+  },
+};
+
+const STOP_MUSIC_TOOL = {
+  type: "function",
+  name: "stop_music",
+  description: "Stop background music on this voice call. Does not hang up.",
+  parameters: { type: "object", properties: {} },
+};
+
+const APPLE_MUSIC_CONNECT_TOOL = {
+  type: "function",
+  name: "apple_music_connect",
+  description:
+    "Connect Ian's Apple Music account with official MusicKit. He may need to tap Connect Apple Music and sign in with Apple. Use when he asks to connect Apple Music.",
+  parameters: { type: "object", properties: {} },
+};
+
+const APPLE_MUSIC_LOVE_TOOL = {
+  type: "function",
+  name: "apple_music_love",
+  description:
+    "Love/favorite a song on Ian's connected Apple Music (official rating). That is a recommendation signal. Requires his account connected.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Song title and artist, e.g. Down Low Astrid S." },
+      song_id: { type: "string", description: "Optional Apple Music catalog song id." },
+    },
+  },
+};
+
+const APPLE_MUSIC_LIBRARY_TOOL = {
+  type: "function",
+  name: "apple_music_library",
+  description:
+    "Add a song to Ian's Apple Music library (official). That is a recommendation signal. Requires his account connected.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Song title and artist." },
+      song_id: { type: "string", description: "Optional Apple Music catalog song id." },
+    },
+  },
+};
+
+const APPLE_MUSIC_PLAYLIST_TOOL = {
+  type: "function",
+  name: "apple_music_playlist",
+  description:
+    "Add a song to an Apple Music playlist on Ian's account (official). Creates the playlist if needed. Recommendation signal. Requires his account connected.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Song title and artist." },
+      song_id: { type: "string", description: "Optional Apple Music catalog song id." },
+      playlist: { type: "string", description: "Playlist name. Default Lexi." },
+    },
+  },
+};
+
 const SET_AFFECT_TOOL = {
   type: "function",
   name: "set_affect",
   description:
-    "Set the affect/salience tag (1–10) on an existing fact, including name, when the user corrects intensity or emotional weight.",
+    "Set the affect/salience tag (1–10) on an existing fact, including name, when the user corrects intensity or emotional weight. our_song stays at 10 and cannot be lowered.",
   parameters: {
     type: "object",
     properties: {
@@ -703,6 +803,7 @@ function buildSessionUpdate(
   channels: ChannelSessionState = DEFAULT_CHANNEL_STATE,
   clientTimeZone = "",
   location: DeviceLocationState | null = null,
+  music: MusicSessionState = DEFAULT_MUSIC_STATE,
 ) {
   return {
     type: "session.update",
@@ -717,6 +818,7 @@ function buildSessionUpdate(
         channels,
         clientTimeZone,
         location,
+        music,
       ),
       reasoning: { effort: "none" },
       turn_detection: buildTurnDetection(),
@@ -746,6 +848,12 @@ function buildSessionUpdate(
         FORTNITE_LEAVE_PARTY_TOOL,
         SEND_MESSAGE_TOOL,
         MESSAGE_IAN_TOOL,
+        PLAY_MUSIC_TOOL,
+        STOP_MUSIC_TOOL,
+        APPLE_MUSIC_CONNECT_TOOL,
+        APPLE_MUSIC_LOVE_TOOL,
+        APPLE_MUSIC_LIBRARY_TOOL,
+        APPLE_MUSIC_PLAYLIST_TOOL,
       ],
       audio: {
         input: buildInputAudio(TARGET_RATE),
@@ -841,6 +949,9 @@ export class VoiceSession {
   private fortniteState: FortniteSessionState = { ...DEFAULT_FORTNITE_STATE };
   private fortniteStateChanged = false;
   private channelState: ChannelSessionState = { ...DEFAULT_CHANNEL_STATE };
+  private musicState: MusicSessionState = { ...DEFAULT_MUSIC_STATE };
+  private musicStateChanged = false;
+  private coexistDucked = false;
   private clientTimeZone = detectClientTimeZone();
   private deviceLocation: DeviceLocationState | null = null;
   private lastClockLine = "";
@@ -886,6 +997,7 @@ export class VoiceSession {
     const toysPromise = fetchToyProviders();
     const fortnitePromise = fetchFortniteStatus();
     const channelsPromise = fetchChannelStatus();
+    const appleMusicPromise = fetchAppleMusicStatus();
     let token: string;
     try {
       token = await this.fetchSessionToken(false);
@@ -946,15 +1058,44 @@ export class VoiceSession {
       onUnload: () => this.stop("client"),
       audioContextState: () => this.ctx?.state,
       onCoexist: (state) => {
-        this.player?.setDuck(state.ducked);
+        this.coexistDucked = state.ducked;
+        this.applyPlaybackDuck();
       },
     });
 
     this.toyProviders = await toysPromise;
     this.fortniteState = await fortnitePromise;
     this.channelState = await channelsPromise;
+    const apple = await appleMusicPromise;
+    this.musicState = { ...this.musicState, ...apple };
+    this.handlers.onMusicState?.(this.musicState);
     this.openWebSocket(token, false);
     this.startClockRefresh();
+  }
+
+  setMusicPlayback(playing: boolean, title = "", source: MusicSessionState["source"] = "none") {
+    this.musicState = {
+      ...this.musicState,
+      playing,
+      title: playing ? title : "",
+      source: playing ? source : "none",
+    };
+    this.applyPlaybackDuck();
+    this.handlers.onMusicState?.(this.musicState);
+    this.musicStateChanged = true;
+    this.pushSilentSessionUpdate();
+  }
+
+  setAppleMusicConnected(connected: boolean) {
+    if (this.musicState.appleConnected === connected) return;
+    this.musicState = { ...this.musicState, appleConnected: connected };
+    this.handlers.onMusicState?.(this.musicState);
+    this.musicStateChanged = true;
+    this.pushSilentSessionUpdate();
+  }
+
+  private applyPlaybackDuck() {
+    this.player?.setDuck(this.coexistDucked || this.musicState.playing);
   }
 
   setDeviceLocation(location: DeviceLocationState | null) {
@@ -1955,6 +2096,15 @@ export class VoiceSession {
         result = await this.runFortniteTool(name, args);
       } else if (name === "send_message" || name === "message_ian") {
         result = await this.runChannelSend(args);
+      } else if (
+        name === "play_music" ||
+        name === "stop_music" ||
+        name === "apple_music_connect" ||
+        name === "apple_music_love" ||
+        name === "apple_music_library" ||
+        name === "apple_music_playlist"
+      ) {
+        result = await this.runMusicTool(name, args);
       } else if (name === "upsert_fact" || name === "set_affect") {
         const userId = clientUserId();
         const response = await fetch("/api/memory", {
@@ -2015,9 +2165,10 @@ export class VoiceSession {
     if (this.inflightTools.size > 0 || !this.toolResponseWaiting) return;
     this.toolResponseWaiting = false;
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (this.factWriteSucceeded || this.toyGrantChanged || this.fortniteStateChanged) {
+    if (this.factWriteSucceeded || this.toyGrantChanged || this.fortniteStateChanged || this.musicStateChanged) {
       this.toyGrantChanged = false;
       this.fortniteStateChanged = false;
+      this.musicStateChanged = false;
       this.send(this.sessionUpdate());
     }
     this.requestSpokenResponse();
@@ -2061,6 +2212,7 @@ export class VoiceSession {
       this.channelState,
       this.clientTimeZone,
       this.deviceLocation,
+      this.musicState,
     );
   }
 
@@ -2331,6 +2483,117 @@ export class VoiceSession {
     return { ...body, moved: true };
   }
 
+  private async runMusicTool(name: string, args: Record<string, unknown>) {
+    if (name === "stop_music") {
+      await this.handlers.stopBackgroundMusic?.();
+      this.setMusicPlayback(false);
+      return { ok: true, playing: false };
+    }
+    if (name === "apple_music_connect") {
+      if (!this.musicState.appleConfigured) {
+        return {
+          ok: false,
+          configured: false,
+          connected: false,
+          error: "Apple Music is not configured. Ian still needs to add the MusicKit developer keys.",
+        };
+      }
+      if (this.musicState.appleConnected) {
+        return { ok: true, configured: true, connected: true };
+      }
+      if (!this.handlers.connectAppleMusic) {
+        return {
+          ok: false,
+          configured: true,
+          connected: false,
+          error: "Ian needs to tap Connect Apple Music and sign in.",
+        };
+      }
+      const result = await this.handlers.connectAppleMusic();
+      if (result.ok) this.setAppleMusicConnected(true);
+      return {
+        ok: result.ok,
+        configured: true,
+        connected: result.ok,
+        error: result.error,
+      };
+    }
+    if (name === "play_music") {
+      const url = typeof args.url === "string" ? args.url.trim() : "";
+      if (url) {
+        const parsed = parseAudioSourceUrl(url);
+        if (!parsed.ok) return { ok: false, error: parsed.error };
+        if (!this.handlers.playBackgroundUrl) {
+          return { ok: false, error: "Background audio is not available in this tab." };
+        }
+        const played = await this.handlers.playBackgroundUrl(parsed.href);
+        if (!played.ok) return { ok: false, error: played.error };
+        this.setMusicPlayback(true, played.title || "Audio", "url");
+        return { ok: true, playing: true, source: "url", title: played.title };
+      }
+      if (!this.musicState.appleConfigured) {
+        return {
+          ok: false,
+          error: "Need a direct audio URL, or Apple Music MusicKit keys plus Ian connecting his account.",
+        };
+      }
+      if (!this.musicState.appleConnected) {
+        return { ok: false, error: "Ian needs to tap Connect Apple Music first, or give a direct audio URL." };
+      }
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      const songId = typeof args.song_id === "string" ? args.song_id.trim() : "";
+      const searched = await this.postAppleMusic("search", { query, songId });
+      const song = (searched.song ?? (Array.isArray(searched.songs) ? searched.songs[0] : null)) as
+        | { id?: string; title?: string; artist?: string }
+        | null;
+      const id = songId || (typeof song?.id === "string" ? song.id : "");
+      if (!searched.ok || !id) {
+        return { ok: false, error: typeof searched.error === "string" ? searched.error : "No Apple Music match." };
+      }
+      const title = [song?.title, song?.artist].filter(Boolean).join(" — ");
+      if (!this.handlers.playAppleMusicSong) {
+        return { ok: false, error: "Apple Music playback is not available in this tab." };
+      }
+      const played = await this.handlers.playAppleMusicSong(id, title);
+      if (!played.ok) return { ok: false, error: played.error, song };
+      this.setMusicPlayback(true, played.title || title, "apple");
+      return { ok: true, playing: true, source: "apple", song };
+    }
+    const action =
+      name === "apple_music_love" ? "love" : name === "apple_music_library" ? "library" : "playlist";
+    const result = await this.postAppleMusic(action, {
+      query: typeof args.query === "string" ? args.query : "",
+      songId: typeof args.song_id === "string" ? args.song_id : "",
+      playlist: typeof args.playlist === "string" ? args.playlist : "",
+    });
+    if (result.ok) this.setAppleMusicConnected(true);
+    return result;
+  }
+
+  private async postAppleMusic(
+    action: string,
+    input: { query?: string; songId?: string; playlist?: string },
+  ) {
+    const response = await fetch("/api/apple-music", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "1",
+      },
+      body: JSON.stringify({
+        action,
+        query: input.query,
+        songId: input.songId,
+        playlist: input.playlist,
+      }),
+    });
+    try {
+      return (await response.json()) as Record<string, unknown>;
+    } catch {
+      return { ok: false, error: `Apple Music returned ${response.status}.` };
+    }
+  }
+
   private async runFortniteTool(name: string, args: Record<string, unknown>) {
     const action =
       name === "fortnite_add_friend"
@@ -2551,8 +2814,10 @@ export class VoiceSession {
     const value = typeof fact.value === "string" ? fact.value : "";
     const affect = Number(fact.affect);
     if (!key || !value || !Number.isFinite(affect)) return;
-    const rounded = Math.round(affect);
-    const line = `${key}: ${value} (affect ${rounded}/10, decayed from ${rounded})`;
+    const rounded = isPinnedKey(key) ? PINNED_AFFECT : Math.round(affect);
+    const line = isPinnedKey(key)
+      ? `${key}: ${value} (affect ${PINNED_AFFECT}/10, pinned)`
+      : `${key}: ${value} (affect ${rounded}/10, decayed from ${rounded})`;
     const header = "RECALLED FACTS";
     if (!this.memoryInstructions.includes(header)) {
       this.memoryInstructions = this.memoryInstructions

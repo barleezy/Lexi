@@ -232,7 +232,9 @@ export function shouldDuckPlaybackForCoexist(opts: {
   blurred?: boolean;
   audioContextState?: string;
   audioSessionState?: string;
+  musicPlaying?: boolean;
 }) {
+  if (opts.musicPlaying) return true;
   if (opts.audioSessionState === "interrupted") return true;
   if (opts.audioContextState === "interrupted") return true;
   return Boolean(opts.pageHidden || opts.blurred);

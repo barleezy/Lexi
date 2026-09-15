@@ -96,6 +96,7 @@ expect(shouldDisconnectForLifecycle({ type: "blur" }) === false, "game blur must
 expect(shouldDuckPlaybackForCoexist({ pageHidden: true }) === true, "duck when hidden");
 expect(shouldDuckPlaybackForCoexist({ blurred: true }) === true, "duck when blurred");
 expect(shouldDuckPlaybackForCoexist({}) === false, "full volume in foreground");
+expect(shouldDuckPlaybackForCoexist({ musicPlaying: true }) === true, "duck when background music plays");
 expect(playbackGainForCoexist(true) === PLAYBACK_DUCK_GAIN, "duck gain");
 expect(playbackGainForCoexist(false) === PLAYBACK_FULL_GAIN, "full gain");
 expect(PLAYBACK_DUCK_GAIN > 0 && PLAYBACK_DUCK_GAIN < 1, "duck never mutes");

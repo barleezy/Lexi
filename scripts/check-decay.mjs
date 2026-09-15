@@ -17,6 +17,9 @@ for (const item of cases) {
   if (decaySalience(1.2, 0.08, 100) < 1) throw new Error("floor 1 failed");
 }
 
+if (decaySalience(10, 0, 365) !== 10) throw new Error("pinned rate 0 must stay 10");
+if (decaySalience(10, 0, 0) !== 10) throw new Error("pinned rate 0 at day 0 must stay 10");
+
 const t0 = new Date("2026-09-01T00:00:00Z");
 const recall = new Date("2026-09-11T00:00:00Z");
 if (Math.abs(daysElapsed(recall, t0) - 10) > 1e-9) throw new Error("daysElapsed failed");

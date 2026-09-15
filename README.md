@@ -4,7 +4,7 @@ Lexi is a voice-first companion. The homepage composer talks to Grok Speech-to-S
 
 1. Copy `.env.example` to `.env.local`.
 2. Set `XAI_API_KEY` on the **server only**. The Next.js route `POST /api/realtime/session` exchanges it for a short-lived xAI client secret. The browser never sees the long-lived key.
-3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key) plus a client `get_video_context` tool, generate tools, consensual toy tools (`request_toy_control`, `toy_command`, Lovense, Joyhub), Epic companion tools (`fortnite_add_friend`, `fortnite_status`, `fortnite_invite`, `fortnite_sign_in`, `fortnite_join_party`, `fortnite_sit_out`, `fortnite_leave_party`), and channel tools (`send_message`, `message_ian`). Tokens stay in `.env.local` and are proxied by `/api/toys`, `/api/fortnite`, and `/api/channels` — never in the browser. Lexi only gets full toy control after you ask; until then commands are blocked (stop still works). Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
+3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key) plus a client `get_video_context` tool, generate tools, consensual toy tools (`request_toy_control`, `toy_command`, Lovense, Joyhub), Epic companion tools (`fortnite_add_friend`, `fortnite_status`, `fortnite_invite`, `fortnite_sign_in`, `fortnite_join_party`, `fortnite_sit_out`, `fortnite_leave_party`), channel tools (`send_message`, `message_ian`), and music tools (`play_music`, `stop_music`, `apple_music_connect`, `apple_music_love`, `apple_music_library`, `apple_music_playlist`). Tokens stay in `.env.local` and are proxied by `/api/toys`, `/api/fortnite`, `/api/channels`, and `/api/apple-music` — never in the browser. Lexi only gets full toy control after you ask; until then commands are blocked (stop still works). Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
 
 ## Toys (Lovense + Joyhub)
 
@@ -26,6 +26,22 @@ Lexi cannot run Fortnite or play in-match (no Unreal client, no input, no bot). 
 5. Restart. First successful login **automatically sends a friend request** to TTBarleezy. `GET`/`POST` `/api/fortnite` — 503 with setup steps if credentials are missing. Tokens stay on the server.
 
 Voice tools: `fortnite_sign_in`, `fortnite_join_party`, `fortnite_sit_out`, `fortnite_leave_party`, plus `fortnite_add_friend`, `fortnite_status`, `fortnite_invite`. Ask her to sign in, join your party, sit out, or hop in lobby. If you are not in a lobby party she will say to open one and ask again. She stays sitting out and talks on this voice session.
+
+## Apple Music
+
+Official MusicKit only. Lexi does not scrape Apple Music or invent partner hosts.
+
+1. In Apple Developer, create a **MusicKit** identifier and a MusicKit private key (`.p8`).
+2. Copy empty placeholders from `.env.example` into `.env.local` (never commit the key):
+   - `APPLE_MUSIC_TEAM_ID` — 10-character Team ID
+   - `APPLE_MUSIC_KEY_ID` — MusicKit key id
+   - `APPLE_MUSIC_PRIVATE_KEY` — the `.p8` PEM (newlines as `\n` is fine)
+   - optional `APPLE_MUSIC_STOREFRONT` (default `us`)
+3. Restart. `GET /api/apple-music` mints a short-lived developer JWT. If keys are missing it returns **503** with a setup hint.
+4. On the homepage tap **Connect Apple Music** (or ask Lexi to connect). MusicKit JS (`js-cdn.music.apple.com`) opens Apple’s sign-in. The **user token** is stored as an HttpOnly cookie `lexi_apple_music_user` — not in git, not in Neon.
+5. After connect she can love a song, add it to your library or a playlist, or play it. Those official account actions are the recommendation signals. Background play of a direct audio URL uses a hidden `<audio>` element (no watch tab). Lexi’s voice ducks to 42% while other audio plays.
+
+Voice tools: `apple_music_connect`, `apple_music_love`, `apple_music_library`, `apple_music_playlist`, `play_music`, `stop_music`. Tokens stay on the server except the MusicKit developer JWT the browser needs to authorize.
 
 ## Other apps (Discord, Telegram, SMS, email)
 

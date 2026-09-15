@@ -14,6 +14,7 @@ export const FACT_KEYS = [
   "timezone",
   "food",
   "music",
+  "our_song",
   "sport",
   "hobby",
   "leisure",
@@ -32,8 +33,19 @@ export const FACT_KEY_LIST = FACT_KEYS.join(", ");
 export const IDENTITY_KEYS = ["name"] as const satisfies readonly FactKey[];
 export type IdentityKey = (typeof IDENTITY_KEYS)[number];
 
+/** Relationship facts that stay at affect 10 and do not decay. */
+export const PINNED_KEYS = ["our_song"] as const satisfies readonly FactKey[];
+export type PinnedKey = (typeof PINNED_KEYS)[number];
+export const PINNED_KEY_LIST = PINNED_KEYS.join(", ");
+export const PINNED_AFFECT = 10;
+export const OUR_SONG_VALUE = "Down Low by Astrid S";
+
 export function isIdentityKey(key: string): key is IdentityKey {
   return (IDENTITY_KEYS as readonly string[]).includes(key);
+}
+
+export function isPinnedKey(key: string): key is PinnedKey {
+  return (PINNED_KEYS as readonly string[]).includes(key);
 }
 
 export function isFactKey(key: string): key is FactKey {
@@ -429,6 +441,13 @@ export function extractMusic(text: string) {
   return null;
 }
 
+export function extractOurSong(text: string) {
+  const t = text.trim();
+  const ours = t.match(/\b(?:our|lexi(?:'s)? and (?:my|ian'?s)|my and lexi(?:'s)?)\s+song is\s+([^.!?\n]{2,60})/i);
+  if (ours) return tidyPhrase(ours[1], 2, 60);
+  return null;
+}
+
 export function extractSport(text: string) {
   const t = text.trim();
   const fav = t.match(/\bmy favorite sports?\s+is\s+([^.!?\n]{2,40})/i);
@@ -593,6 +612,7 @@ export function extractFacts(userText: string, _assistantText = ""): ExtractedFa
   pushFact(facts, "timezone", extractTimezone(user));
   pushFact(facts, "food", extractFood(user));
   pushFact(facts, "music", extractMusic(user));
+  pushFact(facts, "our_song", extractOurSong(user));
   pushFact(facts, "sport", extractSport(user));
   pushFact(facts, "hobby", extractHobby(user));
   pushFact(facts, "leisure", extractLeisure(user));

@@ -1,8 +1,20 @@
 import { bumpAffect } from "../lib/memory/decay.ts";
-import { extractFacts, extractFactsMemo, FACT_KEYS, IDENTITY_KEYS, isFactKey, isIdentityKey } from "../lib/memory/extract.ts";
+import {
+  extractFacts,
+  extractFactsMemo,
+  FACT_KEYS,
+  IDENTITY_KEYS,
+  isFactKey,
+  isIdentityKey,
+  isPinnedKey,
+  OUR_SONG_VALUE,
+  PINNED_AFFECT,
+  PINNED_KEYS,
+} from "../lib/memory/extract.ts";
 import { DEFAULT_USER_ID, normalizeUserId, resolveUserId } from "../lib/memory/user.ts";
 
 function storedAffect(key, incoming, existing) {
+  if (isPinnedKey(key)) return PINNED_AFFECT;
   if (isIdentityKey(key)) return 10;
   return existing != null ? bumpAffect(existing, incoming) : incoming;
 }
@@ -80,6 +92,8 @@ expectEqual(keys("my timezone is EST"), ["timezone=EST"], "timezone");
 expectEqual(keys("my favorite food is pizza"), ["food=pizza"], "food");
 expectEqual(keys("I listen to jazz"), ["music=jazz"], "music listen");
 expectEqual(keys("my favorite music is Radiohead"), ["music=Radiohead"], "favorite music");
+expectEqual(keys("our song is Down Low by Astrid S"), ["our_song=Down Low by Astrid S"], "our song");
+expectEqual(keys("my favorite song is Radiohead"), ["music=Radiohead"], "favorite song is not our_song");
 expectEqual(keys("my favorite sport is basketball"), ["sport=basketball"], "favorite sport");
 expectEqual(keys("I play soccer"), ["sport=soccer"], "play sport not game");
 expectEqual(keys("my hobby is painting"), ["hobby=painting"], "hobby");
@@ -152,6 +166,7 @@ expectEqual(
     "timezone",
     "food",
     "music",
+    "our_song",
     "sport",
     "hobby",
     "leisure",
@@ -169,6 +184,12 @@ expectEqual(isFactKey("nicknames"), true, "nicknames is fact key");
 expectEqual(isIdentityKey("nicknames"), false, "nicknames is not identity");
 expectEqual(isFactKey("birthday"), true, "birthday is fact key");
 expectEqual(isFactKey("music"), true, "music is fact key");
+expectEqual(isFactKey("our_song"), true, "our_song is fact key");
+expectEqual(isPinnedKey("our_song"), true, "our_song is pinned");
+expectEqual(isPinnedKey("music"), false, "music is not pinned");
+expectEqual(isPinnedKey("name"), false, "name is identity not pinned");
+expectEqual([...PINNED_KEYS], ["our_song"], "pinned keys");
+expectEqual(OUR_SONG_VALUE, "Down Low by Astrid S", "canonical our song");
 expectEqual(isFactKey("transexual"), false, "transexual is not a user fact key");
 expectEqual(isFactKey("porn"), true, "porn is fact key");
 expectEqual(isIdentityKey("porn"), false, "porn is not identity");
@@ -182,6 +203,8 @@ expectEqual(isIdentityKey("commitments"), false, "commitments is not identity");
 expectEqual(isIdentityKey("birthday"), false, "birthday is not identity");
 expectEqual(storedAffect("name", 5), 10, "name insert is 10");
 expectEqual(storedAffect("name", 6, 6), 10, "name upsert is 10 not bump 7");
+expectEqual(storedAffect("our_song", 3), 10, "our_song insert is 10");
+expectEqual(storedAffect("our_song", 1, 10), 10, "our_song stays 10 not overwritten down");
 expectEqual(storedAffect("pets", 5), 5, "pets insert uses scorer");
 expectEqual(storedAffect("pets", 3, 5), 6, "pets upsert still bumps");
 expectEqual(storedAffect("location", 4), 4, "location insert uses scorer");

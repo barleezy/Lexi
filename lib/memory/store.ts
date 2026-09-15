@@ -1,6 +1,14 @@
 import { neon } from "@neondatabase/serverless";
 import { bandFromStart, bumpAffect, clampAffect, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
-import { extractNameFromBlob, FACT_KEYS, isIdentityKey, type FactKey } from "@/lib/memory/extract";
+import {
+  extractNameFromBlob,
+  FACT_KEYS,
+  isIdentityKey,
+  isPinnedKey,
+  OUR_SONG_VALUE,
+  PINNED_AFFECT,
+  type FactKey,
+} from "@/lib/memory/extract";
 import { parseSessionId } from "@/lib/memory/session-id";
 import { PRIOR_TURN_CAP, type ChatTurn } from "@/lib/memory/turns";
 import { defaultUserId, normalizeUserId } from "@/lib/memory/user";
@@ -235,6 +243,7 @@ async function migrateTable() {
 
   const renamedUserIds = await renameDefaultUserIds(db);
   const nameFactsBackfilled = await backfillNameFacts(db);
+  await ensurePinnedFacts(db, defaultUserId());
   const legacyCount = (await db.query(`SELECT COUNT(*)::int AS n FROM memories`)) as { n: number }[];
   lastMigrate = {
     ok: true,
@@ -315,6 +324,18 @@ async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
     inserted += rows.length;
   }
   return inserted;
+}
+
+async function ensurePinnedFacts(db: NonNullable<ReturnType<typeof sql>>, userId: string) {
+  await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+     VALUES ($1, 'our_song', $2, $3, now())
+     ON CONFLICT (user_id, memory_key) DO UPDATE SET
+       affect = $3,
+       updated_at = now()
+     WHERE facts.affect IS DISTINCT FROM $3`,
+    [normalizeUserId(userId), OUR_SONG_VALUE, PINNED_AFFECT],
+  );
 }
 
 export async function createOrResumeSession(userId: string, sessionId?: string | null) {
@@ -424,13 +445,15 @@ export async function upsertFact(input: {
     `SELECT id, affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
     [userId, input.memoryKey],
   )) as { id: string; affect: number }[];
-  const affect = input.explicitAffect
-    ? incoming
-    : isIdentityKey(input.memoryKey)
-      ? 10
-      : existing[0]
-        ? bumpAffect(existing[0].affect, incoming)
-        : incoming;
+  const affect = isPinnedKey(input.memoryKey)
+    ? PINNED_AFFECT
+    : input.explicitAffect
+      ? incoming
+      : isIdentityKey(input.memoryKey)
+        ? 10
+        : existing[0]
+          ? bumpAffect(existing[0].affect, incoming)
+          : incoming;
   if (existing[0]) {
     const rows = (await db.query(
       `UPDATE facts
@@ -474,8 +497,9 @@ export async function writeFactFromTool(input: {
     `SELECT affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
     [userId, input.memoryKey],
   )) as { affect: number }[];
-  const affect =
-    input.affect !== undefined
+  const affect = isPinnedKey(input.memoryKey)
+    ? PINNED_AFFECT
+    : input.affect !== undefined
       ? clampAffect(input.affect)
       : isIdentityKey(input.memoryKey)
         ? 10
@@ -502,7 +526,7 @@ export async function setFactAffect(input: {
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
   const sessionId = parseSessionId(input.sessionId);
-  const affect = clampAffect(input.affect);
+  const affect = isPinnedKey(input.memoryKey) ? PINNED_AFFECT : clampAffect(input.affect);
   const rows = (await db.query(
     `UPDATE facts
      SET affect = $1,
@@ -564,6 +588,7 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   const db = await ensureTable();
   if (!db) return [];
   const id = normalizeUserId(userId);
+  await ensurePinnedFacts(db, id);
   const rows = (await db.query(
     `SELECT * FROM facts
      WHERE lower(user_id) = lower($1)
@@ -579,9 +604,24 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
     if (seen.has(row.memory_key)) continue;
     seen.add(row.memory_key);
     const clock = new Date(row.t_zero);
+    const days = daysElapsed(at, clock);
+    if (isPinnedKey(row.memory_key)) {
+      touched.push(row.id);
+      lines.push({
+        memoryKey: row.memory_key,
+        value: row.value,
+        startSalience: PINNED_AFFECT,
+        salience: PINNED_AFFECT,
+        band: "pinned",
+        rate: 0,
+        days,
+        t0: row.t_zero,
+        kind: "fact",
+      });
+      continue;
+    }
     const band = bandFromStart(row.affect);
     const rate = rateForBand(band);
-    const days = daysElapsed(at, clock);
     const salience = decaySalience(row.affect, rate, days);
     touched.push(row.id);
     lines.push({
@@ -620,6 +660,9 @@ export function formatFactLine(line: DecayLine) {
   const from = Math.round(line.startSalience);
   if (line.kind === "legacy") {
     return `legacy: ${line.value} (affect ${current}/10, decayed from ${from})`;
+  }
+  if (isPinnedKey(line.memoryKey)) {
+    return `${line.memoryKey}: ${line.value} (affect ${PINNED_AFFECT}/10, pinned)`;
   }
   return `${line.memoryKey}: ${line.value} (affect ${current}/10, decayed from ${from})`;
 }

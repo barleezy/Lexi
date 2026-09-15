@@ -56,6 +56,14 @@ import {
   shouldPublishLocation,
   type DeviceLocationState,
 } from "@/lib/voice/location";
+import {
+  authorizeAppleMusic,
+  playAppleMusicSong,
+  stopAppleMusicPlayback,
+  unauthorizeAppleMusic,
+} from "@/lib/apple-music/client";
+import { BackgroundAudioPlayer } from "@/lib/voice/background-music";
+import { DEFAULT_MUSIC_STATE, type MusicSessionState } from "@/lib/voice/persona";
 
 const HINTS: Record<VoicePhase, string> = {
   idle: "Talk to Lexi",
@@ -302,6 +310,11 @@ export function VoiceHome() {
   const [channelNames, setChannelNames] = useState<string[]>([]);
   const [locationOn, setLocationOn] = useState(false);
   const [locationHint, setLocationHint] = useState<string | null>(null);
+  const [music, setMusic] = useState<MusicSessionState>(DEFAULT_MUSIC_STATE);
+  const [appleHint, setAppleHint] = useState<string | null>(null);
+  const [appleBusy, setAppleBusy] = useState(false);
+  const backgroundAudio = useRef(new BackgroundAudioPlayer());
+  const appleDeveloperToken = useRef("");
   const locationWatch = useRef<number | null>(null);
   const lastLocation = useRef<DeviceLocationState | null>(null);
   const lastLocationPublish = useRef(0);
@@ -341,6 +354,17 @@ export function VoiceHome() {
         setChannelNames(
           (["discord", "telegram", "sms", "email"] as const).filter((name) => platforms[name]),
         );
+      })
+      .catch(() => {});
+    void fetch("/api/apple-music", { headers: { "ngrok-skip-browser-warning": "1" } })
+      .then((response) => response.json())
+      .then((body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
+        if (typeof body.developerToken === "string") appleDeveloperToken.current = body.developerToken;
+        setMusic((current) => ({
+          ...current,
+          appleConfigured: Boolean(body.configured),
+          appleConnected: Boolean(body.connected),
+        }));
       })
       .catch(() => {});
     setCanShare(canShareScreen() && !preferWatchTab());
@@ -929,6 +953,95 @@ export function VoiceHome() {
     );
   }
 
+  async function refreshAppleDeveloperToken() {
+    const response = await fetch("/api/apple-music", {
+      headers: { "ngrok-skip-browser-warning": "1" },
+    });
+    const body = (await response.json()) as {
+      configured?: boolean;
+      connected?: boolean;
+      developerToken?: string;
+      error?: string;
+      setup?: string;
+    };
+    if (typeof body.developerToken === "string") appleDeveloperToken.current = body.developerToken;
+    setMusic((current) => ({
+      ...current,
+      appleConfigured: Boolean(body.configured),
+      appleConnected: Boolean(body.connected),
+    }));
+    return body;
+  }
+
+  async function connectAppleMusic() {
+    setAppleBusy(true);
+    setAppleHint(null);
+    try {
+      const status = await refreshAppleDeveloperToken();
+      if (!status.configured || !status.developerToken) {
+        const error = status.error || "Apple Music is not configured.";
+        setAppleHint(error);
+        return { ok: false, error };
+      }
+      const userToken = await authorizeAppleMusic(status.developerToken);
+      const response = await fetch("/api/apple-music", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
+        body: JSON.stringify({ action: "connect", userToken }),
+      });
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || !body.ok) {
+        const error = body.error || "Could not save the Apple Music session.";
+        setAppleHint(error);
+        return { ok: false, error };
+      }
+      setMusic((current) => ({ ...current, appleConfigured: true, appleConnected: true }));
+      sessionRef.current?.setAppleMusicConnected(true);
+      setAppleHint("Apple Music connected.");
+      return { ok: true, connected: true };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Tap Connect Apple Music and sign in with Apple.";
+      setAppleHint(message);
+      return { ok: false, error: message };
+    } finally {
+      setAppleBusy(false);
+    }
+  }
+
+  async function disconnectAppleMusic() {
+    setAppleBusy(true);
+    try {
+      if (appleDeveloperToken.current) {
+        await unauthorizeAppleMusic(appleDeveloperToken.current);
+      }
+      await fetch("/api/apple-music", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
+        body: JSON.stringify({ action: "disconnect" }),
+      });
+      backgroundAudio.current.stop();
+      if (appleDeveloperToken.current) {
+        await stopAppleMusicPlayback(appleDeveloperToken.current);
+      }
+      setMusic((current) => ({
+        ...current,
+        appleConnected: false,
+        playing: false,
+        title: "",
+        source: "none",
+      }));
+      sessionRef.current?.setAppleMusicConnected(false);
+      sessionRef.current?.setMusicPlayback(false);
+      setAppleHint(null);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not disconnect." };
+    } finally {
+      setAppleBusy(false);
+    }
+  }
+
   function toggleLocation() {
     if (locationOn) {
       stopLocationWatch();
@@ -948,6 +1061,44 @@ export function VoiceHome() {
       onSessionId: setSessionId,
       onToyControl: setToyControl,
       onGeneratedMedia: upsertGenerated,
+      onMusicState: setMusic,
+      connectAppleMusic,
+      disconnectAppleMusic,
+      playBackgroundUrl: async (url, title) => {
+        try {
+          if (appleDeveloperToken.current) {
+            await stopAppleMusicPlayback(appleDeveloperToken.current);
+          }
+          await backgroundAudio.current.playUrl(url, title);
+          return { ok: true, title: backgroundAudio.current.currentTitle };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : "Could not play that URL." };
+        }
+      },
+      playAppleMusicSong: async (songId, title) => {
+        try {
+          const status = appleDeveloperToken.current
+            ? { developerToken: appleDeveloperToken.current, configured: true }
+            : await refreshAppleDeveloperToken();
+          if (!status.developerToken) {
+            return { ok: false, error: "Apple Music is not configured." };
+          }
+          backgroundAudio.current.stop();
+          await playAppleMusicSong(status.developerToken, songId);
+          return { ok: true, title: title || "Apple Music" };
+        } catch (error) {
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not play on Apple Music.",
+          };
+        }
+      },
+      stopBackgroundMusic: async () => {
+        backgroundAudio.current.stop();
+        if (appleDeveloperToken.current) {
+          await stopAppleMusicPlayback(appleDeveloperToken.current);
+        }
+      },
       onMicNeedsGesture: () => setMicResume(true),
       onMicRecovered: () => setMicResume(false),
       onError: (message) => {
@@ -974,6 +1125,10 @@ export function VoiceHome() {
     const persisted = readVoiceSessionStore();
     releaseVision(undefined, true);
     stopLocationWatch();
+    backgroundAudio.current.stop();
+    if (appleDeveloperToken.current) {
+      void stopAppleMusicPlayback(appleDeveloperToken.current);
+    }
     sessionRef.current?.stop();
     clearSession();
     writeVoiceSessionStore({ sessionId: null, started: false });
@@ -1410,6 +1565,20 @@ export function VoiceHome() {
               >
                 {locationOn ? "Location on" : "Share location"}
               </button>
+              <button
+                type="button"
+                disabled={appleBusy}
+                onClick={() => {
+                  if (music.appleConnected) {
+                    void disconnectAppleMusic();
+                    return;
+                  }
+                  void connectAppleMusic();
+                }}
+                className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                {music.appleConnected ? "Disconnect Apple Music" : "Connect Apple Music"}
+              </button>
               {live ? (
                 <button
                   type="button"
@@ -1431,6 +1600,10 @@ export function VoiceHome() {
           </div>
           {locationHint ? (
             <p className="px-1 text-[11px] text-zinc-500">{locationHint}</p>
+          ) : null}
+          {appleHint ? <p className="px-1 text-[11px] text-zinc-500">{appleHint}</p> : null}
+          {music.playing ? (
+            <p className="px-1 text-[11px] text-zinc-500">Playing: {music.title || "music"}</p>
           ) : null}
         <form
           onSubmit={(event) => void onComposerSubmit(event)}
