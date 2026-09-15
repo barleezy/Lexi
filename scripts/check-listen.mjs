@@ -52,7 +52,7 @@ expect(isPrimaryMicEnergy(0.02, 0.01) === true, "normal speech primary");
 expect(VAD_TYPE === "server_vad", "server VAD");
 expect(VAD_THRESHOLD === 0.4, "0.4 catches quiet speech");
 expect(VAD_THRESHOLD < 0.5, "below default so mumble commits");
-expect(VAD_SILENCE_DURATION_MS === 400, "400ms end-of-speech — do not steal the turn");
+expect(VAD_SILENCE_DURATION_MS === 300, "300ms end-of-speech — do not steal the turn");
 expect(VAD_PREFIX_PADDING_MS >= 300, "prefix keeps first consonants");
 expect(VAD_PREFIX_PADDING_MS === 350, "350ms prefix for mumbled onsets");
 const vad = buildTurnDetection();
@@ -61,7 +61,7 @@ expectEqual(
   {
     type: "server_vad",
     threshold: 0.4,
-    silence_duration_ms: 400,
+    silence_duration_ms: 300,
     prefix_padding_ms: 350,
   },
   "turn detection payload",

@@ -10,15 +10,15 @@
 export const VAD_TYPE = "server_vad" as const;
 /**
  * Speech-probability gate. 0.5 (xAI default) drops quiet / mumbled words.
- * 0.4 still commits soft speech without stealing the turn (silence stays 400ms).
+ * 0.4 still commits soft speech without stealing the turn (silence stays 300ms).
  */
 export const VAD_THRESHOLD = 0.4;
 /**
  * End-of-speech silence before she takes the turn.
- * 400ms is a finished-sentence pause, not a mid-clause breath (~200–350ms).
- * Tighter (200–280) would clip Ian mid-thought. We do not go below this.
+ * 300ms is a finished-sentence pause, not a mid-clause breath (~200–250ms).
+ * Tighter would clip Ian mid-thought. We do not go below this.
  */
-export const VAD_SILENCE_DURATION_MS = 400;
+export const VAD_SILENCE_DURATION_MS = 300;
 /** Keep first consonants, including mumbled onsets. Do not lower. */
 export const VAD_PREFIX_PADDING_MS = 350;
 
