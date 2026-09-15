@@ -34,8 +34,8 @@ export default async function IosSignInPage({
         <p className="text-sm uppercase tracking-[0.2em] text-neutral-500">Talk to Lexi</p>
         <h1 className="text-3xl font-semibold tracking-tight">Sign in on iPhone</h1>
         <p className="text-neutral-600 dark:text-neutral-400">
-          Same account as talktolexi.app. This sets the <code>lexi_user_id</code> cookie the web
-          already uses, then returns a short-lived token to the native app.
+          Sign in with your account and password, or create an account. This sets the same cookie
+          the site uses, then returns a session to the native app.
         </p>
       </div>
       <IosSignInForm

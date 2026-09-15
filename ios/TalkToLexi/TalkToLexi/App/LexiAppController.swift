@@ -166,7 +166,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             if !realtime.isLive && !isConnecting {
                 connectCall()
             }
-            for _ in 0..<80 where !realtime.isReady && lastError.isEmpty {
+            for _ in 0..<160 where !realtime.isReady && lastError.isEmpty {
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
         }

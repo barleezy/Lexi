@@ -73,7 +73,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     }
 
     func start(token: String, realtimeURL: String, sessionUpdate: [String: Any]) {
-        stop(notify: false)
+        tearDown(notify: false, stopAudio: false)
         generation += 1
         let gen = generation
         phase = .connecting
@@ -90,14 +90,32 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         audio.onPCM = { [weak self] data in
             self?.sendAudio(data)
         }
-        do {
-            try audio.start()
-        } catch {
-            delegate?.realtime(self, error: error.localizedDescription)
-            stop()
-            return
-        }
 
+        Task { [weak self] in
+            guard let self else { return }
+            await self.audio.stop()
+            guard self.generation == gen, self.isLive else { return }
+            do {
+                try await self.audio.start()
+            } catch {
+                await MainActor.run {
+                    self.delegate?.realtime(self, error: error.localizedDescription)
+                    self.stop()
+                }
+                return
+            }
+            guard self.generation == gen, self.isLive else {
+                await self.audio.stop()
+                return
+            }
+            await MainActor.run {
+                self.openSocket(token: token, realtimeURL: realtimeURL, generation: gen)
+            }
+        }
+    }
+
+    private func openSocket(token: String, realtimeURL: String, generation gen: Int) {
+        guard generation == gen, isLive else { return }
         guard let url = URL(string: realtimeURL) else {
             delegate?.realtime(self, error: "Bad realtime URL.")
             stop()
@@ -120,13 +138,19 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     }
 
     func stop(notify: Bool = true) {
+        tearDown(notify: notify, stopAudio: true)
+    }
+
+    private func tearDown(notify: Bool, stopAudio: Bool) {
         generation += 1
         clearWatchdogs()
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
-        audio.stop()
+        if stopAudio {
+            Task { await audio.stop() }
+        }
         pendingAudio.removeAll()
         pendingOutbound.removeAll()
         deferredLiveFrames.removeAll()
@@ -325,6 +349,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             createAttempts = 0
             if phase != .speaking { phase = .thinking }
             Self.log.info("ws.event type=response.created")
+            armGiveUpWatchdog()
         case "response.output_audio.delta":
             phase = .speaking
             clearWatchdogs()
@@ -419,18 +444,10 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     private func armSpokenWatchdog() {
         stallWork?.cancel()
         let gen = generation
-        let started = Date()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, gen == self.generation, self.expectSpoken else { return }
-            if self.phase == .speaking { return }
-            if Date().timeIntervalSince(started) >= Self.expectStall || self.createAttempts >= 2 {
-                Self.log.error("ws.recover reason=expect_stall attempts=\(self.createAttempts, privacy: .public)")
-                self.expectSpoken = false
-                self.createInFlight = false
-                self.phase = .listening
-                DispatchQueue.main.async {
-                    self.delegate?.realtime(self, error: "No reply from Lexi. Try again.")
-                }
+            guard let self, gen == self.generation, self.expectSpoken, self.phase != .speaking else { return }
+            if self.createAttempts >= 2 {
+                self.giveUpWaiting()
                 return
             }
             Self.log.info("ws.recover reason=create_stall attempt=\(self.createAttempts + 1, privacy: .public)")
@@ -439,6 +456,27 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         }
         stallWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.createStall, execute: work)
+    }
+
+    private func armGiveUpWatchdog() {
+        stallWork?.cancel()
+        let gen = generation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, gen == self.generation, self.expectSpoken, self.phase != .speaking else { return }
+            self.giveUpWaiting()
+        }
+        stallWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.expectStall, execute: work)
+    }
+
+    private func giveUpWaiting() {
+        Self.log.error("ws.recover reason=expect_stall attempts=\(self.createAttempts, privacy: .public)")
+        expectSpoken = false
+        createInFlight = false
+        phase = .listening
+        DispatchQueue.main.async {
+            self.delegate?.realtime(self, error: "No reply from Lexi. Try again.")
+        }
     }
 
     private func armOpenTimeout(generation gen: Int) {

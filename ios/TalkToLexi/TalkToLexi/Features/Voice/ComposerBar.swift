@@ -6,6 +6,7 @@ struct ComposerBar: View {
     @Binding var draft: String
     var live: Bool
     var phase: VoicePhase
+    var focused: FocusState<Bool>.Binding
     var onSubmit: () -> Void
     var onPhoto: (String) -> Void
 
@@ -20,9 +21,14 @@ struct ComposerBar: View {
                     .foregroundStyle(.white)
             }
             .accessibilityLabel("Add photo")
-            TextField(placeholder, text: $draft)
+            TextField(placeholder, text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .foregroundStyle(.white)
+                .tint(.white)
+                .lineLimit(1...4)
                 .textInputAutocapitalization(.sentences)
                 .disableAutocorrection(false)
+                .focused(focused)
                 .submitLabel(hasText ? .send : .go)
                 .onSubmit(onSubmit)
             Button(action: onSubmit) {

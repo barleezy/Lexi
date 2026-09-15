@@ -49,6 +49,8 @@ expectEqual(normalizeUserId(" Ian "), "Ian", "normalize padded");
 expectEqual(normalizeUserId(""), "", "normalize empty");
 expectEqual(normalizeUserId(null), "", "normalize null");
 expectEqual(normalizeUserId("Alex"), "Alex", "normalize other user");
+expectEqual(normalizeUserId("Barleezy"), "Ian", "normalize Barleezy to admin");
+expectEqual(normalizeUserId("barleezy"), "Ian", "normalize barleezy");
 
 const bare = new Request("http://localhost/api/memory");
 expectEqual(resolveUserId(bare, null), "", "GET does not invent Ian");

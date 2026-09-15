@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
-import UIKit
+import ImageIO
+import UniformTypeIdentifiers
 
 struct WatchFrame {
     var dataUrl: String
@@ -104,9 +105,20 @@ final class WatchController: ObservableObject {
         }
     }
 
-    private static func jpegDataURL(_ image: CGImage) -> String? {
-        let ui = UIImage(cgImage: image)
-        guard let data = ui.jpegData(compressionQuality: 0.62) else { return nil }
+    nonisolated private static func jpegDataURL(_ image: CGImage) -> String? {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else { return nil }
+        CGImageDestinationAddImage(
+            dest,
+            image,
+            [kCGImageDestinationLossyCompressionQuality: 0.62] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(dest) else { return nil }
         return "data:image/jpeg;base64,\(data.base64EncodedString())"
     }
 }

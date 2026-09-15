@@ -15,11 +15,14 @@ export function defaultUserId() {
   return IAN_USER_ID;
 }
 
-/** Canonicalize a known account id. Blank is not Ian. `ian` / `Ian` / `IAN` stay `Ian`. */
+/** Logins that are the admin (Ian). Username Barleezy maps to the same account. */
+const ADMIN_LOGIN_ALIASES = new Set(["ian", "barleezy"]);
+
+/** Canonicalize a known account id. Blank is not Ian. `ian` / `Barleezy` stay `Ian`. */
 export function normalizeUserId(raw?: string | null) {
   const trimmed = raw?.trim() ?? "";
   if (!trimmed) return "";
-  if (trimmed.toLowerCase() === IAN_USER_ID.toLowerCase()) return IAN_USER_ID;
+  if (ADMIN_LOGIN_ALIASES.has(trimmed.toLowerCase())) return IAN_USER_ID;
   return trimmed;
 }
 

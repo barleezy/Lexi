@@ -33,6 +33,8 @@ const token = signIosToken("ian", 1_000, env);
 expect(typeof token === "string" && token.includes("."), "signed token");
 const verified = verifyIosToken(token, 2_000, env);
 expect(verified?.userId === "Ian", "normalize Ian");
+const barleezy = signIosToken("Barleezy", 1_000, env);
+expect(verifyIosToken(barleezy, 2_000, env)?.userId === "Ian", "normalize Barleezy");
 const alex = signIosToken("Alex", 1_000, env);
 expect(verifyIosToken(alex, 2_000, env)?.userId === "Alex", "keep other user");
 expect(verifyIosToken(token, 1_000 + 60 * 60 * 24 * 31 * 1000, env) === null, "expired");

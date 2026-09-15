@@ -13,6 +13,9 @@ struct MusicBarView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 TextField("Play a song or paste an Apple Music link", text: $query)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.white)
+                    .tint(.white)
                     .textInputAutocapitalization(.never)
                     .disableAutocorrection(true)
                     .font(.system(size: 14))

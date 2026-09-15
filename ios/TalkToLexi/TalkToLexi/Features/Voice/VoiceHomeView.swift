@@ -2,18 +2,25 @@ import SwiftUI
 
 struct VoiceHomeView: View {
     @EnvironmentObject private var app: LexiAppController
+    @FocusState private var composerFocused: Bool
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack {
             LexiTheme.page.ignoresSafeArea()
-            hero
-            VStack(spacing: 0) {
-                header
-                Spacer(minLength: 8)
-                titleBlock
-                Spacer(minLength: 8)
-                bottomStack
+            ScrollView {
+                VStack(spacing: 14) {
+                    header
+                    portrait
+                    titleBlock
+                    extras
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
             }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            dock
         }
     }
 
@@ -29,38 +36,34 @@ struct VoiceHomeView: View {
             }
             .buttonStyle(LexiPillButtonStyle())
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 12)
+        .padding(.top, 8)
     }
 
-    private var hero: some View {
+    private var portrait: some View {
         Image("LexiPortrait")
             .resizable()
-            .scaledToFill()
+            .scaledToFit()
             .frame(maxWidth: .infinity)
-            .frame(height: 360, alignment: .top)
-            .opacity(0.34)
-            .mask(
-                LinearGradient(
-                    colors: [.black, .black.opacity(0.45), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(LexiTheme.stroke, lineWidth: 1)
             )
-            .ignoresSafeArea(edges: .top)
-            .allowsHitTesting(false)
+            .accessibilityLabel("Lexi")
     }
 
     private var titleBlock: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             Text("/ˈlek.si/")
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
                 .tracking(3.2)
                 .textCase(.uppercase)
                 .foregroundStyle(LexiTheme.muted)
             Text("Lexi")
-                .font(.system(size: 64, weight: .semibold))
-                .tracking(-1.2)
+                .font(.system(size: 40, weight: .semibold))
+                .tracking(-0.8)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
             if !app.channelNames.isEmpty {
                 Text("Also on \(app.channelNames.joined(separator: " · "))")
                     .font(.system(size: 11))
@@ -69,14 +72,12 @@ struct VoiceHomeView: View {
                     .foregroundStyle(LexiTheme.muted)
             }
             Text(displayCopy)
-                .font(.system(size: 18))
+                .font(.system(size: 16))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color(red: 0.72, green: 0.72, blue: 0.75))
                 .frame(maxWidth: 360)
-                .padding(.top, 4)
             TranscriptView(rows: app.rows)
         }
-        .padding(.horizontal, 24)
     }
 
     private var displayCopy: String {
@@ -85,7 +86,7 @@ struct VoiceHomeView: View {
         return "A voice-first companion."
     }
 
-    private var bottomStack: some View {
+    private var extras: some View {
         VStack(alignment: .leading, spacing: 10) {
             if app.watch.isLoaded {
                 WatchPlayerView(player: app.watch.player, title: app.watch.title) {
@@ -93,26 +94,14 @@ struct VoiceHomeView: View {
                 }
             }
             GeneratedMediaView(items: app.generate.items)
-            HStack(alignment: .bottom) {
-                if app.camera.isOn {
+            if app.camera.isOn {
+                HStack(alignment: .bottom) {
                     CameraPreviewView(session: app.camera.session, mirrored: app.camera.facing == .front) {
                         app.camera.flip()
                     }
                     .frame(width: 96, height: 72)
-                }
-                Spacer(minLength: 0)
-                VStack(alignment: .trailing, spacing: 6) {
-                    Button {
-                        app.toggleCameraShare()
-                    } label: {
-                        Image(systemName: app.camera.isOn ? "camera.fill" : "camera")
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(app.camera.isOn ? 0.16 : 0.08), in: Circle())
-                            .overlay(Circle().stroke(LexiTheme.stroke, lineWidth: 1))
-                    }
-                    .accessibilityLabel(app.camera.isOn ? "Stop sharing camera" : "Share camera")
-                    if app.camera.isOn {
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: 6) {
                         Text("Sharing with Lexi")
                             .font(.system(size: 11))
                             .foregroundStyle(LexiTheme.muted)
@@ -132,7 +121,6 @@ struct VoiceHomeView: View {
             ) {
                 app.loadVideo()
             }
-            actionPills
             if let hint = app.location.hint {
                 Text(hint)
                     .font(.system(size: 11))
@@ -157,7 +145,14 @@ struct VoiceHomeView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(LexiTheme.muted)
             }
+        }
+    }
+
+    private var dock: some View {
+        VStack(spacing: 10) {
+            actionPills
             Button(app.connectTitle) {
+                composerFocused = false
                 app.toggleCall()
             }
             .buttonStyle(LexiFilledButtonStyle())
@@ -166,39 +161,43 @@ struct VoiceHomeView: View {
                 draft: $app.draft,
                 live: app.isLive,
                 phase: app.phase,
+                focused: $composerFocused,
                 onSubmit: { app.sendDraftOrToggle() },
                 onPhoto: { app.sendPhoto($0) }
             )
-            Text("Adults only. Porn 18+, roleplay 21+, refuse minors. This app holds the Grok voice session on the phone.")
+            Text("Adults only. Porn 18+, roleplay 21+, refuse minors.")
                 .font(.caption)
                 .foregroundStyle(LexiTheme.muted)
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(LexiTheme.page.ignoresSafeArea(edges: .bottom))
     }
 
     private var actionPills: some View {
-        HStack(spacing: 6) {
-            LiveClock()
-            Spacer(minLength: 4)
-            Button(app.location.isSharing ? "Location on" : "Share location") {
-                app.location.toggle()
-            }
-            .buttonStyle(LexiPillButtonStyle(emphasized: app.location.isSharing))
-            Button(app.camera.isOn ? "Camera on" : "Share camera") {
-                app.toggleCameraShare()
-            }
-            .buttonStyle(LexiPillButtonStyle(emphasized: app.camera.isOn))
-            Button(app.music.connected ? "Disconnect Apple Music" : "Connect Apple Music") {
-                app.connectAppleMusic()
-            }
-            .buttonStyle(LexiPillButtonStyle(emphasized: app.music.connected))
-            .disabled(app.music.busy)
-            if app.isLive && app.toys.grantPending && !app.toys.granted {
-                Button("Give Lexi toy control") {
-                    app.toys.grantFromUser()
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                LiveClock()
+                Button(app.location.isSharing ? "Location on" : "Share location") {
+                    app.location.toggle()
                 }
-                .buttonStyle(LexiPillButtonStyle(emphasized: true))
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.location.isSharing))
+                Button(app.camera.isOn ? "Camera on" : "Share camera") {
+                    app.toggleCameraShare()
+                }
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.camera.isOn))
+                Button(app.music.connected ? "Disconnect Apple Music" : "Connect Apple Music") {
+                    app.connectAppleMusic()
+                }
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.music.connected))
+                .disabled(app.music.busy)
+                if app.isLive && app.toys.grantPending && !app.toys.granted {
+                    Button("Give Lexi toy control") {
+                        app.toys.grantFromUser()
+                    }
+                    .buttonStyle(LexiPillButtonStyle(emphasized: true))
+                }
             }
         }
     }

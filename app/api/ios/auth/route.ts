@@ -1,5 +1,11 @@
 import { cookies } from "next/headers";
 import {
+  AccountAuthError,
+  authenticateAccount,
+  createAccount,
+  ensureBootstrapAdmin,
+} from "@/lib/auth/accounts";
+import {
   LEXI_USER_COOKIE,
   LEXI_USER_COOKIE_MAX_AGE,
   callbackURLWithToken,
@@ -7,7 +13,7 @@ import {
   parseCallbackURI,
   signIosToken,
 } from "@/lib/ios/auth";
-import { isAdminUserId, normalizeUserId, resolveUserId } from "@/lib/memory/user";
+import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
 
 export const maxDuration = 15;
 
@@ -47,6 +53,8 @@ export async function POST(request: Request) {
 
   let body: {
     userId?: unknown;
+    password?: unknown;
+    action?: unknown;
     redirect_uri?: unknown;
     redirectURI?: unknown;
     state?: unknown;
@@ -55,6 +63,14 @@ export async function POST(request: Request) {
     body = (await request.json()) as typeof body;
   } catch {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const action = typeof body.action === "string" ? body.action.trim().toLowerCase() : "signin";
+  if (action !== "signin" && action !== "signup") {
+    return Response.json({ error: "Use Sign in or Create account." }, { status: 400 });
+  }
+  if (typeof body.password !== "string" || !body.password) {
+    return Response.json({ error: "Password is required." }, { status: 400 });
   }
 
   const redirectURI =
@@ -68,12 +84,20 @@ export async function POST(request: Request) {
     );
   }
 
-  const userId = normalizeUserId(
-    typeof body.userId === "string" ? body.userId : resolveUserId(request, null),
-  );
-  if (!userId) {
-    return Response.json({ error: "Account is required." }, { status: 400 });
+  let userId: string;
+  try {
+    await ensureBootstrapAdmin();
+    userId =
+      action === "signup"
+        ? await createAccount(typeof body.userId === "string" ? body.userId : "", body.password)
+        : await authenticateAccount(typeof body.userId === "string" ? body.userId : "", body.password);
+  } catch (error) {
+    if (error instanceof AccountAuthError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
+    return Response.json({ error: "Could not sign in." }, { status: 500 });
   }
+
   const token = signIosToken(userId);
   if (!token) {
     return Response.json({ error: "Could not sign an iOS session." }, { status: 500 });

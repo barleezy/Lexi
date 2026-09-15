@@ -11,34 +11,80 @@ final class VoiceAudioEngine {
     private var targetFormat: AVAudioFormat?
     private var pending = Data()
     private var running = false
+    private var startGeneration = 0
     var onPCM: ((Data) -> Void)?
 
     /// Activates `AVAudioSession` `.playAndRecord` only while a voice session is running.
     /// Never call this at launch, while signed out, or while idle.
-    private func activatePlayAndRecord() throws {
+    private var categoryOptions: AVAudioSession.CategoryOptions {
+        var options: AVAudioSession.CategoryOptions = [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
+        #if compiler(>=6.2)
+        options.insert(.allowBluetoothHFP)
+        #else
+        options.insert(.allowBluetooth)
+        #endif
+        return options
+    }
+
+    private func activatePlayAndRecord() async throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                .mixWithOthers,
-                .allowBluetooth,
-                .allowBluetoothA2DP,
-                .defaultToSpeaker,
-            ]
-        )
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: categoryOptions)
         try session.setPreferredSampleRate(Double(Self.sampleRate))
         try session.setPreferredIOBufferDuration(0.04)
-        try session.setActive(true, options: [])
+        try await setSessionActive(true)
     }
 
-    private func deactivatePlayAndRecord() {
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    private func deactivatePlayAndRecord() async {
+        try? await setSessionActive(false)
     }
 
-    func start() throws {
+    private func setSessionActive(_ active: Bool) async throws {
+        let session = AVAudioSession.sharedInstance()
+        if #available(iOS 26.0, *) {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                let finish: @Sendable (Bool, (any Error)?) -> Void = { ok, error in
+                    if let error {
+                        cont.resume(throwing: error)
+                    } else if !ok {
+                        cont.resume(throwing: NSError(
+                            domain: "LexiAudio",
+                            code: 2,
+                            userInfo: [NSLocalizedDescriptionKey: "Could not update the audio session."]
+                        ))
+                    } else {
+                        cont.resume()
+                    }
+                }
+                if active {
+                    session.activate(options: [], completionHandler: finish)
+                } else {
+                    session.deactivate(options: [], completionHandler: finish)
+                }
+            }
+            return
+        }
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    if active {
+                        try session.setActive(true, options: [])
+                    } else {
+                        try session.setActive(false, options: [.notifyOthersOnDeactivation])
+                    }
+                    cont.resume()
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func start() async throws {
         if running { return }
-        try activatePlayAndRecord()
+        startGeneration += 1
+        let gen = startGeneration
+        try await activatePlayAndRecord()
+        guard gen == startGeneration else { return }
         if player.engine == nil {
             engine.attach(player)
             let outFormat = engine.mainMixerNode.outputFormat(forBus: 0)
@@ -52,7 +98,7 @@ final class VoiceAudioEngine {
             channels: 1,
             interleaved: true
         ) else {
-            deactivatePlayAndRecord()
+            if gen == startGeneration { await deactivatePlayAndRecord() }
             throw NSError(domain: "LexiAudio", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not build 48 kHz PCM format."])
         }
         targetFormat = mono48
@@ -67,20 +113,27 @@ final class VoiceAudioEngine {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            deactivatePlayAndRecord()
+            if gen == startGeneration { await deactivatePlayAndRecord() }
             throw error
+        }
+        guard gen == startGeneration else {
+            input.removeTap(onBus: 0)
+            engine.stop()
+            await deactivatePlayAndRecord()
+            return
         }
         player.play()
         running = true
     }
 
-    func stop() {
+    func stop() async {
+        startGeneration += 1
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
         pending.removeAll()
         running = false
-        deactivatePlayAndRecord()
+        await deactivatePlayAndRecord()
     }
 
     func stopPlayback() {

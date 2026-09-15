@@ -21,7 +21,7 @@ export function iosSigningSecret(env: NodeJS.ProcessEnv = process.env) {
 export function iosNormalizeUserId(raw?: string | null) {
   const trimmed = raw?.trim() ?? "";
   if (!trimmed) return "";
-  if (trimmed.toLowerCase() === "ian") return "Ian";
+  if (trimmed.toLowerCase() === "ian" || trimmed.toLowerCase() === "barleezy") return "Ian";
   return trimmed;
 }
 

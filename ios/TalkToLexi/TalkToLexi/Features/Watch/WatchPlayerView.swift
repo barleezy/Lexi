@@ -47,6 +47,9 @@ struct WatchURLField: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 TextField("Paste video URL", text: $draft)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.white)
+                    .tint(.white)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
