@@ -67,6 +67,7 @@ export function looksLikeVideoContentType(value: string | null | undefined, sour
   if (type === "application/mpeg" || type === "application/mp2t") return true;
   if (type.includes("mpegurl") || type === "application/x-mpegurl") return true;
   if (type === "text/plain" && sourceUrl) {
+    if (/\.m3u8(?:$|[/?#])/i.test(sourceUrl) || /\/hls\//i.test(sourceUrl)) return true;
     const ext = (sourceUrl.split("#")[0] ?? sourceUrl).split("?")[0]?.split(".").pop()?.toLowerCase() ?? "";
     return Boolean(
       ext &&
@@ -89,4 +90,37 @@ export function looksLikeVideoContentType(value: string | null | undefined, sour
     );
   }
   return false;
+}
+
+export function isHlsPlaylist(url: string, contentType: string | null) {
+  const type = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (type.includes("mpegurl")) return true;
+  return /\.m3u8(?:$|[?#])/i.test(url);
+}
+
+export function rewriteHlsPlaylist(text: string, playlistUrl: string, referer: string) {
+  const proxyLine = (href: string) => {
+    const parsed = parseVideoSourceUrl(href);
+    if (!parsed.ok) return href;
+    const base = `/api/video/proxy?url=${encodeURIComponent(parsed.href)}`;
+    return referer ? `${base}&referer=${encodeURIComponent(referer)}` : base;
+  };
+  const resolveHref = (raw: string) => {
+    try {
+      return proxyLine(new URL(raw, playlistUrl).href);
+    } catch {
+      return raw;
+    }
+  };
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) {
+        return line.replace(/URI="([^"]+)"/gi, (_all, uri: string) => `URI="${resolveHref(uri)}"`);
+      }
+      return resolveHref(trimmed);
+    })
+    .join("\n");
 }

@@ -1,21 +1,19 @@
-import { resolveWatchUrl } from "@/lib/voice/watch-resolve";
+import { resolveWatchFeed } from "@/lib/voice/watch-feed";
 
 export const maxDuration = 30;
 
 export async function GET(request: Request) {
-  const raw = new URL(request.url).searchParams.get("url");
-  const resolved = await resolveWatchUrl(raw ?? "");
-  if (!resolved.ok) {
+  try {
+    const raw = new URL(request.url).searchParams.get("url");
+    const resolved = await resolveWatchFeed(raw ?? "");
+    if (!resolved.ok) {
+      return Response.json(resolved, { status: 400 });
+    }
+    return Response.json(resolved);
+  } catch {
     return Response.json(
-      { error: resolved.error, embedUrl: resolved.embedUrl || "" },
-      { status: 400 },
+      { ok: false, code: "network", error: "Could not open that video. Check the link and try again." },
+      { status: 502 },
     );
   }
-  return Response.json({
-    title: resolved.result.title,
-    mediaUrl: resolved.result.mediaUrl,
-    kind: resolved.result.kind,
-    embedUrl: resolved.result.embedUrl,
-    pageUrl: resolved.result.pageUrl,
-  });
 }

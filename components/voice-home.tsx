@@ -303,6 +303,7 @@ export function VoiceHome() {
   );
   const [phoneWatch, setPhoneWatch] = useState(false);
   const [toyControl, setToyControl] = useState(false);
+  const [toyGrantPending, setToyGrantPending] = useState(false);
   const [tabHidden, setTabHidden] = useState(false);
   const [windowBlurred, setWindowBlurred] = useState(false);
   const [micResume, setMicResume] = useState(false);
@@ -882,6 +883,7 @@ export function VoiceHome() {
     setPhase("idle");
     setSessionId(null);
     setToyControl(false);
+    setToyGrantPending(false);
     setMicResume(false);
   }
 
@@ -1060,6 +1062,7 @@ export function VoiceHome() {
       onCaption: commitCaption,
       onSessionId: setSessionId,
       onToyControl: setToyControl,
+      onToyControlRequest: setToyGrantPending,
       onGeneratedMedia: upsertGenerated,
       onMusicState: setMusic,
       connectAppleMusic,
@@ -1579,21 +1582,15 @@ export function VoiceHome() {
               >
                 {music.appleConnected ? "Disconnect Apple Music" : "Connect Apple Music"}
               </button>
-              {live ? (
+              {live && toyGrantPending && !toyControl ? (
                 <button
                   type="button"
                   onClick={() => {
-                    const session = sessionRef.current;
-                    if (!session) return;
-                    if (toyControl) {
-                      session.setUserToyControl(false);
-                      return;
-                    }
-                    session.sendText("Give Lexi toy control");
+                    sessionRef.current?.setUserToyControl(true);
                   }}
                   className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
                 >
-                  {toyControl ? "Revoke" : "Give Lexi toy control"}
+                  Give Lexi toy control
                 </button>
               ) : null}
             </div>

@@ -116,6 +116,7 @@ type SessionHandlers = {
   onError: (message: string) => void;
   onSessionId?: (sessionId: string | null) => void;
   onToyControl?: (granted: boolean) => void;
+  onToyControlRequest?: (pending: boolean) => void;
   onMicNeedsGesture?: () => void;
   onMicRecovered?: () => void;
   onGeneratedMedia?: (item: GeneratedMediaItem) => void;
@@ -1394,6 +1395,7 @@ export class VoiceSession {
   stop(by: "client" | "error" = "client") {
     if (this.stopped) return;
     this.stopped = true;
+    this.emitToyControlPending(false);
     this.stopClockRefresh();
     this.pendingVisionNotices = [];
     this.pendingVideoNotices = [];
@@ -2097,6 +2099,7 @@ export class VoiceSession {
         alreadyGranted: this.toyControlGranted,
       });
       if (!resolved.ok) {
+        if (requested && !this.toyControlGranted) this.emitToyControlPending(true);
         return {
           ok: false,
           controlGranted: this.toyControlGranted,
@@ -2455,8 +2458,13 @@ export class VoiceSession {
         void this.runToyCommand("toy_command", { action: "stop" });
       }
     }
+    this.emitToyControlPending(false);
     this.handlers.onToyControl?.(granted);
     return { ok: true, controlGranted: granted, source: "user" };
+  }
+
+  private emitToyControlPending(pending: boolean) {
+    this.handlers.onToyControlRequest?.(pending);
   }
 
   private emitGeneratedMedia(item: GeneratedMediaItem) {
@@ -2600,7 +2608,10 @@ export class VoiceSession {
   private noteUserToyIntent(text: string) {
     this.lastUserUtterance = text;
     const intent = parseToyControlIntent(text);
-    if (intent === "grant") this.applyUserToyControl(true);
+    if (intent === "grant") {
+      if (!this.toyControlGranted) this.emitToyControlPending(true);
+      return;
+    }
     if (intent === "revoke") this.applyUserToyControl(false);
   }
 

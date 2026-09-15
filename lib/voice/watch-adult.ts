@@ -27,7 +27,10 @@ const KNOWN_ADULT_HOSTS = [
 const ADULT_HOST_HINT =
   /(?:porn|xxx|xvideos|xnxx|xhamster|redtube|spankbang|youporn|tube8|youjizz|pornhub|eporner|tnaflix|ashemaletube|transangels|adulttime|thegay)/i;
 const ADULT_PATH =
-  /\/(?:view_video(?:\.php)?|video\/|videos\/|embedframe\/|embed\/|xembed\.php)/i;
+  /\/(?:view_video(?:\.php)?|video-|video\/|videos\/|embedframe\/|embed\/|xembed\.php)/i;
+
+const XNXX_HOSTS = ["xnxx.com", "xnxx.es", "xnxx.tv", "xnxx-cdn.com"];
+const ADULT_CDN_REFERER: Array<[string, string]> = [["xnxx-cdn.com", "https://www.xnxx.com/"]];
 
 function pageHost(raw: string) {
   try {
@@ -51,10 +54,36 @@ export const DIRECT_STREAM_HINT =
 export const CLOUDFLARE_DIRECT_HINT =
   "That site is blocking our server (Cloudflare). Official embeds will not play inside Lexi. Paste the direct mp4, webm, m3u8, or get_file URL into this box — it plays in the watch feed. If this browser cannot read the page (CORS), the site page will not work; you need the file/stream URL.";
 
+function hostMatchesSuffix(host: string, known: string) {
+  return host === known || host.endsWith(`.${known}`);
+}
+
+export function isXnxxHost(hostname: string) {
+  const host = hostname.trim().toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
+  return XNXX_HOSTS.some((known) => hostMatchesSuffix(host, known));
+}
+
+export function isXnxxTubeUrl(raw: string) {
+  try {
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (!isXnxxHost(parsed.hostname)) return false;
+    if (isDirectWatchMediaUrl(raw)) return false;
+    const path = parsed.pathname;
+    return (
+      /\/video-[a-z0-9]+/i.test(path) ||
+      /\/embedframe\/[a-z0-9]+/i.test(path) ||
+      isAdultPageUrl(raw)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isAdultPageHost(hostname: string) {
   const host = hostname.trim().toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
   if (!host) return false;
-  return hostMatchesList(host) || ADULT_HOST_HINT.test(host);
+  return hostMatchesList(host) || isXnxxHost(host) || ADULT_HOST_HINT.test(host);
 }
 
 export type WatchResolveKind = "mp4" | "hls";
@@ -111,7 +140,8 @@ export function adultEmbedUrl(raw: string) {
       return id ? `https://www.xvideos.com/embedframe/${id}` : "";
     }
     if (host.includes("xnxx")) {
-      const id = /\/video-([a-z0-9]+)/i.exec(path)?.[1];
+      const id =
+        /\/video-([a-z0-9]+)/i.exec(path)?.[1] || /\/embedframe\/([a-z0-9]+)/i.exec(path)?.[1];
       return id ? `https://www.xnxx.com/embedframe/${id}` : "";
     }
     if (host.includes("xhamster") || host.includes("xhwebsite")) {
@@ -246,9 +276,10 @@ function qualityScore(href: string) {
 function pickMedia(urls: string[]): { href: string; kind: WatchResolveKind } | null {
   const unique = [...new Set(urls.map((url) => unescapeJsonUrl(url)).filter(isMediaHref))];
   if (!unique.length) return null;
-  unique.sort((a, b) => qualityScore(b) - qualityScore(a));
-  const mp4 = unique.find((url) => !url.toLowerCase().includes(".m3u8"));
-  const chosen = mp4 ?? unique[0];
+  const hls = unique.filter((url) => url.toLowerCase().includes(".m3u8"));
+  const pool = hls.length ? hls : unique;
+  pool.sort((a, b) => qualityScore(b) - qualityScore(a));
+  const chosen = pool[0];
   return { href: chosen, kind: chosen.toLowerCase().includes(".m3u8") ? "hls" : "mp4" };
 }
 
@@ -297,6 +328,8 @@ export function extractAdultMediaFromHtml(html: string, pageUrl: string) {
     ...collectQuotedUrls(html, /property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)/gi),
     ...collectQuotedUrls(html, /content=["']([^"']+)["'][^>]+property=["']og:video(?::url)?["']/gi),
     ...collectQuotedUrls(html, /setVideoHLS\(['"]([^'"]+)/gi),
+    ...collectQuotedUrls(html, /setVideoHLS["'\s:=]+["']([^"']+)/gi),
+    ...collectQuotedUrls(html, /['"]hls['"]\s*:\s*['"](https?:[^'"]+\.m3u8[^'"]*)/gi),
     ...collectQuotedUrls(html, /"(?:720p|480p|240p|1080p)"\s*:\s*\["([^"]+)"/gi),
   );
   const defs = /mediaDefinitions"\s*:\s*(\[[\s\S]*?\])/.exec(html) || /"mediaDefinitions"\s*:\s*(\[[\s\S]*?\])/.exec(html);
@@ -320,7 +353,10 @@ export function watchMediaReferer(mediaUrl: string, pageUrl = "") {
   }
   try {
     const host = new URL(mediaUrl).hostname.replace(/^www\./, "").toLowerCase();
-    const known = KNOWN_ADULT_HOSTS.find((name) => host === name || host.endsWith(`.${name}`));
+    const cdn = ADULT_CDN_REFERER.find(([suffix]) => hostMatchesSuffix(host, suffix));
+    if (cdn) return cdn[1];
+    if (isXnxxHost(host)) return "https://www.xnxx.com/";
+    const known = KNOWN_ADULT_HOSTS.find((name) => hostMatchesSuffix(host, name));
     if (known) return `https://www.${known}/`;
   } catch {
     return "";
@@ -332,7 +368,8 @@ export function shouldProxyWatchMedia(mediaUrl: string) {
   if (isWatchHlsUrl(mediaUrl)) return true;
   if (DIRECT_MEDIA_PATH.test(mediaUrl)) return true;
   try {
-    return isAdultPageHost(new URL(mediaUrl).hostname);
+    const host = new URL(mediaUrl).hostname;
+    return isXnxxHost(host) || isAdultPageHost(host);
   } catch {
     return false;
   }

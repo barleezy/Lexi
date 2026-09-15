@@ -1,70 +1,36 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   captureVideoShot,
-  directVideoHref,
-  isPageLikeVideoUrl,
   isVideoFile,
   nextWatchPlaybackSrc,
   playableVideoSrc,
   titleFromVideoUrl,
-  VIDEO_ACCEPT,
   WATCH_CAPTURE_INTERVAL_MS,
   WATCH_SEND_GAP_MS,
   type VideoSourceKind,
 } from "@/lib/voice/video";
-import {
-  mpegtsMediaType,
-  watchPlaybackKind,
-  watchShouldRemuxOnNativeError,
-  watchSizeError,
-} from "@/lib/voice/watch-formats";
+import { watchShouldRemuxOnNativeError, watchSizeError } from "@/lib/voice/watch-formats";
 import {
   adultEmbedCanFrame,
-  CLOUDFLARE_DIRECT_HINT,
-  DIRECT_STREAM_HINT,
-  extractAdultMediaFromHtml,
-  isAdultPageUrl,
-  isCloudflareChallenge,
-  isDirectWatchMediaUrl,
-  isWatchHlsUrl,
   normalizeAdultWatchInput,
   proxiedWatchMedia,
   shouldProxyWatchMedia,
 } from "@/lib/voice/watch-adult";
-import { iosLacksMsePlayback } from "@/lib/voice/watch-mpegts";
+import { requestWatchFeed, type WatchFeedMedia } from "@/lib/voice/watch-feed";
+import { HLS_ATTACH_ERROR, planWatchPlayback } from "@/lib/voice/watch-player";
 import {
   openWatchChannel,
   videoElementHasAudio,
   type WatchChannelMessage,
   WATCH_UI_ENABLED,
 } from "@/lib/voice/watch-channel";
+import { WatchFeedBar } from "@/components/watch-feed-bar";
 
 type WatchSource =
   | { kind: "file"; file: File; title: string }
   | { kind: "url"; raw: string; playable: string; title: string };
-
-function FilmIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden>
-      <rect
-        x="3"
-        y="5"
-        width="18"
-        height="14"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M8 5v14M16 5v14M3 9h5M3 15h5M16 9h5M16 15h5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-    </svg>
-  );
-}
 
 export function WatchPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -231,18 +197,22 @@ export function WatchPage() {
   }
 
   function playIdentified(source: WatchSource, href: string) {
-    const file = { name: source.kind === "file" ? source.file.name : source.raw, type: source.kind === "file" ? source.file.type : "" };
-    const kind = watchPlaybackKind(file);
     const origin = source.kind === "file" ? "file" : "url";
-    if (source.kind === "url" && isWatchHlsUrl(source.raw)) {
+    const plan = planWatchPlayback({
+      mediaUrl: source.kind === "url" ? source.raw : href,
+      playable: href,
+      fileName: source.kind === "file" ? source.file.name : source.raw,
+      fileType: source.kind === "file" ? source.file.type : "",
+    });
+    if (plan.mode === "hls") {
       showHls(href, source.title, origin);
       return;
     }
-    if (kind === "mpegts" && !iosLacksMsePlayback()) {
-      showMpegts(href, mpegtsMediaType(file), source.title, origin);
+    if (plan.mode === "mpegts") {
+      showMpegts(href, plan.mpegtsType, source.title, origin);
       return;
     }
-    if (kind === "remux" || (kind === "mpegts" && iosLacksMsePlayback())) {
+    if (plan.mode === "remux") {
       void convertAndPlay(source);
       return;
     }
@@ -253,7 +223,8 @@ export function WatchPage() {
     const playable = proxiedWatchMedia(media, pageUrl) || playableVideoSrc(media) || media;
     const source: WatchSource = { kind: "url", raw, playable, title: nextTitle };
     sourceRef.current = source;
-    if (kind === "hls" || isWatchHlsUrl(media)) {
+    const plan = planWatchPlayback({ mediaUrl: media, playable, kind, fileName: raw });
+    if (plan.mode === "hls") {
       urlStage.current = "proxy";
       showHls(playable, nextTitle, "url");
       return;
@@ -267,11 +238,8 @@ export function WatchPage() {
     playIdentified(source, media);
   }
 
-  function playDirectStream(raw: string) {
-    const href = directVideoHref(raw);
-    if (!href) return false;
-    playResolvedMedia(raw, href, isWatchHlsUrl(href) ? "hls" : "mp4", titleFromVideoUrl(raw), raw);
-    return true;
+  function playFromFeed(result: WatchFeedMedia) {
+    playResolvedMedia(result.raw, result.mediaUrl, result.kind, result.title, result.pageUrl);
   }
 
   function showHls(url: string, nextTitle: string, source: VideoSourceKind) {
@@ -300,120 +268,39 @@ export function WatchPage() {
     );
   }
 
-  async function tryBrowserExtract(pageUrl: string) {
+  async function loadUrl(raw: string) {
     try {
-      const response = await fetch(pageUrl, {
-        mode: "cors",
-        credentials: "omit",
-        headers: { Accept: "text/html,application/xhtml+xml" },
-      });
-      if (!response.ok) return null;
-      const html = (await response.text()).slice(0, 1_500_000);
-      if (!html || isCloudflareChallenge(html)) return null;
-      const extracted = extractAdultMediaFromHtml(html, response.url || pageUrl);
-      if (!extracted.media) return null;
-      return {
-        title: extracted.title || titleFromVideoUrl(pageUrl),
-        mediaUrl: extracted.media.href,
-        kind: extracted.media.kind,
-        pageUrl: response.url || pageUrl,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  async function loadAdultPage(raw: string) {
-    const gen = loadGen.current + 1;
-    loadGen.current = gen;
-    stopCapture.current?.();
-    revokeLocals();
-    copiedRemux.current = false;
-    remuxAttempted.current = false;
-    urlStage.current = "direct";
-    setBusy(true);
-    setHint("Opening video page…");
-    try {
-      const response = await fetch(`/api/video/resolve?url=${encodeURIComponent(raw)}`);
-      let body: {
-        error?: string;
-        title?: string;
-        mediaUrl?: string;
-        kind?: string;
-        embedUrl?: string;
-        pageUrl?: string;
-      } = {};
-      try {
-        body = (await response.json()) as typeof body;
-      } catch {
-        body = {};
-      }
-      if (gen !== loadGen.current) return;
-      const title = body.title || titleFromVideoUrl(raw);
-      const media = typeof body.mediaUrl === "string" ? body.mediaUrl : "";
-      const pageUrl = body.pageUrl || raw;
-      if (response.ok && media) {
-        playResolvedMedia(raw, media, body.kind || "mp4", title, pageUrl);
-        return;
-      }
-      if (response.ok && body.embedUrl && adultEmbedCanFrame(body.embedUrl)) {
-        sourceRef.current = { kind: "url", raw, playable: "", title };
-        showEmbed(body.embedUrl, title, true);
-        return;
-      }
-      setHint("Trying this browser…");
-      const extracted = await tryBrowserExtract(raw);
-      if (gen !== loadGen.current) return;
-      if (extracted) {
-        playResolvedMedia(raw, extracted.mediaUrl, extracted.kind, extracted.title, extracted.pageUrl);
-        return;
-      }
-      if (body.embedUrl && adultEmbedCanFrame(body.embedUrl)) {
-        sourceRef.current = { kind: "url", raw, playable: "", title };
-        showEmbed(body.embedUrl, title, true);
-        return;
-      }
-      setBusy(false);
-      setHint(
-        typeof body.error === "string" && body.error.trim()
-          ? body.error
-          : `${CLOUDFLARE_DIRECT_HINT}`,
-      );
-    } catch {
-      if (gen !== loadGen.current) return;
-      const extracted = await tryBrowserExtract(raw);
-      if (gen !== loadGen.current) return;
-      if (extracted) {
-        playResolvedMedia(raw, extracted.mediaUrl, extracted.kind, extracted.title, extracted.pageUrl);
-        return;
-      }
-      setBusy(false);
-      setHint(CLOUDFLARE_DIRECT_HINT);
-    }
-  }
-
-  function loadUrl(raw: string) {
-    const trimmed = normalizeAdultWatchInput(raw);
-    if (isPageLikeVideoUrl(trimmed)) {
-      setHint("YouTube and similar pages will not play here. Upload a file or paste a direct video URL.");
-      return;
-    }
-    if (isDirectWatchMediaUrl(trimmed) || (!isAdultPageUrl(trimmed) && directVideoHref(trimmed))) {
-      loadGen.current += 1;
+      const trimmed = normalizeAdultWatchInput(raw);
+      const gen = loadGen.current + 1;
+      loadGen.current = gen;
       stopCapture.current?.();
       revokeLocals();
       copiedRemux.current = false;
       remuxAttempted.current = false;
-      if (!playDirectStream(trimmed)) {
-        setHint(DIRECT_STREAM_HINT);
+      setBusy(true);
+      setHint("Opening video…");
+      const result = await requestWatchFeed(trimmed);
+      if (gen !== loadGen.current) return;
+      if (!result.ok) {
+        if (result.embedUrl && adultEmbedCanFrame(result.embedUrl)) {
+          sourceRef.current = {
+            kind: "url",
+            raw: trimmed,
+            playable: "",
+            title: titleFromVideoUrl(trimmed),
+          };
+          showEmbed(result.embedUrl, titleFromVideoUrl(trimmed), true);
+          return;
+        }
+        setBusy(false);
+        setHint(result.error);
+        return;
       }
-      return;
+      playFromFeed(result);
+    } catch {
+      setBusy(false);
+      setHint("Could not open that video. Check the link and try again.");
     }
-    if (isAdultPageUrl(trimmed)) {
-      void loadAdultPage(trimmed);
-      return;
-    }
-    setHint(DIRECT_STREAM_HINT);
   }
 
   async function playUrlBlob(source: Extract<WatchSource, { kind: "url" }>) {
@@ -466,6 +353,7 @@ export function WatchPage() {
   }
 
   function onNativeError() {
+    try {
     const mediaError = videoRef.current?.error;
     if (mediaError?.code === MediaError.MEDIA_ERR_ABORTED) return;
     const source = sourceRef.current;
@@ -498,6 +386,11 @@ export function WatchPage() {
     setHint(
       "Could not play that video. Paste a direct mp4, webm, or m3u8 URL, or upload a file. YouTube pages will not play here.",
     );
+    } catch {
+      setHint(
+        "Could not play that video. Paste a direct mp4, webm, or m3u8 URL, or upload a file.",
+      );
+    }
   }
 
   useEffect(() => {
@@ -570,11 +463,11 @@ export function WatchPage() {
     if (!video) return;
     let dead = false;
     let handle: { destroy: () => void } | null = null;
-    void import("@/lib/voice/watch-hls").then(({ attachHlsPlayer }) => {
+    void import("@/lib/voice/watch-player").then(({ attachWatchPlayer: attach }) => {
       if (dead || !videoRef.current) return;
-      return attachHlsPlayer(videoRef.current, hlsSrc, () => {
+      return attach(videoRef.current, { mode: "hls", url: hlsSrc }, () => {
         if (dead) return;
-        setHint("Could not play that stream. Paste another direct m3u8/mp4 URL or upload the file.");
+        setHint(HLS_ATTACH_ERROR);
       }).then((next) => {
         if (dead) {
           next.destroy();
@@ -590,11 +483,6 @@ export function WatchPage() {
       if (hlsHandle.current === handle) hlsHandle.current = null;
     };
   }, [hlsSrc]);
-
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    loadUrl(draft);
-  }
 
   return (
     <div className="flex min-h-dvh flex-col bg-black font-sans text-white">
@@ -656,84 +544,27 @@ export function WatchPage() {
             }}
             onError={onNativeError}
           />
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-            {WATCH_UI_ENABLED ? (
-              <>
-                <p className="text-lg font-medium">Play a video for Lexi</p>
-                <p className="mt-2 max-w-sm text-sm text-zinc-400">
-                  Paste a direct file or stream URL (mp4, webm, m3u8, get_file) — it plays in this feed,
-                  not an embed. Upload a file, or a page URL if we can open it. Keep talktolexi.app open
-                  in the other tab. She sees stills; soundtrack stays here.
-                </p>
-              </>
-            ) : null}
-          </div>
-        )}
-        <div className="px-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] pt-4">
+        ) : null}
+        <div
+          className={`px-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] pt-4 ${
+            hasPlayer ? "" : "flex flex-1 flex-col justify-center"
+          }`}
+        >
           {WATCH_UI_ENABLED ? (
-          <form
-            className="mx-auto flex w-full max-w-xl items-center gap-2 rounded-full border border-zinc-600 bg-zinc-950 px-2 py-1.5"
-            onSubmit={onSubmit}
-          >
-            <input
-              ref={fileInputRef}
-              id="lexi-watch-file"
-              type="file"
-              accept={VIDEO_ACCEPT}
-              className="sr-only"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) loadFile(file);
-                event.target.value = "";
-              }}
+            <WatchFeedBar
+              draft={draft}
+              onDraft={setDraft}
+              onSubmitUrl={(raw) => void loadUrl(raw)}
+              onPickFile={loadFile}
+              fileInputRef={fileInputRef}
+              hint={hint}
+              title={title}
+              linked={linked}
+              hasPlayer={hasPlayer}
+              onClose={() => clearVideo(true)}
+              tone="dark"
             />
-            <button
-              type="button"
-              aria-label="Upload a video"
-              title="Upload a video"
-              onClick={() => fileInputRef.current?.click()}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white"
-            >
-              <FilmIcon />
-            </button>
-            <label className="sr-only" htmlFor="lexi-watch-url">
-              Video URL
-            </label>
-            <input
-              id="lexi-watch-url"
-              type="text"
-              inputMode="url"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="mp4, m3u8, get_file, or page URL"
-              autoComplete="off"
-              className="min-w-0 flex-1 bg-transparent px-1 text-base text-white outline-none placeholder:text-zinc-500"
-            />
-            <button
-              type="submit"
-              className="flex h-10 shrink-0 items-center rounded-full px-3 text-sm text-zinc-300"
-            >
-              Load
-            </button>
-          </form>
           ) : null}
-          {WATCH_UI_ENABLED && hasPlayer ? (
-            <div className="mx-auto mt-3 flex max-w-xl items-center justify-between gap-3 px-1">
-              <p className="min-w-0 truncate text-xs text-zinc-400">
-                {title || "Watch together"}
-                {linked ? " · sending frames to Lexi" : " · open the Lexi tab"}
-              </p>
-              <button
-                type="button"
-                onClick={() => clearVideo(true)}
-                className="shrink-0 text-xs text-zinc-400"
-              >
-                Close
-              </button>
-            </div>
-          ) : null}
-          {WATCH_UI_ENABLED && hint ? <p className="mx-auto mt-2 max-w-xl px-1 text-xs text-zinc-300">{hint}</p> : null}
         </div>
       </main>
     </div>

@@ -12,7 +12,7 @@ import {
   watchSizeError,
   directVideoHref,
 } from "../lib/voice/watch-formats.ts";
-import { looksLikeVideoContentType } from "../lib/voice/video-proxy.ts";
+import { looksLikeVideoContentType, rewriteHlsPlaylist } from "../lib/voice/video-proxy.ts";
 import {
   adultEmbedCanFrame,
   adultEmbedUrl,
@@ -22,13 +22,14 @@ import {
   isCloudflareChallenge,
   isDirectWatchMediaUrl,
   isWatchHlsUrl,
+  isXnxxHost,
+  isXnxxTubeUrl,
   normalizeAdultWatchInput,
   proxiedWatchMedia,
   shouldProxyWatchMedia,
   watchMediaReferer,
   watchStreamKind,
 } from "../lib/voice/watch-adult.ts";
-
 function expect(condition, label) {
   if (!condition) throw new Error(label);
 }
@@ -227,6 +228,53 @@ expectEqual(
   normalizeAdultWatchInput("function/0/https://cdn.example/get_file/1/aa/0/0/9.mp4/"),
   "https://cdn.example/get_file/1/aa/0/0/9.mp4/",
   "kvs function prefix unwrap",
+);
+
+expect(isXnxxHost("www.xnxx.com"), "xnxx www host");
+expect(isXnxxHost("xnxx.com"), "xnxx apex");
+expect(isXnxxHost("video.xnxx.com"), "xnxx video subdomain");
+expect(isXnxxHost("m.xnxx.com"), "xnxx mobile");
+expect(isXnxxHost("cdn77-vid.xnxx-cdn.com"), "xnxx cdn host");
+expect(isXnxxTubeUrl("https://www.xnxx.com/video-abc12/clip"), "xnxx www tube");
+expect(isXnxxTubeUrl("https://xnxx.com/video-abc12/clip"), "xnxx apex tube");
+expect(isXnxxTubeUrl("https://video.xnxx.com/video-abc12/clip"), "xnxx video host tube");
+expect(isXnxxTubeUrl("https://www.xnxx.com/embedframe/abc12"), "xnxx embedframe");
+expect(!isXnxxTubeUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "youtube is not xnxx");
+expectEqual(
+  adultEmbedUrl("https://www.xnxx.com/video-abc12/clip"),
+  "https://www.xnxx.com/embedframe/abc12",
+  "xnxx embed",
+);
+expectEqual(
+  watchMediaReferer("https://cdn77-vid.xnxx-cdn.com/hls/720p/index.m3u8"),
+  "https://www.xnxx.com/",
+  "xnxx cdn referer",
+);
+expect(shouldProxyWatchMedia("https://cdn77-vid.xnxx-cdn.com/hls/720p/index.m3u8"), "proxy xnxx hls");
+expect(looksLikeVideoContentType("text/plain", "https://cdn.xnxx-cdn.com/hash/hls/seg-1"), "plain hls path");
+
+const xnxxHtml = extractAdultMediaFromHtml(
+  `<title>Xnxx clip</title><script>html5player.setVideoUrlHigh('https://cdn.example/a.mp4');html5player.setVideoHLS('https://cdn77-vid.xnxx-cdn.com/x/hls.m3u8');</script>`,
+  "https://www.xnxx.com/video-abc12/clip",
+);
+expectEqual(xnxxHtml.media?.kind, "hls", "xnxx prefers hls");
+expectEqual(xnxxHtml.media?.href, "https://cdn77-vid.xnxx-cdn.com/x/hls.m3u8", "xnxx hls url");
+expectEqual(xnxxHtml.embedUrl, "https://www.xnxx.com/embedframe/abc12", "xnxx page embed");
+
+const rewritten = rewriteHlsPlaylist(
+  `#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.key"\nseg-1.ts\n`,
+  "https://cdn.example/live/index.m3u8",
+  "https://www.xnxx.com/",
+);
+expect(rewritten.includes("/api/video/proxy?url="), "rewrite proxies segments");
+expect(rewritten.includes("seg-1.ts"), "rewrite keeps segment name");
+expect(rewritten.includes("referer="), "rewrite keeps referer");
+expect(
+  proxiedWatchMedia(
+    "https://cdn77-vid.xnxx-cdn.com/x/hls.m3u8",
+    "https://www.xnxx.com/video-abc12/clip",
+  ).includes("proxy"),
+  "xnxx hls playable is proxied",
 );
 
 console.log("watch format checks ok");

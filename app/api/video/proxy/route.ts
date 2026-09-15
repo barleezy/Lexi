@@ -1,8 +1,10 @@
 import {
   isBlockedVideoHost,
+  isHlsPlaylist,
   isRedirectStatus,
   looksLikeVideoContentType,
   parseVideoSourceUrl,
+  rewriteHlsPlaylist,
 } from "@/lib/voice/video-proxy";
 
 export const maxDuration = 60;
@@ -25,42 +27,6 @@ function proxyFail(status: number) {
   }
   if (status === 404) return "That video URL was not found.";
   return "Could not load the video.";
-}
-
-function isHlsPlaylist(url: string, contentType: string | null) {
-  const type = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-  if (type.includes("mpegurl")) return true;
-  return /\.m3u8(?:$|[?#])/i.test(url);
-}
-
-function rewriteHlsPlaylist(text: string, pageUrl: string, referer: string) {
-  const proxyLine = (href: string) => {
-    const parsed = parseVideoSourceUrl(href);
-    if (!parsed.ok) return href;
-    const base = `/api/video/proxy?url=${encodeURIComponent(parsed.href)}`;
-    return referer ? `${base}&referer=${encodeURIComponent(referer)}` : base;
-  };
-  return text
-    .split(/\r?\n/)
-    .map((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return line;
-      if (trimmed.startsWith("#")) {
-        return line.replace(/URI="([^"]+)"/i, (all, uri: string) => {
-          try {
-            return `URI="${proxyLine(new URL(uri, pageUrl).href)}"`;
-          } catch {
-            return all;
-          }
-        });
-      }
-      try {
-        return proxyLine(new URL(trimmed, pageUrl).href);
-      } catch {
-        return line;
-      }
-    })
-    .join("\n");
 }
 
 export async function GET(request: Request) {
@@ -134,24 +100,28 @@ export async function GET(request: Request) {
   }
 
   if ((upstream.ok || upstream.status === 206) && isHlsPlaylist(parsed.href, contentType)) {
-    const text = await upstream.text();
-    if (text.trim().startsWith("#EXTM3U")) {
-      const rewritten = rewriteHlsPlaylist(text, parsed.href, referer || parsed.href);
-      return new Response(rewritten, {
-        status: 200,
-        headers: {
-          "content-type": "application/vnd.apple.mpegurl",
-          "cache-control": "private, max-age=60",
-        },
-      });
+    try {
+      const text = await upstream.text();
+      if (text.trim().startsWith("#EXTM3U")) {
+        const rewritten = rewriteHlsPlaylist(text, parsed.href, referer || parsed.href);
+        return new Response(rewritten, {
+          status: 200,
+          headers: {
+            "content-type": "application/vnd.apple.mpegurl",
+            "cache-control": "private, max-age=60",
+          },
+        });
+      }
+      const headers = new Headers();
+      for (const name of PASS_HEADERS) {
+        const value = upstream.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      headers.set("cache-control", "private, max-age=3600");
+      return new Response(text, { status: upstream.status, headers });
+    } catch {
+      return Response.json({ error: "Could not load the HLS playlist." }, { status: 502 });
     }
-    const headers = new Headers();
-    for (const name of PASS_HEADERS) {
-      const value = upstream.headers.get(name);
-      if (value) headers.set(name, value);
-    }
-    headers.set("cache-control", "private, max-age=3600");
-    return new Response(text, { status: upstream.status, headers });
   }
 
   const headers = new Headers();
