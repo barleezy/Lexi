@@ -901,7 +901,7 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       party: join.party,
       ...fortniteHttpReadyFields(join.party.withFriend === true),
       error: join.error,
-      say: join.say,
+      say: "say" in join ? join.say : undefined,
     };
   }
   if (action === "sit_out") {
