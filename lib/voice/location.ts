@@ -59,12 +59,19 @@ export function shouldPublishLocation(
   if ((next.city || "") !== (prev.city || "") || (next.region || "") !== (prev.region || "")) {
     return true;
   }
+  const prevLat = prev.latitude;
+  const prevLng = prev.longitude;
+  const nextLat = next.latitude;
+  const nextLng = next.longitude;
   if (
-    typeof prev.latitude === "number" &&
-    typeof prev.longitude === "number" &&
-    typeof next.latitude === "number" &&
-    typeof next.longitude === "number" &&
-    metersBetween(prev, next) >= MIN_MOVE_M
+    typeof prevLat === "number" &&
+    typeof prevLng === "number" &&
+    typeof nextLat === "number" &&
+    typeof nextLng === "number" &&
+    metersBetween(
+      { latitude: prevLat, longitude: prevLng },
+      { latitude: nextLat, longitude: nextLng },
+    ) >= MIN_MOVE_M
   ) {
     return true;
   }
