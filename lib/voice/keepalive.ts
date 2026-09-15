@@ -18,6 +18,11 @@
  * keep the WebSocket, keep play-and-record, do not hang up. Desktop Chrome
  * uses shared-mode Web Audio (never exclusive WASAPI). If the game takes the
  * mic exclusively, show Tap to resume and auto-reclaim on focus / devicechange.
+ *
+ * AirPods / Bluetooth route change: `devicechange` + track ended/mute. Do not
+ * skip reclaim just because AudioContext is still `interrupted` — resume first,
+ * then reacquire the mic while the page is visible. Hidden iOS is CarPlay /
+ * lock screen: hold the socket, do not open a new getUserMedia stream.
  */
 
 export const MEDIA_SESSION_TITLE = "Lexi";
@@ -250,6 +255,18 @@ export function playbackGainForCoexist(ducked: boolean) {
   return ducked ? PLAYBACK_DUCK_GAIN : PLAYBACK_FULL_GAIN;
 }
 
+/** Visible page: reclaim after resume. Hidden: hold the socket (CarPlay / lock screen). */
+export function shouldRunMicReclaimAfterLifecycle(opts: {
+  reclaiming?: boolean;
+  pageHidden?: boolean;
+}) {
+  return !opts.reclaiming && !opts.pageHidden;
+}
+
+export function shouldReclaimMicOnDeviceChange(opts: { pageHidden?: boolean } = {}) {
+  return !opts.pageHidden;
+}
+
 export function shouldReclaimAfterExclusiveRelease(event: {
   type: string;
   visibilityState?: string;
@@ -361,11 +378,12 @@ export type VoiceCoexistState = {
 
 export type VoiceKeepAliveHandlers = {
   resumeAudio: () => Promise<void> | void;
-  ensureMic: () => Promise<void> | void;
+  ensureMic: (opts?: { force?: boolean; reason?: string }) => Promise<void> | void;
   ping: () => void;
   reclaim?: () => Promise<void> | void;
   onUnload?: () => void;
   onCoexist?: (state: VoiceCoexistState) => void;
+  onRouteChange?: () => void;
   audioContextState?: () => string | undefined;
 };
 
@@ -411,23 +429,36 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
 
   const tick = () => {
     hold();
-    if (!voiceInterrupted()) void handlers.ensureMic();
+    // Hidden iOS is CarPlay / lock screen — do not open a new mic stream.
+    // Foreground ticks still skip getUserMedia when the track is already live.
+    if (!pageIsHidden() && !voiceInterrupted()) void handlers.ensureMic({ reason: "tick" });
     void requestLock();
     publishCoexist();
   };
 
   const reclaim = () => {
-    if (reclaiming || voiceInterrupted()) {
+    if (!shouldRunMicReclaimAfterLifecycle({ reclaiming, pageHidden: pageIsHidden() })) {
       hold();
       publishCoexist();
       return;
     }
     reclaiming = true;
-    const run = handlers.reclaim ?? tick;
-    void Promise.resolve(run()).finally(() => {
-      reclaiming = false;
-      publishCoexist();
-    });
+    // Resume first. AirPods app-switch leaves ctx interrupted; skipping
+    // reclaim here used to leave the mic dead after returning to Lexi.
+    void Promise.resolve(handlers.resumeAudio())
+      .catch(() => {})
+      .then(() => {
+        if (!shouldRunMicReclaimAfterLifecycle({ pageHidden: pageIsHidden() })) {
+          hold();
+          return;
+        }
+        const run = handlers.reclaim ?? tick;
+        return run();
+      })
+      .finally(() => {
+        reclaiming = false;
+        publishCoexist();
+      });
   };
 
   async function requestLock() {
@@ -482,7 +513,11 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   };
 
   const onDeviceChange = () => {
-    if (!voiceInterrupted()) void handlers.ensureMic();
+    handlers.onRouteChange?.();
+    if (!shouldReclaimMicOnDeviceChange({ pageHidden: pageIsHidden() })) return;
+    if (shouldReclaimAfterExclusiveRelease({ type: "devicechange" })) {
+      reclaim();
+    }
   };
 
   document.addEventListener("visibilitychange", onVisibility);
