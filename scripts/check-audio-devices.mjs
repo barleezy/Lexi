@@ -1,0 +1,69 @@
+import {
+  CAR_MIC_MUTE_RECLAIM_MS,
+  HANDS_FREE_INPUT_RE,
+  MIC_MUTE_RECLAIM_MS,
+  PHONE_BUILTIN_INPUT_RE,
+  isCarLikeAudioInput,
+  isPhoneBuiltinAudioInput,
+  micNeedsReroute,
+  muteReclaimDelayMs,
+  pickPreferredAudioInput,
+  scoreAudioInputLabel,
+} from "../lib/voice/audio-devices.ts";
+import { nextCameraFacing } from "../lib/voice/vision.ts";
+
+function expect(condition, label) {
+  if (!condition) throw new Error(label);
+}
+
+expect(HANDS_FREE_INPUT_RE.test("CarPlay"), "CarPlay label");
+expect(HANDS_FREE_INPUT_RE.test("iPhone Hands-Free"), "iPhone Hands-Free label");
+expect(HANDS_FREE_INPUT_RE.test("Bluetooth HFP"), "Bluetooth HFP label");
+expect(HANDS_FREE_INPUT_RE.test("Car Audio"), "Car Audio label");
+expect(!HANDS_FREE_INPUT_RE.test("iPhone Microphone"), "phone mic is not car");
+expect(!HANDS_FREE_INPUT_RE.test("AirPods Pro"), "AirPods are not car HFP");
+expect(PHONE_BUILTIN_INPUT_RE.test("iPhone Microphone"), "built-in phone mic");
+expect(isCarLikeAudioInput("CarPlay") === true, "car-like CarPlay");
+expect(isPhoneBuiltinAudioInput("iPhone Microphone") === true, "builtin helper");
+expect(scoreAudioInputLabel("CarPlay") > scoreAudioInputLabel("AirPods Pro"), "car beats AirPods");
+expect(scoreAudioInputLabel("Bluetooth HFP") > scoreAudioInputLabel("iPhone Microphone"), "HFP beats phone");
+expect(scoreAudioInputLabel("AirPods") > scoreAudioInputLabel("iPhone Microphone"), "AirPods beat phone");
+
+const picked = pickPreferredAudioInput([
+  { deviceId: "phone", kind: "audioinput", label: "iPhone Microphone" },
+  { deviceId: "car", kind: "audioinput", label: "CarPlay" },
+  { deviceId: "pods", kind: "audioinput", label: "AirPods Pro" },
+]);
+expect(picked?.deviceId === "car", "prefer CarPlay over phone and AirPods");
+
+const afterCarGone = pickPreferredAudioInput([
+  { deviceId: "phone", kind: "audioinput", label: "iPhone Microphone" },
+  { deviceId: "pods", kind: "audioinput", label: "AirPods Pro" },
+]);
+expect(afterCarGone?.deviceId === "pods", "fall back to AirPods when car disconnects");
+
+const phoneOnly = pickPreferredAudioInput([
+  { deviceId: "phone", kind: "audioinput", label: "iPhone Microphone" },
+]);
+expect(phoneOnly?.deviceId === "phone", "phone mic if that is all that is left");
+
+expect(
+  micNeedsReroute(
+    { getSettings: () => ({ deviceId: "phone" }) },
+    "car",
+  ) === true,
+  "reroute when preferred device changed",
+);
+expect(
+  micNeedsReroute({ getSettings: () => ({ deviceId: "car" }) }, "car") === false,
+  "no reroute when already on preferred",
+);
+
+expect(muteReclaimDelayMs(true) === CAR_MIC_MUTE_RECLAIM_MS, "car mute retry is faster");
+expect(muteReclaimDelayMs(false) === MIC_MUTE_RECLAIM_MS, "default mute retry");
+expect(CAR_MIC_MUTE_RECLAIM_MS < MIC_MUTE_RECLAIM_MS, "car does not sit on the 400ms mute");
+
+expect(nextCameraFacing("user") === "environment", "front to rear");
+expect(nextCameraFacing("environment") === "user", "rear to front");
+
+console.log("audio-devices ok");

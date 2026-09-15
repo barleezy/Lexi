@@ -7,10 +7,15 @@ import {
   base64ToBytes,
   createAudioContext,
   floatToPcm16,
+  isCarLikeAudioInput,
   isPrimaryMicEnergy,
+  micNeedsReroute,
   micTrackUsable,
+  muteReclaimDelayMs,
   openUserMic,
+  openUserMicWithRetry,
   pcm16ToBase64,
+  resolvePreferredAudioInput,
   resample,
   resumeAudioContext,
   startDestinationKeepAlive,
@@ -22,8 +27,13 @@ import {
   installVoiceKeepAlive,
   isExclusiveMicError,
   isIOSWebKit,
+  isCarAudioRoute,
+  setCarAudioRoute,
+  isMediaSessionYielded,
   isVoiceAudioInterrupted,
   KEEPALIVE_SILENCE_MS,
+  shouldClaimMediaSession,
+  setMediaSessionYield,
 } from "@/lib/voice/keepalive";
 import { scoreSalience } from "@/lib/memory/decay";
 import { FACT_KEY_LIST, FACT_KEYS, isPinnedKey, PINNED_AFFECT } from "@/lib/memory/extract";
@@ -64,6 +74,7 @@ import {
   decidePlaybackHandoff,
   decideResponseCreate,
   decideToolFollowUpCreate,
+  responseCreateDelayMs,
   isIgnorableRealtimeError,
   isRecoverableRealtimeError,
   lockSpeechId,
@@ -1023,6 +1034,8 @@ export class VoiceSession {
       return;
     }
 
+    if (this.musicState.playing) setMediaSessionYield(true);
+
     const micStarted = Date.now();
     try {
       this.stream = await openUserMic();
@@ -1137,11 +1150,17 @@ export class VoiceSession {
   async reclaim() {
     if (this.stopped) return;
     applyPlayAndRecordSession();
-    claimMediaSession();
+    if (shouldClaimMediaSession()) claimMediaSession();
+    const ctxState = this.ctx?.state as string | undefined;
     await resumeAudioContext(this.ctx);
-    this.restartDestKeepAlive();
+    if (!this.destKeepAliveStop || ctxState === "interrupted") {
+      this.restartDestKeepAlive();
+    }
     const track = this.stream?.getAudioTracks()[0];
-    await this.ensureMic({ force: !micTrackUsable(track) });
+    const preferred = await resolvePreferredAudioInput();
+    await this.ensureMic({
+      force: !micTrackUsable(track) || micNeedsReroute(track, preferred?.deviceId),
+    });
     this.rebindCapture();
     this.heartbeat();
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -1407,6 +1426,7 @@ export class VoiceSession {
     this.clearReconnect();
     this.keepAliveStop?.();
     this.keepAliveStop = null;
+    setCarAudioRoute(false);
     this.destKeepAliveStop?.();
     this.destKeepAliveStop = null;
     this.captionPacer.stop();
@@ -1681,10 +1701,12 @@ export class VoiceSession {
     };
     track.onmute = () => {
       this.logger.log("mic.mute", {});
+      const car = isCarLikeAudioInput(track.label);
       window.setTimeout(() => {
         if (this.stopped || this.voiceAudioInterrupted()) return;
-        void this.ensureMic({ force: isIOSWebKit() || !micTrackUsable(track) });
-      }, 400);
+        const live = this.stream?.getAudioTracks()[0];
+        void this.ensureMic({ force: !micTrackUsable(live) });
+      }, muteReclaimDelayMs(car));
     };
     track.onunmute = () => {
       void applyMicConstraints(track);
@@ -1695,6 +1717,7 @@ export class VoiceSession {
   private voiceAudioInterrupted() {
     return isVoiceAudioInterrupted({
       audioContextState: this.ctx?.state,
+      yieldToMedia: isMediaSessionYielded() || this.musicState.playing,
     });
   }
 
@@ -1702,13 +1725,15 @@ export class VoiceSession {
     if (this.stopped || !this.ctx) return;
     if (this.voiceAudioInterrupted()) return;
     const track = this.stream?.getAudioTracks()[0];
-    if (!opts.force && micTrackUsable(track)) {
+    const preferred = await resolvePreferredAudioInput();
+    const needsRoute = micNeedsReroute(track, preferred?.deviceId);
+    if (!opts.force && micTrackUsable(track) && !needsRoute) {
       await applyMicConstraints(track);
       this.handlers.onMicRecovered?.();
       return;
     }
     try {
-      const next = await openUserMic();
+      const next = await openUserMicWithRetry();
       this.source?.disconnect();
       this.stream?.getTracks().forEach((item) => item.stop());
       this.stream = next;
@@ -1720,6 +1745,7 @@ export class VoiceSession {
       this.logger.log("mic.reacquire", {
         label: next.getAudioTracks()[0]?.label ?? "",
         state: next.getAudioTracks()[0]?.readyState,
+        device_id: next.getAudioTracks()[0]?.getSettings().deviceId ?? "",
       });
       this.handlers.onMicRecovered?.();
     } catch (error) {
@@ -2236,6 +2262,8 @@ export class VoiceSession {
     }
     this.responseCreateInFlight = true;
     this.spokenCreateAttempts += 1;
+    // Car Bluetooth adds its own latency — never insert a client wait here.
+    void responseCreateDelayMs({ carAudio: isCarAudioRoute() });
     this.send({ type: "response.create" });
     this.armResponseCreateWatchdog();
     this.armExpectWatchdog();

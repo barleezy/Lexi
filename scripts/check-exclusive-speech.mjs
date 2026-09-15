@@ -2,6 +2,7 @@ import {
   EXPECT_STALL_MS,
   PENDING_SPEECH_ID,
   RESPONSE_CREATE_STALL_MS,
+  responseCreateDelayMs,
   TOOL_CALL_TIMEOUT_MS,
   claimExclusiveSpeech,
   decidePlaybackHandoff,
@@ -280,6 +281,8 @@ expectEqual(
   "sequential follow-up after a finished line appends — no flush+lead gap",
 );
 
+expect(responseCreateDelayMs({ carAudio: true }) === 0, "no client wait before response.create on car");
+expect(responseCreateDelayMs() === 0, "no extra create delay");
 expect(RESPONSE_CREATE_STALL_MS <= 2000, "create stall is recovery, not a stacked pause");
 expect(EXPECT_STALL_MS <= 5000, "expect stall is recovery");
 expect(TOOL_CALL_TIMEOUT_MS <= 12_000, "tools cannot hold the turn open indefinitely");

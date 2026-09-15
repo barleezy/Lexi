@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
 import {
   LISTEN_SAMPLE_RATE,
   MIC_AUDIO_CONSTRAINTS,
+  MIC_AUDIO_CONSTRAINTS_CAR,
+  MIC_AUDIO_CONSTRAINTS_CAR_FALLBACK,
   MIC_AUDIO_CONSTRAINTS_FALLBACK,
+  micConstraintChain,
   MIC_RMS_ABS_FLOOR,
   MIC_RMS_NOISE_RATIO,
   TRANSCRIBE_KEYTERMS,
@@ -13,6 +17,7 @@ import {
   sanitizeUserText,
 } from "../lib/voice/listen.ts";
 import {
+  CAR_VAD_SILENCE_DURATION_MS,
   VAD_PREFIX_PADDING_MS,
   VAD_SILENCE_DURATION_MS,
   VAD_THRESHOLD,
@@ -52,7 +57,18 @@ expect(isPrimaryMicEnergy(0.02, 0.01) === true, "normal speech primary");
 expect(VAD_TYPE === "server_vad", "server VAD");
 expect(VAD_THRESHOLD === 0.4, "0.4 catches quiet speech");
 expect(VAD_THRESHOLD < 0.5, "below default so mumble commits");
+expect(MIC_AUDIO_CONSTRAINTS_CAR.echoCancellation === true, "car AEC");
+expect(MIC_AUDIO_CONSTRAINTS_CAR.noiseSuppression === true, "car NS");
+expect(MIC_AUDIO_CONSTRAINTS_CAR.autoGainControl === true, "car AGC");
+expect(MIC_AUDIO_CONSTRAINTS_CAR.sampleRate.ideal === LISTEN_SAMPLE_RATE, "car tries 48k");
+expect(!("sampleRate" in MIC_AUDIO_CONSTRAINTS_CAR_FALLBACK), "car fallback drops sampleRate for HFP");
+expect(!("voiceIsolation" in MIC_AUDIO_CONSTRAINTS_CAR), "car has no voiceIsolation");
+const carChain = micConstraintChain("car-hfp", true);
+expect(carChain[0].deviceId.ideal === "car-hfp", "car chain binds deviceId");
+expect(carChain[carChain.length - 1] === true || carChain[carChain.length - 1].deviceId, "car chain ends loose");
+
 expect(VAD_SILENCE_DURATION_MS === 300, "300ms end-of-speech — do not steal the turn");
+expect(CAR_VAD_SILENCE_DURATION_MS === 300, "car does not add extra VAD silence");
 expect(VAD_PREFIX_PADDING_MS >= 300, "prefix keeps first consonants");
 expect(VAD_PREFIX_PADDING_MS === 350, "350ms prefix for mumbled onsets");
 const vad = buildTurnDetection();
@@ -106,5 +122,12 @@ expectEqual(
   { itemId: "u2", transcript: "gonna third party" },
   "keep dictation wording",
 );
+
+const persona = readFileSync(new URL("../lib/voice/persona.ts", import.meta.url), "utf8");
+expect(persona.includes("Never interrupt."), "voice rule: never interrupt");
+expect(persona.includes("People hate being talked over"), "courtesy: people hate being talked over");
+expect(!/inferior|not (his |their )?equal|beneath/i.test(persona), "do not frame her as inferior");
+expect(persona.includes("if he asks you to jump in, cut in, interrupt him, talk over him, or keep interrupting"), "interrupt only on request");
+expect(persona.includes("If he starts talking and he did not ask you to talk over him, stop and let him finish."), "she yields unless he asked");
 
 console.log("listen ok");

@@ -16,6 +16,13 @@ export const EXPECT_STALL_MS = 4500;
 /** Client tools must not hold the spoken turn open forever. */
 export const TOOL_CALL_TIMEOUT_MS = 12_000;
 
+/** Bluetooth route changes must not insert a client pause before response.create. */
+export const CAR_RESPONSE_CREATE_EXTRA_MS = 0;
+
+export function responseCreateDelayMs(_opts?: { carAudio?: boolean }) {
+  return CAR_RESPONSE_CREATE_EXTRA_MS;
+}
+
 export function normalizeResponseId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const id = value.trim();

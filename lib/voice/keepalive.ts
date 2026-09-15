@@ -187,7 +187,10 @@ export function isAudioContextInterrupted(state?: string) {
 export function isVoiceAudioInterrupted(opts?: {
   audioSessionState?: string;
   audioContextState?: string;
+  yieldToMedia?: boolean;
 }) {
+  // MusicKit / in-page music is coexistence, not a hang-up. Keep the mic.
+  if (opts?.yieldToMedia) return false;
   if (isAudioSessionInterrupted(opts?.audioSessionState)) return true;
   return isAudioContextInterrupted(opts?.audioContextState);
 }
@@ -261,6 +264,14 @@ export function shouldReclaimAfterExclusiveRelease(event: {
   return shouldReclaimForLifecycle(event);
 }
 
+/** AirPods / CarPlay route changes and app-switch — retry mic, never the socket. */
+export function shouldReclaimMicForRouteChange(event: { type: string; visibilityState?: string }) {
+  const type = event.type.toLowerCase();
+  if (type === "devicechange" || type === "pagehide" || type === "freeze") return true;
+  if (type === "visibilitychange" || type === "webkitvisibilitychange") return true;
+  return shouldReclaimForLifecycle(event);
+}
+
 export function applyPlayAndRecordSession() {
   const session = readAudioSession();
   if (!session) return false;
@@ -276,18 +287,48 @@ export function applyPlayAndRecordSession() {
 }
 
 let yieldMediaSession = false;
+let carAudioRoute = false;
+let htmlKeepAliveHold: ((hold: boolean) => void) | null = null;
 
 /** When MusicKit (or the user) is playing music, do not steal lock-screen controls. */
 export function setMediaSessionYield(yieldToOther: boolean) {
   yieldMediaSession = yieldToOther;
+  syncKeepAliveMedia();
+}
+
+/** Car HFP input is active — skip HTML media keep-alive so iOS stays on the call route. */
+export function setCarAudioRoute(active: boolean) {
+  carAudioRoute = active;
+  syncKeepAliveMedia();
+}
+
+export function isCarAudioRoute() {
+  return carAudioRoute;
+}
+
+export function isMediaSessionYielded() {
+  return yieldMediaSession;
+}
+
+export function shouldUseHtmlKeepAlive(opts?: { yieldToMedia?: boolean; carAudio?: boolean }) {
+  const yieldToMedia = opts?.yieldToMedia ?? yieldMediaSession;
+  const car = opts?.carAudio ?? carAudioRoute;
+  return !yieldToMedia && !car;
 }
 
 export function shouldClaimMediaSession(yieldToOther = yieldMediaSession) {
-  return !yieldToOther;
+  return !yieldToOther && !carAudioRoute;
+}
+
+function syncKeepAliveMedia() {
+  const holdHtml = !shouldUseHtmlKeepAlive();
+  htmlKeepAliveHold?.(holdHtml);
+  if (holdHtml) releaseMediaSession();
 }
 
 export function claimMediaSession() {
   if (!shouldClaimMediaSession()) return;
+  if (typeof navigator === "undefined") return;
   const media = navigator.mediaSession;
   if (!media) return;
   try {
@@ -312,6 +353,7 @@ export function claimMediaSession() {
 }
 
 export function releaseMediaSession() {
+  if (typeof navigator === "undefined") return;
   const media = navigator.mediaSession;
   if (!media) return;
   try {
@@ -367,7 +409,8 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   applyPlayAndRecordSession();
   const ios = isIOSWebKit();
   const media = startHtmlKeepAlive(ios);
-  claimMediaSession();
+  if (shouldClaimMediaSession()) claimMediaSession();
+  else releaseMediaSession();
   setLiveTabTitle(true);
   let wake: WakeLockSentinel | null = null;
   let reclaiming = false;
@@ -376,12 +419,16 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   const voiceInterrupted = () =>
     isVoiceAudioInterrupted({
       audioContextState: handlers.audioContextState?.(),
+      yieldToMedia: yieldMediaSession,
     });
 
   const publishCoexist = () => {
     const hidden = pageIsHidden();
     const audioContextState = handlers.audioContextState?.();
-    const interrupted = isVoiceAudioInterrupted({ audioContextState });
+    const interrupted = isVoiceAudioInterrupted({
+      audioContextState,
+      yieldToMedia: yieldMediaSession,
+    });
     handlers.onCoexist?.({
       hidden,
       blurred,
@@ -390,6 +437,7 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
         pageHidden: hidden,
         blurred,
         audioContextState,
+        musicPlaying: yieldMediaSession,
       }),
     });
   };
@@ -397,8 +445,9 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   const hold = () => {
     applyPlayAndRecordSession();
     void handlers.resumeAudio();
-    media.ensurePlaying();
-    claimMediaSession();
+    if (shouldUseHtmlKeepAlive()) media.ensurePlaying();
+    if (shouldClaimMediaSession()) claimMediaSession();
+    else releaseMediaSession();
     handlers.ping();
   };
 
@@ -443,10 +492,11 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   };
 
   const onBackground = () => {
-    // Never pause the keep-alive element — iOS suspends JS if it thinks media stopped.
+    // Never pause the keep-alive element unless MusicKit / car HFP owns the route.
     // Game in the foreground is the same hold: keep the socket, keep trying play-and-record.
     blurred = true;
     hold();
+    if (!voiceInterrupted()) void handlers.ensureMic();
     publishCoexist();
   };
 
@@ -475,7 +525,14 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   };
 
   const onDeviceChange = () => {
-    if (!voiceInterrupted()) void handlers.ensureMic();
+    // AirPods / CarPlay connect or disconnect. Retry mic; never close the socket.
+    if (voiceInterrupted() && !yieldMediaSession) {
+      window.setTimeout(() => {
+        if (!voiceInterrupted()) void handlers.ensureMic();
+      }, 250);
+      return;
+    }
+    void handlers.ensureMic();
   };
 
   document.addEventListener("visibilitychange", onVisibility);
@@ -555,21 +612,32 @@ function startHtmlKeepAlive(ios: boolean) {
   }
 
   let stopped = false;
+  let held = !shouldUseHtmlKeepAlive();
   const ensurePlaying = () => {
-    if (stopped) return;
+    if (stopped || held) return;
     applyPlayAndRecordSession();
     if (audio.paused || audio.ended) void audio.play().catch(() => {});
   };
+  const setHold = (hold: boolean) => {
+    held = hold;
+    if (hold) {
+      audio.pause();
+      return;
+    }
+    ensurePlaying();
+  };
   const onPause = () => {
-    if (!stopped) void audio.play().catch(() => {});
+    if (!stopped && !held) void audio.play().catch(() => {});
   };
   audio.addEventListener("pause", onPause);
   audio.addEventListener("ended", onPause);
-  ensurePlaying();
+  htmlKeepAliveHold = setHold;
+  if (!held) ensurePlaying();
   return {
     ensurePlaying,
     stop: () => {
       stopped = true;
+      if (htmlKeepAliveHold === setHold) htmlKeepAliveHold = null;
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onPause);
       audio.pause();

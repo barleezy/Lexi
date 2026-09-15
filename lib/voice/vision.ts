@@ -31,15 +31,32 @@ export function preferWatchTab() {
   return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 }
 
-export async function startCameraStream() {
-  return navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
-      facingMode: "user",
-      width: { ideal: 640 },
-      height: { ideal: 480 },
-    },
-  });
+export type CameraFacing = "user" | "environment";
+
+export function nextCameraFacing(current: CameraFacing): CameraFacing {
+  return current === "user" ? "environment" : "user";
+}
+
+export async function startCameraStream(facing: CameraFacing = "user") {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: facing },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+      },
+    });
+  } catch {
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: facing,
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+      },
+    });
+  }
 }
 
 export async function startScreenStream() {

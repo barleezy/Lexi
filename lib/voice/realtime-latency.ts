@@ -19,6 +19,12 @@ export const VAD_THRESHOLD = 0.4;
  * Tighter would clip Ian mid-thought. We do not go below this.
  */
 export const VAD_SILENCE_DURATION_MS = 300;
+/**
+ * Car Bluetooth already adds transport delay. Do not stack extra VAD silence
+ * or a client hold before response.create — that is the “late in CarPlay” feel.
+ * Stay at 300ms so a mid-clause breath is not a stolen turn.
+ */
+export const CAR_VAD_SILENCE_DURATION_MS = VAD_SILENCE_DURATION_MS;
 /** Keep first consonants, including mumbled onsets. Do not lower. */
 export const VAD_PREFIX_PADDING_MS = 350;
 

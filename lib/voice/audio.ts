@@ -1,33 +1,110 @@
 import { CAPTURE_CHUNK_MS, PLAY_LEAD_SEC } from "@/lib/voice/realtime-latency";
-import { playbackGainForCoexist } from "@/lib/voice/keepalive";
+import { playbackGainForCoexist, setCarAudioRoute } from "@/lib/voice/keepalive";
+import {
+  isCarLikeAudioInput,
+  listAudioInputs,
+  MIC_RECLAIM_ATTEMPTS,
+  MIC_RECLAIM_RETRY_MS,
+  micNeedsReroute,
+  pickPreferredAudioInput,
+} from "@/lib/voice/audio-devices";
 import {
   LISTEN_SAMPLE_RATE,
   MIC_AUDIO_CONSTRAINTS,
   MIC_AUDIO_CONSTRAINTS_FALLBACK,
+  micConstraintChain,
 } from "@/lib/voice/listen";
 
 export const TARGET_RATE = LISTEN_SAMPLE_RATE;
 export {
   MIC_AUDIO_CONSTRAINTS,
   MIC_AUDIO_CONSTRAINTS_FALLBACK,
+  MIC_AUDIO_CONSTRAINTS_CAR,
+  MIC_AUDIO_CONSTRAINTS_CAR_FALLBACK,
   MIC_RMS_ABS_FLOOR,
   MIC_RMS_NOISE_RATIO,
   isPrimaryMicEnergy,
 } from "@/lib/voice/listen";
+export {
+  isCarLikeAudioInput,
+  micNeedsReroute,
+  muteReclaimDelayMs,
+  resolvePreferredAudioInput,
+} from "@/lib/voice/audio-devices";
 
-export async function openUserMic() {
-  try {
-    return await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
-  } catch {
+async function getUserMediaAudio(audio: MediaTrackConstraints | boolean) {
+  return navigator.mediaDevices.getUserMedia({ audio });
+}
+
+async function getUserMediaWithChain(deviceId?: string, car = false) {
+  let lastError: unknown;
+  for (const audio of micConstraintChain(deviceId, car)) {
     try {
-      return await navigator.mediaDevices.getUserMedia({
-        audio: MIC_AUDIO_CONSTRAINTS_FALLBACK,
-      });
-    } catch {
-      // Last try: unconstrained shared mic if a game already holds exclusive settings.
-      return await navigator.mediaDevices.getUserMedia({ audio: true });
+      return await getUserMediaAudio(audio);
+    } catch (error) {
+      lastError = error;
     }
   }
+  try {
+    return await getUserMediaAudio(true);
+  } catch (error) {
+    throw lastError ?? error;
+  }
+}
+
+function rememberMicRoute(stream: MediaStream) {
+  const label = stream.getAudioTracks()[0]?.label ?? "";
+  setCarAudioRoute(isCarLikeAudioInput(label));
+}
+
+export async function openUserMic() {
+  const labeled = await listAudioInputs();
+  const preferred = pickPreferredAudioInput(labeled);
+  const car = preferred ? isCarLikeAudioInput(preferred.label) : false;
+
+  if (preferred?.deviceId && preferred.label) {
+    try {
+      const stream = await getUserMediaWithChain(preferred.deviceId, car);
+      rememberMicRoute(stream);
+      return stream;
+    } catch {
+      // device disappeared — fall through to default
+    }
+  }
+
+  const bootstrap = await getUserMediaWithChain(preferred?.deviceId, car);
+  const after = pickPreferredAudioInput(await listAudioInputs());
+  const currentId = bootstrap.getAudioTracks()[0]?.getSettings().deviceId;
+  if (after?.deviceId && after.label && after.deviceId !== currentId) {
+    try {
+      const switched = await getUserMediaWithChain(
+        after.deviceId,
+        isCarLikeAudioInput(after.label),
+      );
+      bootstrap.getTracks().forEach((track) => track.stop());
+      rememberMicRoute(switched);
+      return switched;
+    } catch {
+      // keep bootstrap
+    }
+  }
+  rememberMicRoute(bootstrap);
+  return bootstrap;
+}
+
+export async function openUserMicWithRetry(attempts = MIC_RECLAIM_ATTEMPTS) {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await openUserMic();
+    } catch (error) {
+      lastError = error;
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, MIC_RECLAIM_RETRY_MS * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
 }
 
 export function applyMicTrackHints(track: MediaStreamTrack) {
@@ -40,13 +117,16 @@ export function applyMicTrackHints(track: MediaStreamTrack) {
 
 export async function applyMicConstraints(track: MediaStreamTrack) {
   applyMicTrackHints(track);
-  try {
-    await track.applyConstraints(MIC_AUDIO_CONSTRAINTS);
-  } catch {
+  const car = isCarLikeAudioInput(track.label);
+  const chain = micConstraintChain(track.getSettings().deviceId, car).filter(
+    (item): item is MediaTrackConstraints => typeof item === "object",
+  );
+  for (const constraints of chain) {
     try {
-      await track.applyConstraints(MIC_AUDIO_CONSTRAINTS_FALLBACK);
+      await track.applyConstraints(constraints);
+      return;
     } catch {
-      // constraints are best-effort
+      // try the next, looser set
     }
   }
 }

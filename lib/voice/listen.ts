@@ -34,6 +34,48 @@ export const MIC_AUDIO_CONSTRAINTS_FALLBACK: MediaTrackConstraints = {
   channelCount: 1,
 };
 
+/**
+ * Car Bluetooth / HFP: same AEC+NS+AGC, try 48 kHz, then drop sampleRate.
+ * HFP often only does 8/16 kHz — exact 48k OverconstrainedError is common.
+ */
+export const MIC_AUDIO_CONSTRAINTS_CAR = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  sampleRate: { ideal: LISTEN_SAMPLE_RATE },
+  channelCount: 1,
+  googEchoCancellation: true,
+  googAutoGainControl: true,
+} as MediaTrackConstraints;
+
+export const MIC_AUDIO_CONSTRAINTS_CAR_FALLBACK: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
+export function micConstraintChain(
+  deviceId?: string,
+  car = false,
+): Array<MediaTrackConstraints | boolean> {
+  const withDevice = (base: MediaTrackConstraints): MediaTrackConstraints =>
+    deviceId ? { ...base, deviceId: { ideal: deviceId } } : base;
+  if (car) {
+    return [
+      withDevice(MIC_AUDIO_CONSTRAINTS_CAR),
+      withDevice(MIC_AUDIO_CONSTRAINTS_CAR_FALLBACK),
+      withDevice(MIC_AUDIO_CONSTRAINTS_FALLBACK),
+      deviceId ? { deviceId: { ideal: deviceId } } : true,
+    ];
+  }
+  return [
+    withDevice(MIC_AUDIO_CONSTRAINTS),
+    withDevice(MIC_AUDIO_CONSTRAINTS_FALLBACK),
+    deviceId ? { deviceId: { ideal: deviceId } } : true,
+  ];
+}
+
 export function isPrimaryMicEnergy(rms: number, noiseFloor: number) {
   return rms >= Math.max(MIC_RMS_ABS_FLOOR, noiseFloor * MIC_RMS_NOISE_RATIO);
 }

@@ -39,12 +39,14 @@ import { isAdultPageUrl, isDirectWatchMediaUrl, isWatchHlsUrl, shouldProxyWatchM
 import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
   canShareScreen,
+  nextCameraFacing,
   preferWatchTab,
   startCameraStream,
   startScreenStream,
   startVisionLoop,
   stopMediaStream,
   VisionFrameBatcher,
+  type CameraFacing,
   type VisionSource,
 } from "@/lib/voice/vision";
 import { openWatchChannel, watchTabHref, WATCH_UI_ENABLED } from "@/lib/voice/watch-channel";
@@ -128,6 +130,27 @@ function CameraIcon() {
         strokeLinejoin="round"
       />
       <circle cx="12" cy="14" r="3.1" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function FlipCameraIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" aria-hidden>
+      <path
+        d="M7 7h4V4L4 9l7 5V11h6a3 3 0 0 1 3 3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M17 17h-4v3l7-5-7-5v3H7a3 3 0 0 1-3-3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -286,6 +309,7 @@ export function VoiceHome() {
   const [streamTick, setStreamTick] = useState(0);
   const [draft, setDraft] = useState("");
   const [cameraOn, setCameraOn] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<CameraFacing>("user");
   const [screenOn, setScreenOn] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const [visionHint, setVisionHint] = useState<string | null>(null);
@@ -561,7 +585,7 @@ export function VoiceHome() {
       cameraSlot.current.stopLoop = null;
       video.srcObject = null;
     };
-  }, [cameraOn]);
+  }, [cameraOn, cameraFacing]);
 
   useEffect(() => {
     if (!screenOn) return;
@@ -609,7 +633,8 @@ export function VoiceHome() {
   async function startVision(source: VisionSource) {
     setVisionHint(null);
     try {
-      const stream = source === "camera" ? await startCameraStream() : await startScreenStream();
+      const stream =
+        source === "camera" ? await startCameraStream(cameraFacing) : await startScreenStream();
       const slot = source === "camera" ? cameraSlot : screenSlot;
       slot.current.stream = stream;
       stream.getVideoTracks()[0]?.addEventListener("ended", () => {
@@ -641,6 +666,32 @@ export function VoiceHome() {
       return;
     }
     void startVision(source);
+  }
+
+  async function flipCamera() {
+    if (!cameraSlot.current.stream) return;
+    const next = nextCameraFacing(cameraFacing);
+    setVisionHint(null);
+    try {
+      const stream = await startCameraStream(next);
+      const previous = cameraSlot.current.stream;
+      cameraSlot.current.stopLoop?.();
+      cameraSlot.current.stopLoop = null;
+      cameraSlot.current.stream = stream;
+      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+        releaseVision("camera");
+      });
+      stopMediaStream(previous);
+      setCameraFacing(next);
+    } catch (caught) {
+      const message =
+        caught instanceof Error && caught.name === "NotAllowedError"
+          ? "Camera permission was denied."
+          : caught instanceof Error
+            ? caught.message
+            : "Could not switch cameras.";
+      setVisionHint(message);
+    }
   }
 
   function sendReadyAttachments(items: ReadyAttachment[], respond: boolean) {
@@ -1145,11 +1196,13 @@ export function VoiceHome() {
       return;
     }
     backgroundAudio.current.stop();
+    setMediaSessionYield(true);
     void playAppleMusicFromGesture(token, musicQuery)
       .then((played) => {
         notifyUserMusic(played.title);
       })
       .catch((error) => {
+        setMediaSessionYield(false);
         setAppleHint(error instanceof Error ? error.message : "Could not play on Apple Music.");
       });
   }
@@ -1161,11 +1214,13 @@ export function VoiceHome() {
       return;
     }
     backgroundAudio.current.stop();
+    setMediaSessionYield(true);
     void skipAppleMusicFromGesture(token, musicQuery)
       .then((played) => {
         notifyUserMusic(played.title);
       })
       .catch((error) => {
+        if (!readAppleMusicNowPlaying().playing) setMediaSessionYield(false);
         setAppleHint(error instanceof Error ? error.message : "Could not skip.");
       });
   }
@@ -1242,7 +1297,13 @@ export function VoiceHome() {
         // Play still works from the user's Play tap
       }
     }
+    const alreadyPlaying = readAppleMusicNowPlaying();
+    if (alreadyPlaying.playing) {
+      applyApplePlayback(alreadyPlaying);
+    }
     await session.start();
+    if (cameraSlot.current.stream) session.notifyVision("camera", true);
+    if (screenSlot.current.stream) session.notifyVision("screen", true);
     const nowPlaying = readAppleMusicNowPlaying();
     if (nowPlaying.playing) {
       applyApplePlayback(nowPlaying);
@@ -1525,19 +1586,34 @@ export function VoiceHome() {
           ) : null}
           <div className="flex items-end justify-between gap-3">
             {cameraOn ? (
-              <video
-                ref={cameraVideoRef}
-                muted
-                playsInline
-                autoPlay
-                className="h-[4.5rem] w-24 shrink-0 rounded-xl border border-zinc-400 object-cover shadow-md -scale-x-100 dark:border-zinc-500"
-                aria-label="Camera viewfinder"
-              />
+              <div className="relative h-[4.5rem] w-24 shrink-0">
+                <video
+                  ref={cameraVideoRef}
+                  muted
+                  playsInline
+                  autoPlay
+                  className={`h-[4.5rem] w-24 rounded-xl border border-zinc-400 object-cover shadow-md dark:border-zinc-500 ${cameraFacing === "user" ? "-scale-x-100" : ""}`}
+                  aria-label={
+                    cameraFacing === "user" ? "Front camera viewfinder" : "Rear camera viewfinder"
+                  }
+                />
+                <button
+                  type="button"
+                  aria-label={
+                    cameraFacing === "user" ? "Switch to rear camera" : "Switch to front camera"
+                  }
+                  title={cameraFacing === "user" ? "Rear camera" : "Front camera"}
+                  onClick={() => void flipCamera()}
+                  className="absolute right-1 bottom-1 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-400 bg-background/90 text-foreground dark:border-zinc-500"
+                >
+                  <FlipCameraIcon />
+                </button>
+              </div>
             ) : (
               <span />
             )}
             <div className="flex items-center gap-2">
-              {screenOn ? (
+              {screenOn || (cameraOn && phase !== "idle") ? (
                 <span className="rounded-full border border-zinc-400 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-zinc-600 dark:border-zinc-500 dark:text-zinc-300">
                   Sharing
                 </span>
@@ -1556,7 +1632,8 @@ export function VoiceHome() {
               <button
                 type="button"
                 aria-pressed={cameraOn}
-                aria-label={cameraOn ? "Stop camera" : "Camera"}
+                aria-label={cameraOn ? "Stop sharing camera" : "Share camera"}
+                title={cameraOn ? "Stop sharing camera" : "Share camera"}
                 onClick={() => toggleVision("camera")}
                 className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-zinc-400 bg-background text-foreground transition-colors hover:bg-zinc-100 dark:border-zinc-500 dark:hover:bg-zinc-800 ${cameraOn ? "bg-zinc-100 dark:bg-zinc-800" : ""}`}
               >
@@ -1566,6 +1643,8 @@ export function VoiceHome() {
           </div>
           {visionHint ? (
             <p className="text-right text-xs text-zinc-500">{visionHint}</p>
+          ) : cameraOn && phase === "idle" ? (
+            <p className="text-right text-xs text-zinc-500">Connect so Lexi can see this camera.</p>
           ) : null}
           {screenOn ? (
             <video

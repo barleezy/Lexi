@@ -24,9 +24,13 @@ import {
   shouldDisconnectForLifecycle,
   shouldDuckPlaybackForCoexist,
   shouldPauseKeepAliveOnHide,
+  setCarAudioRoute,
+  setMediaSessionYield,
   shouldClaimMediaSession,
   shouldReclaimAfterExclusiveRelease,
   shouldReclaimForLifecycle,
+  shouldReclaimMicForRouteChange,
+  shouldUseHtmlKeepAlive,
 } from "../lib/voice/keepalive.ts";
 
 function expect(condition, label) {
@@ -99,6 +103,24 @@ expect(shouldDuckPlaybackForCoexist({ blurred: true }) === true, "duck when blur
 expect(shouldDuckPlaybackForCoexist({}) === false, "full volume in foreground");
 expect(shouldClaimMediaSession(false) === true, "claim media session when music is not playing");
 expect(shouldClaimMediaSession(true) === false, "yield media session while MusicKit plays");
+setMediaSessionYield(true);
+expect(shouldUseHtmlKeepAlive() === false, "pause html keep-alive while MusicKit plays");
+expect(
+  isVoiceAudioInterrupted({ audioSessionState: "interrupted", yieldToMedia: true }) === false,
+  "MusicKit interrupt is not a mic hang-up",
+);
+setMediaSessionYield(false);
+setCarAudioRoute(true);
+expect(shouldClaimMediaSession(false) === false, "do not claim media session on car HFP");
+expect(shouldUseHtmlKeepAlive({ carAudio: true }) === false, "no html media keep-alive on car HFP");
+setCarAudioRoute(false);
+expect(shouldUseHtmlKeepAlive() === true, "html keep-alive when not yielding and not car");
+expect(shouldReclaimMicForRouteChange({ type: "devicechange" }) === true, "devicechange reclaims mic");
+expect(shouldReclaimMicForRouteChange({ type: "pagehide" }) === true, "pagehide retries mic");
+expect(
+  shouldReclaimMicForRouteChange({ type: "visibilitychange", visibilityState: "hidden" }) === true,
+  "hide still retries mic for AirPods app switch",
+);
 expect(shouldDuckPlaybackForCoexist({ musicPlaying: true }) === true, "duck when background music plays");
 expect(playbackGainForCoexist(true) === PLAYBACK_DUCK_GAIN, "duck gain");
 expect(playbackGainForCoexist(false) === PLAYBACK_FULL_GAIN, "full gain");

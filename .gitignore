@@ -43,3 +43,12 @@ next-env.d.ts
 
 # voice debug logs
 /.voice-logs
+
+# Xcode
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/*.xcuserstate
+ios/**/*.moved-aside
+ios/**/*.ipa
+ios/**/*.dSYM
+ios/**/*.dSYM.zip
