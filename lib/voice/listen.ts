@@ -1,4 +1,5 @@
-/** Capture and send rate. 48 kHz keeps high-frequency consonants. */
+/** Capture and send rate. 48 kHz keeps high-frequency consonants.
+ *  CarPlay/HFP resamples in the OS — do not drop this for in-car latency. */
 export const LISTEN_SAMPLE_RATE = 48_000;
 
 /** Absolute floor: hush / room hiss is not user speech. Soft mumble sits above this. */

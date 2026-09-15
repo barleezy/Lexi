@@ -13,6 +13,8 @@ export type SendVisionFramesOptions = {
 };
 
 export const VISION_INTERVAL_MS = 1000;
+/** Voice-only / no viewfinder: do not hammer JPEG encode if a loop is still armed. */
+export const VISION_INTERVAL_VOICE_ONLY_MS = 4000;
 export const VISION_BATCH_SIZE = 4;
 export const VISION_BATCH_GAP_MS = 600;
 export const VISION_BATCH_FLUSH_MS = 800;
@@ -199,9 +201,16 @@ export class VisionFrameBatcher {
   }
 }
 
+export function setVisionTracksEnabled(stream: MediaStream | null | undefined, enabled: boolean) {
+  stream?.getVideoTracks().forEach((track) => {
+    track.enabled = enabled;
+  });
+}
+
 export function startVisionLoop(
   video: HTMLVideoElement,
   onFrame: (dataUrl: string) => void,
+  intervalMs = VISION_INTERVAL_MS,
 ) {
   let timer: ReturnType<typeof setInterval> | null = null;
   let busy = false;
@@ -217,7 +226,7 @@ export function startVisionLoop(
     }
   };
 
-  timer = setInterval(tick, VISION_INTERVAL_MS);
+  timer = setInterval(tick, intervalMs);
   tick();
   return () => {
     if (timer) clearInterval(timer);

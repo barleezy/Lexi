@@ -1,4 +1,6 @@
 import {
+  VISION_INTERVAL_MS,
+  VISION_INTERVAL_VOICE_ONLY_MS,
   cameraMediaConstraints,
   cameraSwitchErrorMessage,
   otherCameraFacing,
@@ -28,5 +30,8 @@ expect(
   cameraSwitchErrorMessage("user") === "Could not switch to the front camera.",
   "front restore message",
 );
+
+expect(VISION_INTERVAL_MS === 1000, "visible vision still 1Hz");
+expect(VISION_INTERVAL_VOICE_ONLY_MS === 4000, "voice-only fallback is 4s");
 
 console.log("vision checks ok");

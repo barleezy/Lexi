@@ -254,6 +254,12 @@ export class PcmPlayer {
     this.output.connect(ctx.destination);
   }
 
+  /** Next turn start only — already-queued audio keeps its schedule. */
+  setLead(sec: number) {
+    if (!Number.isFinite(sec) || sec < 0) return;
+    this.lead = sec;
+  }
+
   get state() {
     return this.ctx.state;
   }

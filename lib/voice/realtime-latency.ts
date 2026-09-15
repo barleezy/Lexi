@@ -22,16 +22,26 @@ export const VAD_SILENCE_DURATION_MS = 300;
 /** Keep first consonants, including mumbled onsets. Do not lower. */
 export const VAD_PREFIX_PADDING_MS = 350;
 
-/** Worklet flush. 100ms was extra hold before the socket; 40ms stays WS-safe. */
-export const CAPTURE_CHUNK_MS = 40;
-/** Same ~4s pre-open coverage as 40 × 100ms chunks. */
+/** Worklet flush. 20ms is one render quantum at 48 kHz and stays WS-safe. */
+export const CAPTURE_CHUNK_MS = 20;
+/** Same ~4s pre-open coverage as before, now in 20ms chunks. */
 export const PREOPEN_BUFFER_MS = 4000;
 export const PREOPEN_CAP = Math.round(PREOPEN_BUFFER_MS / CAPTURE_CHUNK_MS);
 /**
- * Playback scheduler lead. Do not cut this — first-word underruns clip speech.
- * First audio still plays on the delta; we do not wait for response.done.
+ * Foreground / desktop playback lead. Do not cut this on Wi-Fi speakers —
+ * first-word underruns clip speech. First audio still plays on the delta.
  */
 export const PLAY_LEAD_SEC = 0.15;
+/**
+ * CarPlay / lock-screen / voice-only lead. The car already buffers 150–300ms
+ * (A2DP/HFP). Stacking another 150ms makes the first word feel late.
+ * 60ms still covers a jittery delta without a full hardware-buffer wait.
+ */
+export const PLAY_LEAD_VOICE_ONLY_SEC = 0.06;
+
+export function playLeadSec(voiceOnly: boolean) {
+  return voiceOnly ? PLAY_LEAD_VOICE_ONLY_SEC : PLAY_LEAD_SEC;
+}
 
 export function captureFramesForRate(sampleRate: number) {
   return Math.round(sampleRate * (CAPTURE_CHUNK_MS / 1000));

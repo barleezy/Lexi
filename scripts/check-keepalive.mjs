@@ -97,6 +97,18 @@ expect(shouldDisconnectForLifecycle({ type: "blur" }) === false, "game blur must
 expect(shouldDuckPlaybackForCoexist({ pageHidden: true }) === true, "duck when hidden");
 expect(shouldDuckPlaybackForCoexist({ blurred: true }) === true, "duck when blurred");
 expect(shouldDuckPlaybackForCoexist({}) === false, "full volume in foreground");
+expect(
+  shouldDuckPlaybackForCoexist({ pageHidden: true, ios: true }) === false,
+  "iOS hidden (CarPlay / lock screen) stays full volume",
+);
+expect(
+  shouldDuckPlaybackForCoexist({ blurred: true, ios: true }) === false,
+  "iOS blur is not Fortnite ducking",
+);
+expect(
+  shouldDuckPlaybackForCoexist({ pageHidden: true, ios: true, musicPlaying: true }) === true,
+  "MusicKit still ducks on iOS",
+);
 expect(shouldClaimMediaSession(false) === true, "claim media session when music is not playing");
 expect(shouldClaimMediaSession(true) === false, "yield media session while MusicKit plays");
 expect(shouldDuckPlaybackForCoexist({ musicPlaying: true }) === true, "duck when background music plays");

@@ -1,6 +1,7 @@
 import {
   CAPTURE_CHUNK_MS,
   PLAY_LEAD_SEC,
+  PLAY_LEAD_VOICE_ONLY_SEC,
   PREOPEN_BUFFER_MS,
   PREOPEN_CAP,
   VAD_PREFIX_PADDING_MS,
@@ -9,6 +10,7 @@ import {
   VAD_TYPE,
   buildTurnDetection,
   captureFramesForRate,
+  playLeadSec,
   shouldDeferLiveVision,
 } from "../lib/voice/realtime-latency.ts";
 
@@ -23,12 +25,15 @@ expect(VAD_SILENCE_DURATION_MS === 300, "300ms end-of-speech");
 expect(VAD_SILENCE_DURATION_MS >= 300, "do not tighten below a natural pause");
 expect(VAD_PREFIX_PADDING_MS === 350, "keep first consonants including mumbled onsets");
 expect(VAD_PREFIX_PADDING_MS >= 300, "do not clip word onsets");
-expect(CAPTURE_CHUNK_MS === 40, "40ms capture flush");
-expect(CAPTURE_CHUNK_MS <= 40, "capture stays at or under 40ms");
-expect(PLAY_LEAD_SEC === 0.15, "playback lead stays 150ms to avoid clipped first words");
+expect(CAPTURE_CHUNK_MS === 20, "20ms capture flush");
+expect(CAPTURE_CHUNK_MS <= 20, "capture stays at or under 20ms");
+expect(PLAY_LEAD_SEC === 0.15, "foreground lead stays 150ms to avoid clipped first words");
+expect(PLAY_LEAD_VOICE_ONLY_SEC === 0.06, "CarPlay / voice-only lead is 60ms");
+expect(playLeadSec(true) === 0.06, "voice-only lead helper");
+expect(playLeadSec(false) === 0.15, "foreground lead helper");
 expect(PREOPEN_BUFFER_MS === 4000, "4s pre-open coverage");
-expect(PREOPEN_CAP === 100, "pre-open cap matches 40ms chunks");
-expect(captureFramesForRate(48_000) === 1920, "48kHz capture frames");
+expect(PREOPEN_CAP === 200, "pre-open cap matches 20ms chunks");
+expect(captureFramesForRate(48_000) === 960, "48kHz capture frames");
 
 const vad = buildTurnDetection();
 expect(vad.type === "server_vad", "turn detection type");

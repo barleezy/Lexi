@@ -24,6 +24,7 @@ import {
   isIOSWebKit,
   isVoiceAudioInterrupted,
   KEEPALIVE_SILENCE_MS,
+  pageIsHidden,
 } from "@/lib/voice/keepalive";
 import { scoreSalience } from "@/lib/memory/decay";
 import { FACT_KEY_LIST, FACT_KEYS, isPinnedKey, PINNED_AFFECT } from "@/lib/memory/extract";
@@ -52,8 +53,14 @@ import {
   PREOPEN_CAP,
   buildTurnDetection,
   captureFramesForRate,
+  playLeadSec,
   shouldDeferLiveVision,
 } from "@/lib/voice/realtime-latency";
+import {
+  isInCarStyleRoute,
+  shouldClientGateMicToSilence,
+  shouldSendLiveVisionFrames,
+} from "@/lib/voice/carplay";
 import { buildInputAudio, readUserTranscript, sanitizeUserText } from "@/lib/voice/listen";
 import {
   EXPECT_STALL_MS,
@@ -964,6 +971,10 @@ export class VoiceSession {
   private musicState: MusicSessionState = { ...DEFAULT_MUSIC_STATE };
   private musicStateChanged = false;
   private coexistDucked = false;
+  private pageHidden = false;
+  private voiceOnlyRoute = false;
+  private liveWatch = false;
+  private liveVision = { camera: false, screen: false };
   private clientTimeZone = detectClientTimeZone();
   private deviceLocation: DeviceLocationState | null = null;
   private lastClockLine = "";
@@ -1023,6 +1034,12 @@ export class VoiceSession {
       return;
     }
 
+    // Handshake while getUserMedia / worklet load. Do not wait on toys /
+    // Fortnite / channels / MusicKit — those only enrich session.update.
+    this.openWebSocket(token, false);
+    this.startClockRefresh();
+    void this.applySideSessionState(toysPromise, fortnitePromise, channelsPromise, appleMusicPromise);
+
     const micStarted = Date.now();
     try {
       this.stream = await openUserMic();
@@ -1047,6 +1064,8 @@ export class VoiceSession {
 
     await addCaptureWorklet(ctx);
     this.player = new PcmPlayer(ctx, TARGET_RATE);
+    this.pageHidden = pageIsHidden();
+    this.applyVoiceOnlyPolicy();
     this.worklet = new AudioWorkletNode(ctx, "pcm-capture");
     this.worklet.port.onmessage = (event) => {
       this.onMic(event.data as Float32Array);
@@ -1075,19 +1094,12 @@ export class VoiceSession {
       onUnload: () => this.stop("client"),
       audioContextState: () => this.ctx?.state,
       onCoexist: (state) => {
+        this.pageHidden = state.hidden;
         this.coexistDucked = state.ducked;
+        this.applyVoiceOnlyPolicy();
         this.applyPlaybackDuck();
       },
     });
-
-    this.toyProviders = await toysPromise;
-    this.fortniteState = await fortnitePromise;
-    this.channelState = await channelsPromise;
-    const apple = await appleMusicPromise;
-    this.musicState = { ...this.musicState, ...apple };
-    this.handlers.onMusicState?.(this.musicState);
-    this.openWebSocket(token, false);
-    this.startClockRefresh();
   }
 
   setMusicPlayback(playing: boolean, title = "", source: MusicSessionState["source"] = "none") {
@@ -1113,6 +1125,52 @@ export class VoiceSession {
 
   private applyPlaybackDuck() {
     this.player?.setDuck(this.coexistDucked || this.musicState.playing);
+  }
+
+  private applyVoiceOnlyPolicy() {
+    const voiceOnly = isInCarStyleRoute({
+      pageHidden: this.pageHidden,
+      ios: isIOSWebKit(),
+      cameraActive: this.liveVision.camera,
+      screenActive: this.liveVision.screen,
+      watchActive: this.liveWatch,
+    });
+    this.player?.setLead(playLeadSec(voiceOnly));
+    if (this.voiceOnlyRoute === voiceOnly) return;
+    this.voiceOnlyRoute = voiceOnly;
+    this.logger.log("route.voice_only", {
+      voice_only: voiceOnly,
+      hidden: this.pageHidden,
+      camera: this.liveVision.camera,
+      screen: this.liveVision.screen,
+      watch: this.liveWatch,
+      play_lead_sec: playLeadSec(voiceOnly),
+    });
+  }
+
+  private async applySideSessionState(
+    toysPromise: ReturnType<typeof fetchToyProviders>,
+    fortnitePromise: ReturnType<typeof fetchFortniteStatus>,
+    channelsPromise: ReturnType<typeof fetchChannelStatus>,
+    appleMusicPromise: ReturnType<typeof fetchAppleMusicStatus>,
+  ) {
+    try {
+      const [toys, fortnite, channels, apple] = await Promise.all([
+        toysPromise,
+        fortnitePromise,
+        channelsPromise,
+        appleMusicPromise,
+      ]);
+      if (this.stopped) return;
+      this.toyProviders = toys;
+      this.fortniteState = fortnite;
+      this.channelState = channels;
+      this.musicState = { ...this.musicState, ...apple };
+      this.handlers.onMusicState?.(this.musicState);
+      this.pushSilentSessionUpdate();
+    } catch {
+      // Defaults already went out on ws.open.
+    }
   }
 
   setDeviceLocation(location: DeviceLocationState | null) {
@@ -1160,7 +1218,17 @@ export class VoiceSession {
 
   sendVisionFrames(parts: VisionFramePart[], options?: SendVisionFramesOptions) {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN || !parts.length) return;
-    if (shouldDeferLiveVision(this.phase, Boolean(options?.respond), parts.map((part) => part.source))) {
+    const sources = parts.map((part) => part.source);
+    if (
+      !shouldSendLiveVisionFrames({
+        pageHidden: this.pageHidden || this.voiceOnlyRoute,
+        respond: Boolean(options?.respond),
+        sources,
+      })
+    ) {
+      return;
+    }
+    if (shouldDeferLiveVision(this.phase, Boolean(options?.respond), sources)) {
       this.deferredLiveFrames = parts;
       return;
     }
@@ -1232,6 +1300,8 @@ export class VoiceSession {
     active: boolean,
     meta?: { title?: string; source?: VideoSourceKind | null; remoteTab?: boolean },
   ) {
+    this.liveWatch = active;
+    this.applyVoiceOnlyPolicy();
     if (this.stopped) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.pendingVideoNotices.push({
@@ -1246,6 +1316,10 @@ export class VoiceSession {
   }
 
   notifyVision(source: VisionSource, active: boolean) {
+    if (source === "camera" || source === "screen") {
+      this.liveVision[source] = active;
+      this.applyVoiceOnlyPolicy();
+    }
     if (this.stopped) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.pendingVisionNotices.push({ source, active });
@@ -1401,6 +1475,10 @@ export class VoiceSession {
     this.pendingVideoNotices = [];
     this.pendingAttachments = [];
     this.deferredLiveFrames = [];
+    this.pageHidden = false;
+    this.voiceOnlyRoute = false;
+    this.liveWatch = false;
+    this.liveVision = { camera: false, screen: false };
     this.videoContextProvider = null;
     this.by = by;
     this.logger.log("stop", { by, phase: this.phase });
@@ -1703,7 +1781,8 @@ export class VoiceSession {
     if (this.voiceAudioInterrupted()) return;
     const track = this.stream?.getAudioTracks()[0];
     if (!opts.force && micTrackUsable(track)) {
-      await applyMicConstraints(track);
+      // Do not applyConstraints on every iOS keepalive tick — that glitches
+      // HFP/CarPlay capture and resets server VAD.
       this.handlers.onMicRecovered?.();
       return;
     }
@@ -1767,8 +1846,11 @@ export class VoiceSession {
     const resampled = resample(frame, micRate, TARGET_RATE);
     const pcm = floatToPcm16(resampled);
     this.micNoiseFloor = updateMicNoiseFloor(this.micNoiseFloor, pcm.rms);
-    const primary = isPrimaryMicEnergy(pcm.rms, this.micNoiseFloor);
+    const primary =
+      !shouldClientGateMicToSilence(this.voiceOnlyRoute) ||
+      isPrimaryMicEnergy(pcm.rms, this.micNoiseFloor);
     // Low / non-primary energy is sent as silence so server VAD does not treat TV bleed as speech.
+    // CarPlay / voice-only skips that gate — HFP mics are quiet and onset must reach the server.
     const audio = pcm16ToBase64(primary ? pcm.bytes : new Uint8Array(pcm.bytes.length));
     this.noteIn(pcm.bytes.length, pcm.rms, !primary);
 

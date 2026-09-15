@@ -42,6 +42,7 @@ import {
   canShareScreen,
   otherCameraFacing,
   preferWatchTab,
+  setVisionTracksEnabled,
   startCameraStream,
   startScreenStream,
   startVisionLoop,
@@ -78,6 +79,7 @@ import { OUR_SONG_SEARCH } from "@/lib/apple-music/config";
 import { AppleMusicBar } from "@/components/apple-music-bar";
 import { BackgroundAudioPlayer } from "@/lib/voice/background-music";
 import { setMediaSessionYield } from "@/lib/voice/keepalive";
+import { shouldRunVisionCaptureLoop } from "@/lib/voice/carplay";
 import { DEFAULT_MUSIC_STATE, type MusicSessionState } from "@/lib/voice/persona";
 
 const HINTS: Record<VoicePhase, string> = {
@@ -446,6 +448,10 @@ export function VoiceHome() {
         return;
       }
       if (message.type === "frame") {
+        // CarPlay / lock screen: no watch surface — skip JPEG uploads.
+        if (!shouldRunVisionCaptureLoop({ pageHidden: document.visibilityState === "hidden" })) {
+          return;
+        }
         if (!watchTabActiveRef.current) {
           watchTabActiveRef.current = true;
           videoMeta.current = { title: message.title || "Video", source: "url" };
@@ -538,6 +544,9 @@ export function VoiceHome() {
     stopVideoLoop.current?.();
     stopVideoLoop.current = startVideoFrameLoop(video, videoFrames.current, (shot) => {
       if (watchTabActiveRef.current) return;
+      if (!shouldRunVisionCaptureLoop({ pageHidden: document.visibilityState === "hidden" })) {
+        return;
+      }
       visionBatcher.current.push({
         source: "watch",
         dataUrl: shot.dataUrl,
@@ -556,6 +565,14 @@ export function VoiceHome() {
     const stream = cameraSlot.current.stream;
     if (!video || !stream) return;
     video.srcObject = stream;
+    const capture = shouldRunVisionCaptureLoop({ pageHidden: tabHidden });
+    setVisionTracksEnabled(stream, capture);
+    if (!capture) {
+      cameraSlot.current.stopLoop?.();
+      cameraSlot.current.stopLoop = null;
+      video.pause();
+      return;
+    }
     void video.play().catch(() => {});
     cameraSlot.current.stopLoop?.();
     cameraSlot.current.stopLoop = startVisionLoop(video, (dataUrl) => {
@@ -570,7 +587,7 @@ export function VoiceHome() {
       cameraSlot.current.stopLoop = null;
       video.srcObject = null;
     };
-  }, [cameraOn, cameraFlipKey]);
+  }, [cameraOn, cameraFlipKey, tabHidden]);
 
   useEffect(() => {
     if (!screenOn) return;
@@ -578,6 +595,14 @@ export function VoiceHome() {
     const stream = screenSlot.current.stream;
     if (!video || !stream) return;
     video.srcObject = stream;
+    const capture = shouldRunVisionCaptureLoop({ pageHidden: tabHidden });
+    setVisionTracksEnabled(stream, capture);
+    if (!capture) {
+      screenSlot.current.stopLoop?.();
+      screenSlot.current.stopLoop = null;
+      video.pause();
+      return;
+    }
     void video.play().catch(() => {});
     screenSlot.current.stopLoop?.();
     screenSlot.current.stopLoop = startVisionLoop(video, (dataUrl) => {
@@ -592,7 +617,7 @@ export function VoiceHome() {
       screenSlot.current.stopLoop = null;
       video.srcObject = null;
     };
-  }, [screenOn]);
+  }, [screenOn, tabHidden]);
 
   function releaseVision(source?: VisionSource, notify = true) {
     if (!source || source === "camera") {
