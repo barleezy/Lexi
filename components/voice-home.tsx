@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   VoiceSession,
@@ -177,17 +178,31 @@ export function VoiceHome() {
       : "Start talking";
 
   return (
-    <div className="flex min-h-dvh flex-1 flex-col bg-background font-sans text-foreground">
+    <div className="relative flex min-h-dvh flex-1 flex-col overflow-hidden bg-background font-sans text-foreground">
       <style>{`
         @keyframes lexi-wave {
           0%, 100% { transform: scaleY(0.4); }
           50% { transform: scaleY(1); }
         }
       `}</style>
-      <header className="flex items-center justify-between px-6 py-5 sm:px-10">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
+      >
+        <Image
+          src="/lexi.jpg"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="object-cover object-[center_12%] opacity-[0.28] sm:object-[84%_16%] sm:opacity-[0.42] dark:opacity-[0.34] dark:sm:opacity-[0.5] [mask-image:linear-gradient(180deg,rgba(0,0,0,0.9)_0%,rgba(0,0,0,0.4)_40%,transparent_70%)] sm:[mask-image:linear-gradient(270deg,rgba(0,0,0,0.95)_0%,rgba(0,0,0,0.55)_46%,transparent_82%)]"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-background/30 to-background sm:bg-gradient-to-r sm:from-background sm:via-background/40 sm:to-transparent" />
+      </div>
+      <header className="relative z-10 flex items-center justify-between px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
       </header>
-      <main className="flex flex-1 flex-col items-center justify-center px-6">
+      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6">
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
@@ -196,7 +211,7 @@ export function VoiceHome() {
           {error ?? (latest ? latest.text : "A voice-first companion.")}
         </p>
       </main>
-      <div className="w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
+      <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <form
           onSubmit={(event) => void onComposerSubmit(event)}
           className="mx-auto flex min-h-14 w-full max-w-xl items-center gap-2 rounded-full border border-zinc-400 bg-background px-4 py-2 shadow-md dark:border-zinc-500"
