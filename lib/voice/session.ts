@@ -272,7 +272,7 @@ export class VoiceSession {
 
     ws.addEventListener("open", () => {
       this.logger.log("ws.open", { ms: Date.now() - opened });
-      this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat, this.currentSessionId()));
+      this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat, this.currentSessionId() ?? ""));
       this.injectPriorChat();
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
