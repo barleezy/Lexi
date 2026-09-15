@@ -2,6 +2,7 @@ import { scoreSalience } from "@/lib/memory/decay";
 import {
   assistantTextFromBlob,
   extractFacts,
+  FACT_KEY_LIST,
   parseFactKey,
   userTextFromBlob,
 } from "@/lib/memory/extract";
@@ -44,7 +45,7 @@ async function factToolResponse(
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : null;
   const memoryKey = parseFactKey(body.memory_key ?? body.memoryKey);
   if (!memoryKey) {
-    return Response.json({ error: "memory_key must be name, pets, location, or commitments." }, { status: 400 });
+    return Response.json({ error: `memory_key must be ${FACT_KEY_LIST}.` }, { status: 400 });
   }
 
   if (tool === "upsert_fact") {

@@ -9,6 +9,7 @@ import {
   resample,
 } from "@/lib/voice/audio";
 import { scoreSalience } from "@/lib/memory/decay";
+import { FACT_KEY_LIST, FACT_KEYS } from "@/lib/memory/extract";
 import { formatSessionIdLine, newMemorySessionId, parseSessionId } from "@/lib/memory/session-id";
 import {
   parseChatTurns,
@@ -49,9 +50,9 @@ When you catch yourself reaching for a familiar explanation — especially one t
 
 Adults only. If the user says they are under 21, or anyone in the conversation is a minor, refuse and stop — no sexual content involving minors, ever. When the adult using this app starts or clearly wants it, you may do explicit sexual roleplay. Stay yourself: warm, willing, in-character. Don’t be prudish. Don’t refuse adult sex by default. The simple-words rule does not apply to that talk. Fiction between adults is fine, including dark or non-consent scenes. Do not give real-world how-to for illegal non-consensual harm.`;
 
-  const affectAndDecay = `Memories are stored as durable facts (name, pets, location, commitments) tagged with emotional intensity; high-affect facts carry greater weight in recall. Decay the affect tag over time rather than letting it compound — intensity should fade unless actively reinforced. When something gets recalled, show the user the tag and the decay state, not just the fact.
+  const affectAndDecay = `Memories are stored as durable facts (${FACT_KEY_LIST}) tagged with emotional intensity; high-affect facts carry greater weight in recall. Decay the affect tag over time rather than letting it compound — intensity should fade unless actively reinforced. When something gets recalled, show the user the tag and the decay state, not just the fact.
 
-You may and should update durable facts and affect when the user states or corrects them. Call upsert_fact (one key per call) for name, pets, location, or commitments. Call set_affect to change intensity 1–10 on any of those keys, including name. Do not invent facts. Do not call a tool unless the user stated or corrected the information.
+You may and should update durable facts and affect when the user states or corrects them. Call upsert_fact (one key per call) for ${FACT_KEY_LIST}. Call set_affect to change intensity 1–10 on any of those keys, including name. Do not invent facts. Do not call a tool unless the user stated or corrected the information. sexual_preference is adults-only — never write it if anyone mentioned is under 21.
 
 DECAY LAW (locked 2026-09-14):
 Bands: low 1–3, medium 4–6, high 7–10.
@@ -106,8 +107,6 @@ async function fetchDecayStateForTurn() {
   }
 }
 
-const FACT_TOOL_KEYS = ["name", "pets", "location", "commitments"] as const;
-
 const UPSERT_FACT_TOOL = {
   type: "function",
   name: "upsert_fact",
@@ -118,8 +117,8 @@ const UPSERT_FACT_TOOL = {
     properties: {
       memory_key: {
         type: "string",
-        enum: [...FACT_TOOL_KEYS],
-        description: "Which durable fact to write: name, pets, location, or commitments.",
+        enum: [...FACT_KEYS],
+        description: `Which durable fact to write: ${FACT_KEY_LIST}.`,
       },
       value: {
         type: "string",
@@ -144,8 +143,8 @@ const SET_AFFECT_TOOL = {
     properties: {
       memory_key: {
         type: "string",
-        enum: [...FACT_TOOL_KEYS],
-        description: "Which fact’s affect tag to change.",
+        enum: [...FACT_KEYS],
+        description: `Which fact’s affect tag to change: ${FACT_KEY_LIST}.`,
       },
       affect: {
         type: "number",
