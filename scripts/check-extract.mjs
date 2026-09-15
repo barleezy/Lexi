@@ -1,5 +1,5 @@
 import { bumpAffect } from "../lib/memory/decay.ts";
-import { extractFacts, FACT_KEYS, IDENTITY_KEYS, isFactKey, isIdentityKey } from "../lib/memory/extract.ts";
+import { extractFacts, extractFactsMemo, FACT_KEYS, IDENTITY_KEYS, isFactKey, isIdentityKey } from "../lib/memory/extract.ts";
 import { DEFAULT_USER_ID, normalizeUserId, resolveUserId } from "../lib/memory/user.ts";
 
 function storedAffect(key, incoming, existing) {
@@ -44,6 +44,13 @@ expectEqual(keys("I'm Ian"), ["name=Ian"], "I'm");
 expectEqual(keys("I am Ian"), ["name=Ian"], "I am");
 expectEqual(keys("call me Ian"), ["name=Ian"], "call me");
 expectEqual(keys("my name is ian"), ["name=Ian"], "lowercase name");
+expectEqual(keys("call me daddy"), [], "daddy is a nickname not a name");
+expectEqual(keys("call me leezy"), [], "leezy is a nickname not a name");
+expectEqual(
+  keys("my nicknames are daddy, barleezy, menace, barleezus, and leezy"),
+  ["nicknames=daddy, barleezy, menace, barleezus, and leezy"],
+  "nicknames labeled",
+);
 
 expectEqual(keys("I have a dog named Rex"), ["pets=Rex (dog)"], "named dog");
 expectEqual(keys("my cat is Whiskers"), ["pets=Whiskers (cat)"], "named cat");
@@ -104,6 +111,13 @@ expectEqual(keys("I want to go to the store"), [], "no vacation from store");
 expectEqual(keys("hi"), [], "greeting hi");
 expectEqual(keys("hello!"), [], "greeting hello");
 expectEqual(keys("thanks"), [], "greeting thanks");
+expectEqual(keys("cool"), [], "noop cool");
+expectEqual(keys("got it"), [], "noop got it");
+expectEqual(keys("sure"), [], "noop sure");
+const memoFirst = extractFactsMemo("My name is Ian");
+const memoAgain = extractFactsMemo("My name is Ian");
+expectEqual(memoFirst, memoAgain, "memo reuses the same extract");
+expectEqual(memoAgain, [{ memoryKey: "name", value: "Ian" }], "memo keeps name quality");
 expectEqual(keys("I'm going to the store"), [], "no name from going");
 expectEqual(keys("I'm in a meeting"), [], "no location from meeting");
 expectEqual(keys("I'm tired"), [], "no name from tired");
@@ -124,6 +138,7 @@ expectEqual(
   [...FACT_KEYS],
   [
     "name",
+    "nicknames",
     "pets",
     "location",
     "commitments",
@@ -150,6 +165,8 @@ expectEqual(
   ],
   "fact key pool",
 );
+expectEqual(isFactKey("nicknames"), true, "nicknames is fact key");
+expectEqual(isIdentityKey("nicknames"), false, "nicknames is not identity");
 expectEqual(isFactKey("birthday"), true, "birthday is fact key");
 expectEqual(isFactKey("music"), true, "music is fact key");
 expectEqual(isFactKey("transexual"), false, "transexual is not a user fact key");

@@ -5,9 +5,12 @@ import {
   buildVideoContextRequest,
   readResponsesError,
   readResponsesText,
+  readVideoContextCache,
+  videoContextCacheKey,
+  writeVideoContextCache,
 } from "@/lib/voice/video-context";
 
-const MAX_FRAMES = 3;
+const MAX_FRAMES = 4;
 const MAX_DATA_URL_CHARS = 1_200_000;
 
 type FrameBody = {
@@ -65,6 +68,20 @@ export async function POST(request: Request) {
   const currentTime = typeof body.currentTime === "number" ? body.currentTime : frames[frames.length - 1]?.timeSec;
   const duration = typeof body.duration === "number" ? body.duration : null;
   const playing = body.playing === true;
+  const cacheKey = videoContextCacheKey({ title, question, currentTime, frames });
+  const cached = readVideoContextCache(cacheKey);
+  if (cached) {
+    return Response.json({
+      description: cached.description,
+      model: cached.model,
+      title,
+      currentTime,
+      duration,
+      playing,
+      cached: true,
+      frames: frames.map((frame) => ({ timeSec: frame.timeSec })),
+    });
+  }
 
   const upstream = await fetch(VIDEO_CONTEXT_ENDPOINT, {
     method: "POST",
@@ -107,6 +124,7 @@ export async function POST(request: Request) {
     );
   }
 
+  writeVideoContextCache(cacheKey, description, VIDEO_CONTEXT_MODEL);
   return Response.json({
     description,
     model: VIDEO_CONTEXT_MODEL,

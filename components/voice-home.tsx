@@ -14,28 +14,37 @@ import {
 import { DEFAULT_USER_ID } from "@/lib/memory/user";
 import {
   ATTACHMENT_ACCEPT,
+  ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
+  isAttachmentVideoFile,
   processAttachment,
   type ReadyAttachment,
 } from "@/lib/voice/attachments";
 import {
   captureVideoShot,
+  isPageLikeVideoUrl,
   isVideoFile,
   playableVideoSrc,
+  snapshotFromFrames,
   snapshotFromVideo,
   startVideoFrameLoop,
   titleFromVideoUrl,
   VIDEO_ACCEPT,
   VideoFrameBuffer,
+  watchPlaysInHomeTab,
   type VideoSourceKind,
 } from "@/lib/voice/video";
+import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
   canShareScreen,
+  preferWatchTab,
   startCameraStream,
   startScreenStream,
   startVisionLoop,
   stopMediaStream,
+  VisionFrameBatcher,
   type VisionSource,
 } from "@/lib/voice/vision";
+import { openWatchChannel, watchTabHref } from "@/lib/voice/watch-channel";
 
 const HINTS: Record<VoicePhase, string> = {
   idle: "Talk to Lexi",
@@ -152,7 +161,7 @@ function PaperclipIcon() {
 type AttachmentChip = {
   id: string;
   name: string;
-  kind: "image" | "file";
+  kind: "image" | "file" | "video";
   previewUrl?: string;
   sent: boolean;
   payload: ReadyAttachment;
@@ -235,18 +244,35 @@ export function VoiceHome() {
   });
   const [chips, setChips] = useState<AttachmentChip[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
+  const [attachBusy, setAttachBusy] = useState<string | null>(null);
   const [videoDraft, setVideoDraft] = useState("");
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoTitle, setVideoTitle] = useState("");
   const [videoHint, setVideoHint] = useState<string | null>(null);
+  const [watchRemote, setWatchRemote] = useState<{ title: string; hasAudio: boolean } | null>(
+    null,
+  );
+  const [phoneWatch, setPhoneWatch] = useState(false);
+  const [toyControl, setToyControl] = useState(false);
+  const [tabHidden, setTabHidden] = useState(false);
+  const [micResume, setMicResume] = useState(false);
+  const videoSrcRef = useRef<string | null>(null);
+  const watchTabActiveRef = useRef(false);
+  const watchPlayingRef = useRef(false);
+  const watchTimeRef = useRef(0);
+  const watchDurationRef = useRef(0);
+  const visionBatcher = useRef(new VisionFrameBatcher());
 
   function commitRows(nextRows: TranscriptRow[]) {
     const snapshot = nextRows.map((row) => ({ ...row }));
     const live = [...snapshot].reverse().find((row) => row.text.trim())?.text ?? "";
     setRows(snapshot);
-    setCaption(live);
-    setStreamTick((tick) => tick + 1);
     writeVoiceSessionStore({ caption: live, rows: snapshot });
+  }
+
+  function commitCaption(text: string) {
+    setCaption(text);
+    setStreamTick((tick) => tick + 1);
   }
 
   useEffect(() => {
@@ -256,8 +282,79 @@ export function VoiceHome() {
       setRows(persisted.rows);
       setCaption(persisted.caption);
     }
-    setCanShare(canShareScreen());
+    setCanShare(canShareScreen() && !preferWatchTab());
+    setPhoneWatch(preferWatchTab());
+    visionBatcher.current.setFlush((parts) => {
+      sessionRef.current?.sendVisionFrames(parts);
+    });
+    const channel = openWatchChannel((message) => {
+      if (message.type === "hello") {
+        channel?.postMessage({ type: "ready" });
+        return;
+      }
+      if (message.type === "start") {
+        watchTabActiveRef.current = true;
+        videoFrames.current.clear();
+        videoMeta.current = { title: message.title, source: message.source };
+        watchPlayingRef.current = true;
+        setWatchRemote({ title: message.title, hasAudio: message.hasAudio });
+        setVideoTitle(message.title);
+        sessionRef.current?.notifyVideo(true, {
+          title: message.title,
+          source: message.source,
+          remoteTab: true,
+        });
+        return;
+      }
+      if (message.type === "frame") {
+        if (!watchTabActiveRef.current) {
+          watchTabActiveRef.current = true;
+          videoMeta.current = { title: message.title || "Video", source: "url" };
+          setWatchRemote({ title: message.title || "Video", hasAudio: true });
+          sessionRef.current?.notifyVideo(true, {
+            title: message.title,
+            source: "url",
+            remoteTab: true,
+          });
+        }
+        videoFrames.current.push({ dataUrl: message.dataUrl, timeSec: message.timeSec });
+        watchPlayingRef.current = message.playing;
+        watchTimeRef.current = message.timeSec;
+        watchDurationRef.current = message.duration;
+        visionBatcher.current.push({
+          source: "watch",
+          dataUrl: message.dataUrl,
+          timeSec: message.timeSec,
+        });
+        return;
+      }
+      if (message.type === "audio-state") {
+        setWatchRemote((current) =>
+          current ? { ...current, hasAudio: message.hasAudio } : current,
+        );
+        return;
+      }
+      if (message.type === "stop") {
+        const wasRemote = watchTabActiveRef.current;
+        watchTabActiveRef.current = false;
+        visionBatcher.current.clear("watch");
+        setWatchRemote(null);
+        if (wasRemote && !videoSrcRef.current) {
+          videoFrames.current.clear();
+          videoMeta.current = { title: "", source: null };
+          setVideoTitle("");
+          sessionRef.current?.notifyVideo(false);
+        }
+      }
+    });
+    channel?.postMessage({ type: "ready" });
+    const syncHidden = () => setTabHidden(document.visibilityState === "hidden");
+    document.addEventListener("visibilitychange", syncHidden);
+    window.addEventListener("pageshow", syncHidden);
+    syncHidden();
     return () => {
+      document.removeEventListener("visibilitychange", syncHidden);
+      window.removeEventListener("pageshow", syncHidden);
       cameraSlot.current.stopLoop?.();
       screenSlot.current.stopLoop?.();
       stopMediaStream(cameraSlot.current.stream);
@@ -266,6 +363,8 @@ export function VoiceHome() {
       screenSlot.current = emptyVisionSlot();
       stopVideoLoop.current?.();
       if (videoObjectUrl.current) URL.revokeObjectURL(videoObjectUrl.current);
+      visionBatcher.current.dispose();
+      channel?.close();
       sessionRef.current?.stop();
     };
   }, []);
@@ -276,7 +375,14 @@ export function VoiceHome() {
     if (!video) return;
     videoFrames.current.clear();
     stopVideoLoop.current?.();
-    stopVideoLoop.current = startVideoFrameLoop(video, videoFrames.current);
+    stopVideoLoop.current = startVideoFrameLoop(video, videoFrames.current, (shot) => {
+      if (watchTabActiveRef.current) return;
+      visionBatcher.current.push({
+        source: "watch",
+        dataUrl: shot.dataUrl,
+        timeSec: shot.timeSec,
+      });
+    });
     return () => {
       stopVideoLoop.current?.();
       stopVideoLoop.current = null;
@@ -292,6 +398,10 @@ export function VoiceHome() {
     void video.play().catch(() => {});
     cameraSlot.current.stopLoop?.();
     cameraSlot.current.stopLoop = startVisionLoop(video, (dataUrl) => {
+      if (watchTabActiveRef.current || videoMeta.current.source) {
+        visionBatcher.current.push({ source: "camera", dataUrl });
+        return;
+      }
       sessionRef.current?.sendVisionFrame("camera", dataUrl);
     });
     return () => {
@@ -310,6 +420,10 @@ export function VoiceHome() {
     void video.play().catch(() => {});
     screenSlot.current.stopLoop?.();
     screenSlot.current.stopLoop = startVisionLoop(video, (dataUrl) => {
+      if (watchTabActiveRef.current || videoMeta.current.source) {
+        visionBatcher.current.push({ source: "screen", dataUrl });
+        return;
+      }
       sessionRef.current?.sendVisionFrame("screen", dataUrl);
     });
     return () => {
@@ -327,6 +441,7 @@ export function VoiceHome() {
       cameraSlot.current = emptyVisionSlot();
       setCameraOn(false);
       if (wasOn && notify) sessionRef.current?.notifyVision("camera", false);
+      visionBatcher.current.clear("camera");
     }
     if (!source || source === "screen") {
       const wasOn = Boolean(screenSlot.current.stream);
@@ -335,6 +450,7 @@ export function VoiceHome() {
       screenSlot.current = emptyVisionSlot();
       setScreenOn(false);
       if (wasOn && notify) sessionRef.current?.notifyVision("screen", false);
+      visionBatcher.current.clear("screen");
     }
   }
 
@@ -385,32 +501,88 @@ export function VoiceHome() {
     setAttachError(null);
     const nextChips: AttachmentChip[] = [];
     const errors: string[] = [];
-    for (const file of Array.from(fileList)) {
-      if (isVideoFile(file)) {
-        loadVideoFile(file);
-        continue;
+    const files = Array.from(fileList);
+    if (files.some((file) => isAttachmentVideoFile(file))) {
+      setAttachBusy("Reading video…");
+    }
+    try {
+      for (const file of files) {
+        const chipId = crypto.randomUUID();
+        let firstLookSent = false;
+        const result = await processAttachment(file, (update) => {
+          if (update.attachment.kind !== "video") return;
+          const chip: AttachmentChip = {
+            id: chipId,
+            name: update.attachment.name,
+            kind: "video",
+            previewUrl: update.attachment.frames[0]?.dataUrl,
+            sent: Boolean(sessionRef.current),
+            payload: update.attachment,
+          };
+          setChips((current) => {
+            const without = current.filter((item) => item.id !== chipId);
+            return [...without, chip];
+          });
+          if (sessionRef.current && !firstLookSent) {
+            firstLookSent = true;
+            sendReadyAttachments([update.attachment], true);
+          }
+        });
+        if (!result.ok) {
+          errors.push(result.message);
+          continue;
+        }
+        const chip: AttachmentChip = {
+          id: chipId,
+          name: result.attachment.name,
+          kind:
+            result.attachment.kind === "image"
+              ? "image"
+              : result.attachment.kind === "video"
+                ? "video"
+                : "file",
+          previewUrl:
+            result.attachment.kind === "image"
+              ? result.attachment.dataUrl
+              : result.attachment.kind === "video"
+                ? result.attachment.frames[0]?.dataUrl
+                : undefined,
+          sent: firstLookSent,
+          payload: result.attachment,
+        };
+        if (firstLookSent && result.attachment.kind === "video") {
+          const rest = result.attachment.frames.slice(ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES);
+          if (rest.length && sessionRef.current) {
+            sendReadyAttachments(
+              [
+                {
+                  ...result.attachment,
+                  frames: rest,
+                  analysis: "refine",
+                },
+              ],
+              true,
+            );
+          }
+          chip.sent = true;
+        }
+        nextChips.push(chip);
       }
-      const result = await processAttachment(file);
-      if (!result.ok) {
-        errors.push(result.message);
-        continue;
-      }
-      nextChips.push({
-        id: crypto.randomUUID(),
-        name: result.attachment.name,
-        kind: result.attachment.kind === "image" ? "image" : "file",
-        previewUrl: result.attachment.kind === "image" ? result.attachment.dataUrl : undefined,
-        sent: Boolean(sessionRef.current),
-        payload: result.attachment,
-      });
+    } finally {
+      setAttachBusy(null);
     }
     if (nextChips.length) {
-      setChips((current) => [...current, ...nextChips]);
-      if (sessionRef.current) {
+      setChips((current) => {
+        const ids = new Set(nextChips.map((chip) => chip.id));
+        return [...current.filter((chip) => !ids.has(chip.id)), ...nextChips];
+      });
+      const unsent = nextChips.filter((chip) => !chip.sent);
+      if (sessionRef.current && unsent.length) {
         sendReadyAttachments(
-          nextChips.map((chip) => chip.payload),
+          unsent.map((chip) => chip.payload),
           true,
         );
+        for (const chip of unsent) chip.sent = true;
       }
     }
     if (errors.length) setAttachError(errors[0] ?? null);
@@ -422,11 +594,23 @@ export function VoiceHome() {
   }
 
   function bindVideoProvider(session: VoiceSession) {
-    session.setVideoContextProvider(async () =>
-      snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current),
-    );
+    session.setVideoContextProvider(async () => {
+      if (watchTabActiveRef.current) {
+        return snapshotFromFrames(videoFrames.current, {
+          title: videoMeta.current.title,
+          source: videoMeta.current.source,
+          playing: watchPlayingRef.current,
+          currentTime: watchTimeRef.current,
+          duration: watchDurationRef.current,
+        });
+      }
+      return snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current);
+    });
     if (videoMeta.current.source) {
-      session.notifyVideo(true, videoMeta.current);
+      session.notifyVideo(true, {
+        ...videoMeta.current,
+        remoteTab: watchTabActiveRef.current,
+      });
     }
   }
 
@@ -440,10 +624,11 @@ export function VoiceHome() {
     }
     const hadVideo = Boolean(videoMeta.current.source);
     videoMeta.current = { title: "", source: null };
+    videoSrcRef.current = null;
     setVideoSrc(null);
     setVideoTitle("");
     setVideoHint(null);
-    if (hadVideo && notify) sessionRef.current?.notifyVideo(false);
+    if (hadVideo && notify && !watchTabActiveRef.current) sessionRef.current?.notifyVideo(false);
   }
 
   function loadVideoSrc(src: string, title: string, source: VideoSourceKind) {
@@ -453,6 +638,7 @@ export function VoiceHome() {
     }
     videoFrames.current.clear();
     videoMeta.current = { title, source };
+    videoSrcRef.current = src;
     setVideoSrc(src);
     setVideoTitle(title);
     setVideoHint(null);
@@ -461,9 +647,17 @@ export function VoiceHome() {
 
   function loadVideoUrl(raw: string) {
     const trimmed = raw.trim();
+    if (isPageLikeVideoUrl(trimmed)) {
+      setVideoHint("YouTube will not play here. Open the watch tab and upload a file, or paste a direct video URL.");
+      return;
+    }
     const src = playableVideoSrc(trimmed);
     if (!src) {
-      setVideoHint("Paste a direct mp4 or webm URL.");
+      setVideoHint("Paste a direct video URL.");
+      return;
+    }
+    if (!watchPlaysInHomeTab({ name: trimmed, type: "" })) {
+      setVideoHint("This format plays in the watch tab. Open watch tab to play it.");
       return;
     }
     loadVideoSrc(src, titleFromVideoUrl(trimmed), "url");
@@ -471,7 +665,16 @@ export function VoiceHome() {
 
   function loadVideoFile(file: File) {
     if (!isVideoFile(file)) {
-      setVideoHint("Use an mp4 or webm file.");
+      setVideoHint("Use a video file (mp4, webm, mov, mkv, avi, flv, wmv, mpeg, and similar).");
+      return false;
+    }
+    if (!watchPlaysInHomeTab(file)) {
+      setVideoHint("This format plays in the watch tab. Open watch tab and upload the file there.");
+      return false;
+    }
+    const tooBig = watchSizeError(file.size);
+    if (tooBig) {
+      setVideoHint(tooBig);
       return false;
     }
     const url = URL.createObjectURL(file);
@@ -496,13 +699,19 @@ export function VoiceHome() {
     sessionRef.current = null;
     setPhase("idle");
     setSessionId(null);
+    setToyControl(false);
+    setMicResume(false);
   }
 
   async function startSession() {
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: commitRows,
+      onCaption: commitCaption,
       onSessionId: setSessionId,
+      onToyControl: setToyControl,
+      onMicNeedsGesture: () => setMicResume(true),
+      onMicRecovered: () => setMicResume(false),
       onError: (message) => {
         setError(message);
         releaseVision(undefined, false);
@@ -575,14 +784,18 @@ export function VoiceHome() {
   const hasUnsent = chips.some((chip) => !chip.sent);
   const hasText = draft.trim().length > 0 || hasUnsent;
   const latestText =
-    caption || [...rows].reverse().find((row) => row.text.trim())?.text || "";
+    caption ||
+    (phase === "speaking"
+      ? ""
+      : [...rows].reverse().find((row) => row.text.trim())?.text) ||
+    "";
   const placeholder = live ? HINTS[phase] : HINTS.idle;
   const status = error
     ? error
     : live
-      ? sessionId
-        ? `${HINTS[phase]} · session ${sessionId}`
-        : HINTS[phase]
+      ? `${tabHidden ? "Still live in the background. " : ""}${
+          sessionId ? `${HINTS[phase]} · session ${sessionId}` : HINTS[phase]
+        }`
       : HINTS.idle;
   const buttonLabel = hasText
     ? live
@@ -617,7 +830,7 @@ export function VoiceHome() {
       <header className="relative z-10 flex items-center justify-between px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
       </header>
-      <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${videoSrc ? "justify-end pb-2" : "justify-center"}`}>
+      <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${videoSrc || watchRemote ? "justify-end pb-2" : "justify-center"}`}>
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
@@ -631,6 +844,20 @@ export function VoiceHome() {
       </main>
       <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-2">
+          {watchRemote ? (
+            <div className="rounded-2xl border border-zinc-400 bg-background px-3 py-2 shadow-md dark:border-zinc-500">
+              <p className="truncate text-xs font-medium text-foreground">
+                Watching from other tab
+                {watchRemote.title ? ` · ${watchRemote.title}` : ""}
+              </p>
+              <p className="text-[11px] text-zinc-500">
+                Keep both tabs. Lexi sees stills from that player
+                {watchRemote.hasAudio
+                  ? "; soundtrack stays in the watch tab, not your mic."
+                  : "; soundtrack may be absent."}
+              </p>
+            </div>
+          ) : null}
           {videoSrc ? (
             <div className="overflow-hidden rounded-2xl border border-zinc-400 bg-background shadow-md dark:border-zinc-500">
               <video
@@ -645,11 +872,20 @@ export function VoiceHome() {
                   const video = watchVideoRef.current;
                   if (!video) return;
                   const shot = captureVideoShot(video);
-                  if (shot) videoFrames.current.push(shot);
+                  if (shot) {
+                    videoFrames.current.push(shot);
+                    if (!watchTabActiveRef.current) {
+                      visionBatcher.current.push({
+                        source: "watch",
+                        dataUrl: shot.dataUrl,
+                        timeSec: shot.timeSec,
+                      });
+                    }
+                  }
                 }}
                 onError={() => {
                   setVideoHint(
-                    "Could not play that video. Use a direct mp4 or webm URL, or upload a file.",
+                    "Could not play that video here. Open the watch tab for avi/flv/wmv/mpeg, or use a direct mp4/webm URL.",
                   );
                 }}
               />
@@ -673,49 +909,63 @@ export function VoiceHome() {
               </div>
             </div>
           ) : (
-            <form
-              className="flex items-center gap-2 rounded-full border border-zinc-400 bg-background px-2 py-1.5 dark:border-zinc-500"
-              onSubmit={(event) => {
-                event.preventDefault();
-                loadVideoUrl(videoDraft);
-              }}
-            >
-              <input
-                ref={videoFileInputRef}
-                id="lexi-video-file"
-                type="file"
-                accept={VIDEO_ACCEPT}
-                className="sr-only"
-                onChange={(event) => onVideoFilePicked(event.target.files)}
-              />
-              <button
-                type="button"
-                aria-label="Upload mp4 or webm"
-                title="Upload a video"
-                onClick={() => videoFileInputRef.current?.click()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            <>
+              <a
+                href={watchTabHref(videoDraft)}
+                target="lexi-watch"
+                rel="noreferrer"
+                className={`flex w-full items-center justify-center rounded-full border border-zinc-400 bg-background text-sm font-medium text-foreground shadow-md dark:border-zinc-500 ${phoneWatch ? "h-12" : "h-10"}`}
               >
-                <FilmIcon />
-              </button>
-              <label className="sr-only" htmlFor="lexi-video-url">
-                Video URL
-              </label>
-              <input
-                id="lexi-video-url"
-                type="url"
-                value={videoDraft}
-                onChange={(event) => setVideoDraft(event.target.value)}
-                placeholder="Watch together — mp4/webm URL"
-                autoComplete="off"
-                className="min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground outline-none placeholder:text-zinc-500"
-              />
-              <button
-                type="submit"
-                className="flex h-8 shrink-0 items-center rounded-full px-3 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                Open watch tab
+              </a>
+              <p className="px-1 text-[11px] text-zinc-500">
+                Phone: keep this tab talking. Play the video in the other tab — tap play there if it
+                does not start. She sees stills; soundtrack stays in the watch tab.
+              </p>
+              <form
+                className="flex items-center gap-2 rounded-full border border-zinc-400 bg-background px-2 py-1.5 dark:border-zinc-500"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  loadVideoUrl(videoDraft);
+                }}
               >
-                Load
-              </button>
-            </form>
+                <input
+                  ref={videoFileInputRef}
+                  id="lexi-video-file"
+                  type="file"
+                  accept={VIDEO_ACCEPT}
+                  className="sr-only"
+                  onChange={(event) => onVideoFilePicked(event.target.files)}
+                />
+                <button
+                  type="button"
+                  aria-label="Upload a video"
+                  title="Upload a video"
+                  onClick={() => videoFileInputRef.current?.click()}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                  <FilmIcon />
+                </button>
+                <label className="sr-only" htmlFor="lexi-video-url">
+                  Video URL
+                </label>
+                <input
+                  id="lexi-video-url"
+                  type="url"
+                  value={videoDraft}
+                  onChange={(event) => setVideoDraft(event.target.value)}
+                  placeholder="Watch together — video URL"
+                  autoComplete="off"
+                  className="min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground outline-none placeholder:text-zinc-500"
+                />
+                <button
+                  type="submit"
+                  className="flex h-8 shrink-0 items-center rounded-full px-3 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Load
+                </button>
+              </form>
+            </>
           )}
           {videoHint ? (
             <p className="px-1 text-xs text-zinc-500">{videoHint}</p>
@@ -789,7 +1039,7 @@ export function VoiceHome() {
                     />
                   ) : (
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                      file
+                      {chip.kind === "video" ? "vid" : "file"}
                     </span>
                   )}
                   <span className="max-w-[9rem] truncate text-xs text-foreground">
@@ -807,8 +1057,45 @@ export function VoiceHome() {
               ))}
             </ul>
           ) : null}
+          {attachBusy ? (
+            <p className="px-1 text-xs text-zinc-500">{attachBusy}</p>
+          ) : null}
           {attachError ? (
             <p className="px-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>
+          ) : null}
+          {live ? (
+            <div className="flex items-center justify-between gap-2 px-1">
+              {micResume ? (
+                <button
+                  type="button"
+                  onClick={() => void sessionRef.current?.reclaim()}
+                  className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Tap to resume mic
+                </button>
+              ) : (
+                <p className="text-[11px] text-zinc-500">
+                  {tabHidden
+                    ? "Still live in the background."
+                    : "Stays live if you switch tabs or open the watch tab."}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const session = sessionRef.current;
+                  if (!session) return;
+                  if (toyControl) {
+                    session.setUserToyControl(false);
+                    return;
+                  }
+                  session.sendText("Give Lexi toy control");
+                }}
+                className="shrink-0 rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                {toyControl ? "Revoke" : "Give Lexi toy control"}
+              </button>
+            </div>
           ) : null}
         <form
           onSubmit={(event) => void onComposerSubmit(event)}
@@ -825,8 +1112,8 @@ export function VoiceHome() {
           />
           <button
             type="button"
-            aria-label="Add photo or file"
-            title="Add photo"
+            aria-label="Add photo, video, or file"
+            title="Add photo or video"
             onClick={() => fileInputRef.current?.click()}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
           >

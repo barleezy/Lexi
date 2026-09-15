@@ -121,30 +121,21 @@ export async function POST(request: Request) {
   let priorChat = "";
   let priorTurns: Awaited<ReturnType<typeof listRecentTurns>> = [];
   let memorySessionId: string | null = null;
-  try {
-    const recalled = await recallForUser(userId);
-    decayState = formatDecayState(recalled);
-    memoryInstructions = formatMemoryInstructions(recalled);
-  } catch {
-    decayState = "no active decay tags";
-    memoryInstructions = "";
-  }
-  try {
-    priorTurns = await listRecentTurns(userId);
-    priorChat = formatPriorChat(priorTurns);
-  } catch {
-    priorTurns = [];
-    priorChat = "";
-  }
-  try {
-    if (previousSessionId && previousSessionId !== sessionId) {
-      await endSession(userId, previousSessionId);
-    }
-    const session = await createOrResumeSession(userId, sessionId);
-    memorySessionId = session?.id ?? parseSessionId(sessionId);
-  } catch {
-    memorySessionId = parseSessionId(sessionId);
-  }
+  const [recalled, turns, session] = await Promise.all([
+    recallForUser(userId).catch(() => []),
+    listRecentTurns(userId).catch(() => []),
+    (async () => {
+      if (previousSessionId && previousSessionId !== sessionId) {
+        await endSession(userId, previousSessionId);
+      }
+      return createOrResumeSession(userId, sessionId);
+    })().catch(() => null),
+  ]);
+  decayState = formatDecayState(recalled);
+  memoryInstructions = formatMemoryInstructions(recalled);
+  priorTurns = turns;
+  priorChat = formatPriorChat(priorTurns);
+  memorySessionId = session?.id ?? parseSessionId(sessionId);
 
   const sessionLine = formatSessionIdLine(memorySessionId);
   if (sessionLine && !memoryInstructions.includes(sessionLine)) {

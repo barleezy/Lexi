@@ -4,6 +4,9 @@ import {
   buildVideoContextRequest,
   readResponsesError,
   readResponsesText,
+  readVideoContextCache,
+  videoContextCacheKey,
+  writeVideoContextCache,
 } from "../lib/voice/video-context.ts";
 import { isBlockedVideoHost, parseVideoSourceUrl } from "../lib/voice/video-proxy.ts";
 
@@ -44,5 +47,16 @@ if (parseVideoSourceUrl("http://127.0.0.1/a.mp4").ok !== false) throw new Error(
 if (parseVideoSourceUrl("https://192.168.1.4/a.mp4").ok !== false) throw new Error("lan blocked");
 if (parseVideoSourceUrl("file:///tmp/a.mp4").ok !== false) throw new Error("file blocked");
 if (!isBlockedVideoHost("169.254.169.254")) throw new Error("metadata blocked");
+
+const cacheKey = videoContextCacheKey({
+  title: "clip.mp4",
+  question: "What's happening?",
+  currentTime: 12.4,
+  frames: [{ dataUrl: "data:image/jpeg;base64,abc", timeSec: 12.4 }],
+});
+writeVideoContextCache(cacheKey, "A red car turns left.");
+const cached = readVideoContextCache(cacheKey);
+if (cached?.description !== "A red car turns left.") throw new Error("video context cache miss");
+if (readVideoContextCache(cacheKey + "|other")) throw new Error("cache must be key-scoped");
 
 console.log("video context checks ok");

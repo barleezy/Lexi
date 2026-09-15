@@ -1,5 +1,46 @@
 export const VIDEO_CONTEXT_MODEL = "grok-4.6";
 export const VIDEO_CONTEXT_ENDPOINT = "https://api.x.ai/v1/responses";
+export const VIDEO_CONTEXT_CACHE_MS = 12_000;
+
+type CachedVideoContext = {
+  key: string;
+  at: number;
+  description: string;
+  model: string;
+};
+
+let videoContextCache: CachedVideoContext | null = null;
+
+export function videoContextCacheKey(input: {
+  title?: string;
+  question?: string;
+  currentTime?: number;
+  frames: Array<{ timeSec: number; dataUrl?: string }>;
+}) {
+  const time = Number.isFinite(input.currentTime) ? Math.round((input.currentTime as number) / 2) * 2 : 0;
+  const frames = input.frames
+    .slice(0, 4)
+    .map((frame) => {
+      const stamp = Number.isFinite(frame.timeSec) ? frame.timeSec.toFixed(1) : "0.0";
+      const mark = frame.dataUrl ? `${frame.dataUrl.length}:${frame.dataUrl.slice(-24)}` : "";
+      return `${stamp}:${mark}`;
+    })
+    .join(",");
+  return `${input.title?.trim() ?? ""}|${time}|${input.question?.trim() ?? ""}|${frames}`;
+}
+
+export function readVideoContextCache(key: string) {
+  if (!videoContextCache || videoContextCache.key !== key) return null;
+  if (Date.now() - videoContextCache.at > VIDEO_CONTEXT_CACHE_MS) return null;
+  return {
+    description: videoContextCache.description,
+    model: videoContextCache.model,
+  };
+}
+
+export function writeVideoContextCache(key: string, description: string, model = VIDEO_CONTEXT_MODEL) {
+  videoContextCache = { key, at: Date.now(), description, model };
+}
 
 export type VideoContextFrame = {
   dataUrl: string;
@@ -59,7 +100,7 @@ export function readResponsesError(data: unknown): string {
 
 export function buildVideoContextInput(frames: VideoContextFrame[], question: string) {
   const content: Array<Record<string, unknown>> = [];
-  for (const frame of frames.slice(0, 3)) {
+  for (const frame of frames.slice(0, 4)) {
     content.push({
       type: "input_image",
       image_url: frame.dataUrl,

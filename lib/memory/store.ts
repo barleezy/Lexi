@@ -516,17 +516,19 @@ export async function recordExchange(input: {
     assistantText: input.assistantText,
     sessionId: input.sessionId,
   });
-  const rows: FactRow[] = [];
-  for (const fact of input.facts) {
-    const row = await upsertFact({
-      userId: input.userId,
-      memoryKey: fact.memoryKey,
-      value: fact.value,
-      affect: input.affect,
-      sessionId: input.sessionId,
-    });
-    if (row) rows.push(row);
-  }
+  const rows = (
+    await Promise.all(
+      input.facts.map((fact) =>
+        upsertFact({
+          userId: input.userId,
+          memoryKey: fact.memoryKey,
+          value: fact.value,
+          affect: input.affect,
+          sessionId: input.sessionId,
+        }),
+      ),
+    )
+  ).filter((row): row is FactRow => Boolean(row));
   return { turn, facts: rows };
 }
 
@@ -557,6 +559,7 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   )) as FactRow[];
   const lines: DecayLine[] = [];
   const seen = new Set<string>();
+  const touched: string[] = [];
   for (const row of rows) {
     if (row.memory_key === "transexual") continue;
     if (!FACT_KEY_SET.has(row.memory_key) || !row.value.trim()) continue;
@@ -567,10 +570,7 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
     const rate = rateForBand(band);
     const days = daysElapsed(at, clock);
     const salience = decaySalience(row.affect, rate, days);
-    await db.query(`UPDATE facts SET last_decay = $1, updated_at = $1 WHERE id = $2`, [
-      at.toISOString(),
-      row.id,
-    ]);
+    touched.push(row.id);
     lines.push({
       memoryKey: row.memory_key,
       value: row.value,
@@ -582,6 +582,13 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
       t0: row.t_zero,
       kind: "fact",
     });
+  }
+  if (touched.length) {
+    const stamps = touched.map((_, index) => `$${index + 2}`).join(", ");
+    await db.query(
+      `UPDATE facts SET last_decay = $1, updated_at = $1 WHERE id IN (${stamps})`,
+      [at.toISOString(), ...touched],
+    );
   }
   return lines;
 }

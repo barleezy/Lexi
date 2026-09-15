@@ -1,5 +1,6 @@
 export const FACT_KEYS = [
   "name",
+  "nicknames",
   "pets",
   "location",
   "commitments",
@@ -50,7 +51,11 @@ export type ExtractedFact = {
   value: string;
 };
 
-const GREETING = /^(hi|hey|hello|thanks|thank you|ok|okay|yeah|yep|yo|sup|good morning|good night|bye)[\s!.]*$/i;
+const GREETING =
+  /^(hi|hey|hello|thanks|thank you|ok|okay|yeah|yep|yup|yo|sup|good morning|good night|bye|cool|nice|lol|haha|alright|got it|sure|np|mhm|mm|hmm)[\s!.]*$/i;
+
+const EXTRACT_MEMO_MAX = 32;
+const extractMemo = new Map<string, ExtractedFact[]>();
 
 const NAME_STOP = new Set([
   "a",
@@ -62,6 +67,8 @@ const NAME_STOP = new Set([
   "asexual",
   "at",
   "back",
+  "barleezy",
+  "barleezus",
   "being",
   "bi",
   "bisexual",
@@ -69,6 +76,7 @@ const NAME_STOP = new Set([
   "calling",
   "coming",
   "currently",
+  "daddy",
   "demisexual",
   "done",
   "down",
@@ -92,12 +100,14 @@ const NAME_STOP = new Set([
   "into",
   "just",
   "late",
+  "leezy",
   "lesbian",
   "lexi",
   "like",
   "living",
   "looking",
   "making",
+  "menace",
   "new",
   "not",
   "off",
@@ -216,6 +226,10 @@ export function isGreeting(text: string) {
   return GREETING.test(text.trim());
 }
 
+export function extractLineKey(userText: string) {
+  return userTextFromBlob(userText).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 export function userTextFromBlob(blob: string) {
   const match = blob.match(/User:\s*([\s\S]*?)(?:\n\s*Assistant:|$)/i);
   return (match?.[1] ?? blob).trim();
@@ -232,6 +246,13 @@ export function extractName(text: string) {
   if (explicit) return takeName(explicit[1].replace(/[.,!?;:]+$/g, ""));
   const intro = t.match(/\b(?:i'm|i am)\s+([A-Za-z][A-Za-z'-]{1,20})\b/i);
   if (intro) return takeName(intro[1]);
+  return null;
+}
+
+export function extractNicknames(text: string) {
+  const t = text.trim();
+  const labeled = t.match(/\bmy nicknames?(?:'re| are| is)\s+([^.!?\n]{2,80})/i);
+  if (labeled) return tidyPhrase(labeled[1], 2, 80);
   return null;
 }
 
@@ -558,6 +579,7 @@ export function extractFacts(userText: string, _assistantText = ""): ExtractedFa
 
   const facts: ExtractedFact[] = [];
   pushFact(facts, "name", extractName(user));
+  pushFact(facts, "nicknames", extractNicknames(user));
   pushFact(facts, "pets", extractPets(user));
   pushFact(facts, "location", extractLocation(user));
   pushFact(facts, "commitments", extractCommitments(user));
@@ -581,6 +603,21 @@ export function extractFacts(userText: string, _assistantText = ""): ExtractedFa
   pushFact(facts, "movie", extractMovie(user));
   pushFact(facts, "tv", extractTv(user));
   pushFact(facts, "book", extractBook(user));
+  return facts;
+}
+
+/** Same extractors and keys. Reuses the last result for a repeated user line. */
+export function extractFactsMemo(userText: string, assistantText = ""): ExtractedFact[] {
+  const key = extractLineKey(userText);
+  if (!key) return [];
+  const hit = extractMemo.get(key);
+  if (hit) return hit.map((fact) => ({ ...fact }));
+  const facts = extractFacts(userText, assistantText);
+  extractMemo.set(key, facts);
+  if (extractMemo.size > EXTRACT_MEMO_MAX) {
+    const oldest = extractMemo.keys().next().value;
+    if (oldest) extractMemo.delete(oldest);
+  }
   return facts;
 }
 

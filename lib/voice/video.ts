@@ -1,8 +1,17 @@
 import { captureJpegDataUrl } from "@/lib/voice/vision";
 
-export const VIDEO_ACCEPT = "video/mp4,video/webm,.mp4,.webm";
-export const VIDEO_FRAME_INTERVAL_MS = 1000;
-export const VIDEO_FRAME_BUFFER = 3;
+export {
+  VIDEO_ACCEPT,
+  WATCH_VIDEO_MAX_BYTES,
+  isVideoFile,
+  watchPlaybackKind,
+  watchPlaysInHomeTab,
+  watchShouldRemuxOnNativeError,
+} from "@/lib/voice/watch-formats";
+export const VIDEO_FRAME_INTERVAL_MS = 600;
+export const VIDEO_FRAME_BUFFER = 4;
+export const WATCH_CAPTURE_INTERVAL_MS = 250;
+export const WATCH_SEND_GAP_MS = 500;
 
 export type VideoSourceKind = "url" | "file";
 
@@ -23,12 +32,6 @@ export type VideoContextSnapshot = {
   captureError?: string;
 };
 
-const VIDEO_EXT = /\.(mp4|webm)$/i;
-
-export function isVideoFile(file: File) {
-  return file.type === "video/mp4" || file.type === "video/webm" || VIDEO_EXT.test(file.name);
-}
-
 export function formatTimecode(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const whole = Math.floor(seconds);
@@ -46,6 +49,21 @@ export function titleFromVideoUrl(url: string) {
     return last || parsed.hostname || "Video";
   } catch {
     return "Video";
+  }
+}
+
+export function isPageLikeVideoUrl(raw: string) {
+  try {
+    const host = new URL(raw.trim()).hostname.replace(/^www\./, "").toLowerCase();
+    return (
+      host === "youtube.com" ||
+      host === "youtu.be" ||
+      host === "m.youtube.com" ||
+      host.endsWith(".youtube.com") ||
+      host === "vimeo.com"
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -101,12 +119,19 @@ export function captureVideoShot(video: HTMLVideoElement): VideoFrameShot | null
   }
 }
 
-export function snapshotFromVideo(
-  video: HTMLVideoElement | null,
+export type VideoSnapshotMeta = {
+  title: string;
+  source: VideoSourceKind | null;
+  playing?: boolean;
+  currentTime?: number;
+  duration?: number;
+};
+
+export function snapshotFromFrames(
   buffer: VideoFrameBuffer,
-  meta: { title: string; source: VideoSourceKind | null },
+  meta: VideoSnapshotMeta,
 ): VideoContextSnapshot {
-  if (!video || !meta.source) {
+  if (!meta.source) {
     return {
       loaded: false,
       playing: false,
@@ -118,6 +143,30 @@ export function snapshotFromVideo(
       frames: [],
     };
   }
+  const frames = buffer.list();
+  const last = frames[frames.length - 1];
+  return {
+    loaded: true,
+    playing: Boolean(meta.playing),
+    paused: !meta.playing,
+    currentTime: meta.currentTime ?? last?.timeSec ?? 0,
+    duration: meta.duration ?? 0,
+    title: meta.title,
+    source: meta.source,
+    frames,
+    captureError: frames.length ? undefined : "Could not capture a frame from this video.",
+  };
+}
+
+export function snapshotFromVideo(
+  video: HTMLVideoElement | null,
+  buffer: VideoFrameBuffer,
+  meta: VideoSnapshotMeta,
+): VideoContextSnapshot {
+  if (!meta.source) {
+    return snapshotFromFrames(buffer, meta);
+  }
+  if (!video) return snapshotFromFrames(buffer, meta);
 
   const live = captureVideoShot(video);
   if (live) buffer.push(live);
@@ -143,6 +192,7 @@ export function snapshotFromVideo(
 export function startVideoFrameLoop(
   video: HTMLVideoElement,
   buffer: VideoFrameBuffer,
+  onShot?: (shot: VideoFrameShot) => void,
 ) {
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -151,7 +201,10 @@ export function startVideoFrameLoop(
       return;
     }
     const shot = captureVideoShot(video);
-    if (shot) buffer.push(shot);
+    if (shot) {
+      buffer.push(shot);
+      onShot?.(shot);
+    }
   };
 
   timer = setInterval(tick, VIDEO_FRAME_INTERVAL_MS);

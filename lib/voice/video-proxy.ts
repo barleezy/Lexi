@@ -61,5 +61,9 @@ export function looksLikeVideoContentType(value: string | null | undefined) {
   if (type.startsWith("video/")) return true;
   if (type === "application/octet-stream") return true;
   if (type === "application/mp4") return true;
+  if (type === "application/vnd.ms-asf" || type === "application/x-ms-asf") return true;
+  if (type === "application/x-matroska") return true;
+  if (type === "application/x-flv") return true;
+  if (type === "application/mpeg" || type === "application/mp2t") return true;
   return false;
 }

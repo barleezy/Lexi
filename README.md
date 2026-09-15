@@ -4,15 +4,32 @@ Lexi is a voice-first companion. The homepage composer talks to Grok Speech-to-S
 
 1. Copy `.env.example` to `.env.local`.
 2. Set `XAI_API_KEY` on the **server only**. The Next.js route `POST /api/realtime/session` exchanges it for a short-lived xAI client secret. The browser never sees the long-lived key.
-3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key) plus a client `get_video_context` tool. Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
+3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key) plus a client `get_video_context` tool and consensual toy tools (`request_toy_control`, `toy_command`, Lovense, Joyhub). Tokens stay in `.env.local` and are proxied by `/api/toys` — never in the browser. Lexi only gets full control after you ask; until then commands are blocked (stop still works). Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
+
+## Toys (Lovense + Joyhub)
+
+Server-only. Copy empty placeholders from `.env.example` into `.env.local` — never commit tokens.
+
+- **Lovense** Standard API: `LOVENSE_TOKEN` + `LOVENSE_UID` → `https://api.lovense-api.com/api/lan/v2/command`. Optional `LOVENSE_CONNECT_URL` for the Remote/Connect app LAN path (`https://<host>:30010/command`).
+- **Joyhub**: no public HTTP command API. Partner docs are gated at [business.joyhub.net](https://business.joyhub.net/). Set `JOYHUB_API_URL` + `JOYHUB_TOKEN` (+ optional `JOYHUB_DEVICE_ID`) from those official docs. Lexi will not guess a host or talk Bluetooth.
+- Routes: `GET`/`POST` `/api/toys` (`provider=lovense|joyhub|all`), plus `/api/lovense` and `/api/joyhub`. POST `{ action, strength?, durationSec?, pattern?, intensity?, functions?, loopRunningSec?, loopPauseSec?, stopPrevious?, toy?, position?, controlGranted }`. 400 bad payload, 403 until control is granted (except `stop`), 503 if that provider is not configured.
+- Voice: you must ask Lexi to take control (`take control`, `you can control the toys`, or the tiny **Give Lexi toy control** button). `request_toy_control` cannot self-approve. Then `toy_command` / `lovense_*` / `joyhub_*` POST to `/api/toys` with no token in the browser. Adults only; never under 21.
 
 ## Watch together
 
-Load a **direct** mp4/webm URL or upload a file from the bar above the composer. YouTube and similar pages will not play in the HTML5 player — download or use a direct file URL.
+Load a **direct** mp4/webm URL or upload a file from the bar above the composer. On a phone, tap **Open watch tab** (`/watch`) and play the video there — keep the Lexi tab talking. Same-origin `BroadcastChannel` (`lexi-watch`) sends JPEG stills to Lexi; she gets several recent frames in one send. YouTube and similar pages will not play in the HTML5 player — download or use a direct file URL.
 
 Voice stays live while the video plays. Talking does **not** pause the video; pausing is only from the player controls. Lexi answers “what’s happening?” by calling `get_video_context`, which captures the current frame(s) and analyzes them with the documented xAI image-understanding API (`POST https://api.x.ai/v1/responses`, model `grok-4.6`) using server-only `XAI_API_KEY`.
 
-Video audio and Lexi’s voice mix in the same speakers. **Headphones are recommended** so the mic does not hear the movie or Lexi. Barge-in still cancels only Lexi’s speech, not the video.
+Soundtrack plays in the watch tab for you. Lexi does **not** hear it as your voice (watch audio is never mixed into the mic buffer). **Headphones are recommended** so the mic does not hear the movie or Lexi. Barge-in still cancels only Lexi’s speech, not the video.
+
+## Background voice
+
+This is the same Grok realtime session, not a second conversation. Switching browser tabs, opening the watch tab (`target=lexi-watch`), or briefly leaving the window does **not** hang up. Hang up is the waveform button, leaving the homepage, or closing the tab.
+
+Desktop Chrome is the strongest path: `AudioContext` is resumed on hide/show and after other media starts, the mic track stays up (and is re-acquired if the OS steals it), a near-silent Media Session / destination tone keeps Chromium from treating the tab as idle, Wake Lock reduces screen-sleep kills when the tab is visible, and the WebSocket reconnects with the **same** memory session if throttle drops it.
+
+**iOS Chrome (CriOS) / iOS Safari:** Chrome on iPhone is WebKit, not Chromium. `navigator.audioSession` is set to `play-and-record`, interruption `statechange` keeps the socket, and a slightly stronger (still very quiet) looping hold tries to stop iOS from freezing the page. If you leave Chrome, lock the phone, or let Music/YouTube/phone take audio, **background mic is usually impossible** in WKWebView. When Chrome is foregrounded again or the other app releases audio, Lexi automatically resumes AudioContext, re-gets the mic, and reconnects the same session — you should not have to tap Talk again. If iOS demands a new gesture, a small **Tap to resume mic** appears. Lock-screen mic is typically denied.
 
 ## Memory (Neon)
 

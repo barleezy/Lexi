@@ -1,3 +1,5 @@
+import { CAPTURE_CHUNK_MS, PLAY_LEAD_SEC } from "@/lib/voice/realtime-latency";
+
 export const TARGET_RATE = 48_000;
 
 /** Absolute floor: hush / room hiss is not user speech. */
@@ -50,6 +52,90 @@ export function applyMicTrackHints(track: MediaStreamTrack) {
   }
 }
 
+export async function applyMicConstraints(track: MediaStreamTrack) {
+  applyMicTrackHints(track);
+  try {
+    await track.applyConstraints(MIC_AUDIO_CONSTRAINTS);
+  } catch {
+    try {
+      await track.applyConstraints(MIC_AUDIO_CONSTRAINTS_FALLBACK);
+    } catch {
+      // constraints are best-effort
+    }
+  }
+}
+
+export function micTrackUsable(track?: MediaStreamTrack | null): track is MediaStreamTrack {
+  return Boolean(track && track.readyState === "live" && track.enabled && !track.muted);
+}
+
+export async function resumeAudioContext(ctx: AudioContext | null | undefined) {
+  if (!ctx) return;
+  const state = ctx.state as string;
+  if (state === "closed") return;
+  if (state === "suspended" || state === "interrupted") {
+    try {
+      await ctx.resume();
+    } catch {
+      // Autoplay policy may block until the next user gesture.
+    }
+  }
+}
+
+/** Near-silent hold on the destination only — never the mic graph. */
+export function startDestinationKeepAlive(ctx: AudioContext, ios = false) {
+  const gain = ctx.createGain();
+  gain.gain.value = ios ? 0.004 : 0.00006;
+  gain.connect(ctx.destination);
+
+  if (ios) {
+    const seconds = 1;
+    const rate = ctx.sampleRate;
+    const buffer = ctx.createBuffer(1, Math.max(1, Math.floor(rate * seconds)), rate);
+    const data = buffer.getChannelData(0);
+    const hz = 48;
+    for (let i = 0; i < data.length; i += 1) {
+      data[i] = Math.sin((2 * Math.PI * hz * i) / rate);
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(gain);
+    source.start();
+    return () => {
+      try {
+        source.stop();
+      } catch {
+        // already stopped
+      }
+      try {
+        source.disconnect();
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+    };
+  }
+
+  const osc = ctx.createOscillator();
+  osc.frequency.value = 19;
+  osc.connect(gain);
+  osc.start();
+  return () => {
+    try {
+      osc.stop();
+    } catch {
+      // already stopped
+    }
+    try {
+      osc.disconnect();
+      gain.disconnect();
+    } catch {
+      // already disconnected
+    }
+  };
+}
+
 export function updateMicNoiseFloor(floor: number, rms: number) {
   // Adapt only on hush / low room energy so speech does not raise the floor.
   if (rms >= 0.045) return floor;
@@ -67,7 +153,7 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this._chunks = [];
-    this._frames = Math.round(sampleRate * 0.1);
+    this._frames = Math.round(sampleRate * ${CAPTURE_CHUNK_MS / 1000});
   }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0];
@@ -166,7 +252,7 @@ export class PcmPlayer {
   constructor(
     private ctx: AudioContext,
     private rate = TARGET_RATE,
-    private lead = 0.15,
+    private lead = PLAY_LEAD_SEC,
   ) {}
 
   get state() {
@@ -174,15 +260,18 @@ export class PcmPlayer {
   }
 
   resetTurn() {
+    this.clearSources();
     this.underruns = 0;
     this.drainMsMax = 0;
     this.maxGapMs = 0;
     this.queuedMs = 0;
     this.started = false;
+    this.next = 0;
     this.lastScheduled = 0;
   }
 
   play(pcm16: Uint8Array) {
+    if (this.ctx.state !== "running") void this.ctx.resume();
     const even = pcm16.byteLength % 2 === 0 ? pcm16 : pcm16.subarray(0, pcm16.byteLength - 1);
     const samples = new Int16Array(even.buffer, even.byteOffset, even.byteLength / 2);
     const floats = new Float32Array(samples.length);
@@ -225,6 +314,15 @@ export class PcmPlayer {
 
   stop() {
     const droppedMs = Math.max(0, (this.next - this.ctx.currentTime) * 1000);
+    this.clearSources();
+    this.started = false;
+    this.next = 0;
+    this.lastScheduled = 0;
+    this.queuedMs = 0;
+    return droppedMs;
+  }
+
+  private clearSources() {
     const sources = this.sources.splice(0);
     for (const source of sources) {
       source.onended = null;
@@ -239,10 +337,5 @@ export class PcmPlayer {
         // already disconnected
       }
     }
-    this.started = false;
-    this.next = 0;
-    this.lastScheduled = 0;
-    this.queuedMs = 0;
-    return droppedMs;
   }
 }

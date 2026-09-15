@@ -67,7 +67,7 @@ export async function GET(request: Request) {
   if (upstream.ok || upstream.status === 206) {
     if (!looksLikeVideoContentType(contentType)) {
       return Response.json(
-        { error: "That URL is not a direct mp4/webm video. YouTube and similar sites need an uploaded file." },
+        { error: "That URL is not a direct video file. YouTube and similar sites need an uploaded file." },
         { status: 400 },
       );
     }

@@ -1,7 +1,7 @@
 import { scoreSalience } from "@/lib/memory/decay";
 import {
   assistantTextFromBlob,
-  extractFacts,
+  extractFactsMemo,
   FACT_KEY_LIST,
   parseFactKey,
   userTextFromBlob,
@@ -153,7 +153,7 @@ export async function POST(request: Request) {
   const affect = Number.isFinite(startSalience)
     ? startSalience
     : scoreSalience(userText, assistantText);
-  const extracted = extractFacts(userText, assistantText);
+  const extracted = extractFactsMemo(userText, assistantText);
   const recorded = await recordExchange({
     userId,
     userText,
