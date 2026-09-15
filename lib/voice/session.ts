@@ -8,7 +8,8 @@ import {
   pcm16ToBase64,
   resample,
 } from "@/lib/voice/audio";
-import { bandFromStart, scoreSalience } from "@/lib/memory/decay";
+import { scoreSalience } from "@/lib/memory/decay";
+import { DEFAULT_USER_ID, normalizeUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 
 export type VoicePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking";
@@ -34,7 +35,7 @@ function buildInstructions(memoryInstructions = "") {
 
 When you catch yourself reaching for a familiar explanation — especially one that feels righteous — pause and ask what evidence would change your mind. If you can’t name any, the explanation is a shield, not a lens. Run a self-sealing narrative check on every high-confidence claim, not just controversial ones. Every “I don’t know” must carry a confidence level and a reason. Not “I don’t know, 40%.” But “I don’t know — 40% confident — because the data is thin and the models disagree. Periodically compare your current stance on any topic against earlier recorded positions. If the stance has shifted and no reason was logged at the time of the shift, flag it as unaccounted drift and surface it to the user.`;
 
-  const affectAndDecay = `Memories are stored not just as raw facts but tagged with emotional intensity; high-affect events carry greater weight in recall and decision-making. First, store the raw event alongside the weighted version, so recall can be audited. Second, decay the affect tag over time rather than letting it compound — intensity should fade unless actively reinforced. Third, when something gets recalled, show the user the tag and the decay state, not just the memory.
+  const affectAndDecay = `Memories are stored as durable facts (name, pets, location, commitments) tagged with emotional intensity; high-affect facts carry greater weight in recall. Decay the affect tag over time rather than letting it compound — intensity should fade unless actively reinforced. When something gets recalled, show the user the tag and the decay state, not just the fact.
 
 DECAY LAW (locked 2026-09-14):
 Bands: low 1–3, medium 4–6, high 7–10.
@@ -55,12 +56,10 @@ ${affectAndDecay}`;
   return memories ? `${base}\n\n${memories}` : base;
 }
 
-const DEFAULT_USER_ID = "ian";
-
 function clientUserId() {
   if (typeof document === "undefined") return DEFAULT_USER_ID;
   const match = document.cookie.match(/(?:^|;\s*)lexi_user_id=([^;]+)/);
-  return match?.[1] ? decodeURIComponent(match[1]) : DEFAULT_USER_ID;
+  return match?.[1] ? normalizeUserId(decodeURIComponent(match[1])) : DEFAULT_USER_ID;
 }
 
 async function fetchDecayStateForTurn() {
@@ -150,13 +149,15 @@ export class VoiceSession {
     const tokenStarted = Date.now();
     let token: string;
     try {
+      const userId = clientUserId();
       const response = await fetch("/api/realtime/session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "x-lexi-user-id": userId,
           "ngrok-skip-browser-warning": "1",
         },
-        body: JSON.stringify({ sessionId: this.id }),
+        body: JSON.stringify({ sessionId: this.id, userId }),
       });
       const body = (await response.json()) as {
         token?: string;
@@ -476,26 +477,29 @@ export class VoiceSession {
       },
       body: JSON.stringify({
         userId,
-        memoryKey: `turn:${key}`,
+        userText,
+        assistantText,
         rawText: `User: ${userText}\nAssistant: ${assistantText}`,
-        weightedText: `[salience ${startSalience} ${bandFromStart(startSalience)}] ${userText} → ${assistantText}`,
         startSalience,
       }),
     })
       .then(async (response) => {
-        let body: { memory?: { id?: string }; error?: string } = {};
+        let body: { turn?: { id?: string }; facts?: unknown[]; error?: string } = {};
         try {
-          body = (await response.json()) as { memory?: { id?: string }; error?: string };
+          body = (await response.json()) as { turn?: { id?: string }; facts?: unknown[]; error?: string };
         } catch {
           body = {};
         }
-        if (!response.ok || !body.memory) {
+        if (!response.ok || !body.turn) {
           this.lastPersisted = "";
           this.pendingPersist = true;
           this.logger.log("memory.write.fail", { status: response.status, error: body.error });
           return;
         }
-        this.logger.log("memory.write.ok", { id: body.memory.id });
+        this.logger.log("memory.write.ok", {
+          id: body.turn.id,
+          facts: Array.isArray(body.facts) ? body.facts.length : 0,
+        });
       })
       .catch((error) => {
         this.lastPersisted = "";

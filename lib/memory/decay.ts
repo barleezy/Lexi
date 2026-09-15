@@ -30,6 +30,13 @@ export function clampAffect(value: number) {
   return Math.min(10, Math.max(1, Math.round(value)));
 }
 
+/** Same key again: raise affect, never replace with a lower score. Cap 10. */
+export function bumpAffect(current: number, incoming: number) {
+  const cur = clampAffect(current);
+  const next = clampAffect(incoming);
+  return clampAffect(Math.max(cur + 1, next));
+}
+
 /**
  * Deterministic 1–10 salience for a completed turn.
  * Bands match the decay law: low 1–3, medium 4–6, high 7–10.

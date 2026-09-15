@@ -1,4 +1,10 @@
-import { isMemoryStoreConfigured, recallForUser, upsertMemory } from "@/lib/memory/store";
+import { scoreSalience } from "@/lib/memory/decay";
+import {
+  assistantTextFromBlob,
+  extractFacts,
+  userTextFromBlob,
+} from "@/lib/memory/extract";
+import { isMemoryStoreConfigured, recallForUser, recordExchange } from "@/lib/memory/store";
 import { readUserId, resolveUserId } from "@/lib/memory/user";
 
 export async function GET(request: Request) {
@@ -10,16 +16,16 @@ export async function GET(request: Request) {
   if (!isMemoryStoreConfigured()) {
     return Response.json({ error: "Memory store is not configured." }, { status: 503 });
   }
-  const memories = await recallForUser(userId);
-  return Response.json({ userId, memories });
+  const facts = await recallForUser(userId);
+  return Response.json({ userId, facts });
 }
 
 export async function POST(request: Request) {
   let body: {
     userId?: unknown;
-    memoryKey?: unknown;
+    userText?: unknown;
+    assistantText?: unknown;
     rawText?: unknown;
-    weightedText?: unknown;
     startSalience?: unknown;
   };
   try {
@@ -32,22 +38,38 @@ export async function POST(request: Request) {
     request,
     typeof body.userId === "string" ? body.userId : null,
   );
-  const memoryKey = typeof body.memoryKey === "string" ? body.memoryKey.trim() : "";
   const rawText = typeof body.rawText === "string" ? body.rawText.trim() : "";
-  const startSalience = Number(body.startSalience);
-  if (!memoryKey || !rawText || !Number.isFinite(startSalience)) {
-    return Response.json({ error: "memoryKey, rawText, and startSalience are required." }, { status: 400 });
+  const userText =
+    typeof body.userText === "string" && body.userText.trim()
+      ? body.userText.trim()
+      : userTextFromBlob(rawText);
+  const assistantText =
+    typeof body.assistantText === "string" && body.assistantText.trim()
+      ? body.assistantText.trim()
+      : assistantTextFromBlob(rawText);
+  if (!userText) {
+    return Response.json({ error: "userText or rawText is required." }, { status: 400 });
   }
 
-  const row = await upsertMemory({
+  const startSalience = Number(body.startSalience);
+  const affect = Number.isFinite(startSalience)
+    ? startSalience
+    : scoreSalience(userText, assistantText);
+  const extracted = extractFacts(userText, assistantText);
+  const recorded = await recordExchange({
     userId,
-    memoryKey,
-    rawText,
-    weightedText: typeof body.weightedText === "string" ? body.weightedText : undefined,
-    startSalience,
+    userText,
+    assistantText,
+    facts: extracted,
+    affect,
   });
-  if (!row) {
+  if (!recorded.turn) {
     return Response.json({ error: "Memory store is not configured." }, { status: 503 });
   }
-  return Response.json({ memory: row });
+  return Response.json({
+    userId,
+    facts: recorded.facts,
+    extracted,
+    turn: recorded.turn,
+  });
 }

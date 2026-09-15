@@ -1,18 +1,15 @@
 import { neon } from "@neondatabase/serverless";
-import { bandFromStart, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
-import { defaultUserId } from "@/lib/memory/user";
+import { bandFromStart, bumpAffect, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
+import { extractNameFromBlob, FACT_KEYS, isIdentityKey, type FactKey } from "@/lib/memory/extract";
+import { defaultUserId, normalizeUserId } from "@/lib/memory/user";
 
-export type MemoryRow = {
+export type FactRow = {
   id: string;
   user_id: string;
   memory_key: string;
-  raw_text: string;
-  weighted_text: string | null;
-  start_salience: number;
-  salience: number;
-  band: string;
-  rate: number;
-  t0: string;
+  value: string;
+  affect: number;
+  t_zero: string;
   last_decay: string | null;
   created_at: string;
   updated_at: string;
@@ -20,17 +17,29 @@ export type MemoryRow = {
 
 export type DecayLine = {
   memoryKey: string;
-  rawText: string;
-  weightedText: string | null;
+  value: string;
   startSalience: number;
   salience: number;
   band: string;
   rate: number;
   days: number;
   t0: string;
+  kind: "fact" | "legacy";
 };
 
+export type MigrateResult =
+  | { ok: false; reason: "missing DATABASE_URL" }
+  | {
+      ok: true;
+      defaultUserId: string;
+      renamedUserIds: number;
+      nameFactsBackfilled: number;
+      legacyRows: number;
+    };
+
 export const MEMORY_INSTRUCTION_CAP = 10;
+
+const FACT_KEY_SET = new Set<string>(FACT_KEYS);
 
 function databaseUrl() {
   return process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || "";
@@ -46,13 +55,20 @@ function sql() {
   return neon(url);
 }
 
-export async function migrateMemories() {
-  if (!isMemoryStoreConfigured()) return { ok: false, reason: "missing DATABASE_URL" as const };
-  await ensureTable();
-  return { ok: true as const };
-}
-
+let lastMigrate: Extract<MigrateResult, { ok: true }> | null = null;
 let ensured: Promise<ReturnType<typeof sql>> | null = null;
+
+export async function migrateMemories(): Promise<MigrateResult> {
+  if (!isMemoryStoreConfigured()) return { ok: false, reason: "missing DATABASE_URL" };
+  await ensureTable();
+  return lastMigrate ?? {
+    ok: true,
+    defaultUserId: defaultUserId(),
+    renamedUserIds: 0,
+    nameFactsBackfilled: 0,
+    legacyRows: 0,
+  };
+}
 
 async function ensureTable() {
   if (!ensured) {
@@ -163,78 +179,220 @@ async function migrateTable() {
   `);
   await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS memories_user_id_memory_key_uidx ON memories (user_id, memory_key)`);
   await db.query(`CREATE INDEX IF NOT EXISTS memories_user_id_idx ON memories (user_id)`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS facts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL,
+      memory_key text NOT NULL,
+      value text NOT NULL,
+      affect double precision NOT NULL,
+      t_zero timestamptz NOT NULL,
+      last_decay timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (user_id, memory_key)
+    )
+  `);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS facts_user_id_memory_key_uidx ON facts (user_id, memory_key)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS facts_user_id_idx ON facts (user_id)`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS turns (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL,
+      user_text text NOT NULL,
+      assistant_text text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS turns_user_id_idx ON turns (user_id)`);
+
+  const renamedUserIds = await renameDefaultUserIds(db);
+  const nameFactsBackfilled = await backfillNameFacts(db);
+  const legacyCount = (await db.query(`SELECT COUNT(*)::int AS n FROM memories`)) as { n: number }[];
+  lastMigrate = {
+    ok: true,
+    defaultUserId: defaultUserId(),
+    renamedUserIds,
+    nameFactsBackfilled,
+    legacyRows: legacyCount[0]?.n ?? 0,
+  };
   return db;
 }
 
-export async function listByUser(userId: string): Promise<MemoryRow[]> {
-  const db = await ensureTable();
-  if (!db) return [];
-  return (await db.query(
-    `SELECT * FROM memories WHERE user_id = $1 ORDER BY t0 ASC`,
-    [userId],
-  )) as MemoryRow[];
+async function renameDefaultUserIds(db: NonNullable<ReturnType<typeof sql>>) {
+  const target = defaultUserId();
+  const memories = (await db.query(
+    `UPDATE memories m
+     SET user_id = $1
+     WHERE lower(m.user_id) = lower($1)
+       AND m.user_id <> $1
+       AND NOT EXISTS (
+         SELECT 1 FROM memories x
+         WHERE x.user_id = $1
+           AND x.memory_key IS NOT DISTINCT FROM m.memory_key
+           AND x.id <> m.id
+       )
+     RETURNING m.id`,
+    [target],
+  )) as { id: string }[];
+  const facts = (await db.query(
+    `UPDATE facts f
+     SET user_id = $1
+     WHERE lower(f.user_id) = lower($1)
+       AND f.user_id <> $1
+       AND NOT EXISTS (
+         SELECT 1 FROM facts x
+         WHERE x.user_id = $1
+           AND x.memory_key IS NOT DISTINCT FROM f.memory_key
+           AND x.id <> f.id
+       )
+     RETURNING f.id`,
+    [target],
+  )) as { id: string }[];
+  const turns = (await db.query(
+    `UPDATE turns SET user_id = $1 WHERE lower(user_id) = lower($1) AND user_id <> $1 RETURNING id`,
+    [target],
+  )) as { id: string }[];
+  return memories.length + facts.length + turns.length;
 }
 
-export async function upsertMemory(input: {
+async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
+  const blobs = (await db.query(
+    `SELECT user_id, raw_text, start_salience, t0
+     FROM memories
+     WHERE raw_text IS NOT NULL AND btrim(raw_text) <> ''
+     ORDER BY t0 ASC`,
+  )) as { user_id: string; raw_text: string; start_salience: number; t0: string }[];
+
+  const found = new Map<string, { value: string; t0: string }>();
+  for (const row of blobs) {
+    const userId = normalizeUserId(row.user_id);
+    const name = extractNameFromBlob(row.raw_text);
+    if (!name) continue;
+    found.set(userId, { value: name, t0: row.t0 });
+  }
+
+  let inserted = 0;
+  for (const [userId, fact] of found) {
+    const rows = (await db.query(
+      `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+       VALUES ($1, 'name', $2, $3, $4)
+       ON CONFLICT (user_id, memory_key) DO NOTHING
+       RETURNING id`,
+      [userId, fact.value, 10, fact.t0],
+    )) as { id: string }[];
+    inserted += rows.length;
+  }
+  return inserted;
+}
+
+export async function insertTurn(input: {
   userId: string;
-  memoryKey: string;
-  rawText: string;
-  weightedText?: string;
-  startSalience: number;
-  t0?: Date;
-}): Promise<MemoryRow | null> {
+  userText: string;
+  assistantText: string;
+}) {
   const db = await ensureTable();
   if (!db) return null;
-  const start = Math.min(10, Math.max(1, input.startSalience));
-  const band = bandFromStart(start);
-  const rate = rateForBand(band);
-  const t0 = input.t0 ?? new Date();
   const rows = (await db.query(
-    `INSERT INTO memories (
-       user_id, memory_key, raw_text, weighted_text, start_salience, salience, band, rate, t0, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, now())
+    `INSERT INTO turns (user_id, user_text, assistant_text)
+     VALUES ($1, $2, $3)
+     RETURNING id, user_id, created_at`,
+    [normalizeUserId(input.userId), input.userText, input.assistantText],
+  )) as { id: string; user_id: string; created_at: string }[];
+  return rows[0] ?? null;
+}
+
+export async function upsertFact(input: {
+  userId: string;
+  memoryKey: FactKey;
+  value: string;
+  affect: number;
+  tZero?: Date;
+}): Promise<FactRow | null> {
+  const db = await ensureTable();
+  if (!db) return null;
+  const userId = normalizeUserId(input.userId);
+  const incoming = Math.min(10, Math.max(1, input.affect));
+  const existing = (await db.query(
+    `SELECT affect FROM facts WHERE user_id = $1 AND memory_key = $2`,
+    [userId, input.memoryKey],
+  )) as { affect: number }[];
+  const affect = isIdentityKey(input.memoryKey)
+    ? 10
+    : existing[0]
+      ? bumpAffect(existing[0].affect, incoming)
+      : incoming;
+  const tZero = existing[0] ? null : (input.tZero ?? new Date());
+  const rows = (await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
      ON CONFLICT (user_id, memory_key) DO UPDATE SET
-       raw_text = excluded.raw_text,
-       weighted_text = excluded.weighted_text,
-       start_salience = excluded.start_salience,
-       salience = excluded.start_salience,
-       band = excluded.band,
-       rate = excluded.rate,
-       t0 = excluded.t0,
+       value = excluded.value,
+       affect = $4,
        updated_at = now()
      RETURNING *`,
-    [input.userId, input.memoryKey, input.rawText, input.weightedText ?? null, start, band, rate, t0.toISOString()],
-  )) as MemoryRow[];
+    [userId, input.memoryKey, input.value, affect, (tZero ?? new Date()).toISOString()],
+  )) as FactRow[];
   return rows[0] ?? null;
+}
+
+export async function recordExchange(input: {
+  userId: string;
+  userText: string;
+  assistantText: string;
+  facts: { memoryKey: FactKey; value: string }[];
+  affect: number;
+}) {
+  const turn = await insertTurn({
+    userId: input.userId,
+    userText: input.userText,
+    assistantText: input.assistantText,
+  });
+  const rows: FactRow[] = [];
+  for (const fact of input.facts) {
+    const row = await upsertFact({
+      userId: input.userId,
+      memoryKey: fact.memoryKey,
+      value: fact.value,
+      affect: input.affect,
+    });
+    if (row) rows.push(row);
+  }
+  return { turn, facts: rows };
 }
 
 export async function recallForUser(userId: string, at = new Date()): Promise<DecayLine[]> {
   const db = await ensureTable();
   if (!db) return [];
-  const rows = await listByUser(userId);
+  const id = normalizeUserId(userId);
+  const rows = (await db.query(
+    `SELECT * FROM facts WHERE user_id = $1 ORDER BY t_zero ASC`,
+    [id],
+  )) as FactRow[];
   const lines: DecayLine[] = [];
   for (const row of rows) {
-    const clock = new Date(row.t0);
-    const band = bandFromStart(row.start_salience);
+    if (!FACT_KEY_SET.has(row.memory_key) || !row.value.trim()) continue;
+    const clock = new Date(row.t_zero);
+    const band = bandFromStart(row.affect);
     const rate = rateForBand(band);
     const days = daysElapsed(at, clock);
-    const salience = decaySalience(row.start_salience, rate, days);
-    await db.query(
-      `UPDATE memories
-       SET salience = $1, band = $2, rate = $3, last_decay = $4, updated_at = $4
-       WHERE id = $5`,
-      [salience, band, rate, at.toISOString(), row.id],
-    );
+    const salience = decaySalience(row.affect, rate, days);
+    await db.query(`UPDATE facts SET last_decay = $1, updated_at = $1 WHERE id = $2`, [
+      at.toISOString(),
+      row.id,
+    ]);
     lines.push({
       memoryKey: row.memory_key,
-      rawText: row.raw_text,
-      weightedText: row.weighted_text,
-      startSalience: row.start_salience,
+      value: row.value,
+      startSalience: row.affect,
       salience,
       band,
       rate,
       days,
-      t0: row.t0,
+      t0: row.t_zero,
+      kind: "fact",
     });
   }
   return lines;
@@ -249,20 +407,22 @@ export function rankMemoriesForInstructions(lines: DecayLine[]) {
   });
 }
 
+export function formatFactLine(line: DecayLine) {
+  const current = Math.round(line.salience);
+  const from = Math.round(line.startSalience);
+  if (line.kind === "legacy") {
+    return `legacy: ${line.value} (affect ${current}/10, decayed from ${from})`;
+  }
+  return `${line.memoryKey}: ${line.value} (affect ${current}/10, decayed from ${from})`;
+}
+
 export function formatMemoryInstructions(lines: DecayLine[]) {
   const selected = rankMemoriesForInstructions(lines)
-    .filter((line) => line.rawText.trim() || line.weightedText?.trim())
+    .filter((line) => line.value.trim() && line.kind === "fact")
     .slice(0, MEMORY_INSTRUCTION_CAP)
-    .map((line, index) => {
-      const text = line.rawText.trim() || line.weightedText?.trim() || "";
-      return `${index + 1}. [${line.memoryKey} start=${round(line.startSalience)} current=${round(line.salience)} band=${line.band}]\n${text}`;
-    });
+    .map(formatFactLine);
   if (selected.length === 0) return "";
-  return `RECALLED MEMORIES
-
-These are stored memories from prior sessions. Never present them as certain. Flag confidence on every recalled fact. When two stored facts conflict, surface the conflict rather than resolving it silently.
-
-${selected.join("\n\n")}`;
+  return `RECALLED FACTS\n\n${selected.join("\n")}`;
 }
 
 export function formatDecayState(lines: DecayLine[]) {
@@ -270,7 +430,7 @@ export function formatDecayState(lines: DecayLine[]) {
   return lines
     .map(
       (line) =>
-        `${line.memoryKey} start=${round(line.startSalience)} current=${round(line.salience)} band=${line.band} rate=${line.rate} days=${round(line.days)} t0=${line.t0}`,
+        `${line.memoryKey}=${line.value} affect=${round(line.salience)}/10 from=${round(line.startSalience)} band=${line.band} days=${round(line.days)}`,
     )
     .join(" | ");
 }

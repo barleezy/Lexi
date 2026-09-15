@@ -5,5 +5,5 @@ export async function POST() {
   if (!result.ok) {
     return Response.json({ error: "Memory store is not configured." }, { status: 503 });
   }
-  return Response.json({ ok: true });
+  return Response.json(result);
 }

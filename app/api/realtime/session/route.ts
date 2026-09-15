@@ -27,9 +27,11 @@ function readToken(data: SecretBody) {
 export async function POST(request: Request) {
   const started = Date.now();
   let sessionId = "";
+  let requestedUserId: string | null = null;
   try {
-    const body = (await request.json()) as { sessionId?: unknown };
+    const body = (await request.json()) as { sessionId?: unknown; userId?: unknown };
     if (typeof body.sessionId === "string") sessionId = body.sessionId;
+    if (typeof body.userId === "string") requestedUserId = body.userId;
   } catch {
     sessionId = "";
   }
@@ -91,7 +93,7 @@ export async function POST(request: Request) {
   let decayState = "no active decay tags";
   let memoryInstructions = "";
   try {
-    const recalled = await recallForUser(resolveUserId(request));
+    const recalled = await recallForUser(resolveUserId(request, requestedUserId));
     decayState = formatDecayState(recalled);
     memoryInstructions = formatMemoryInstructions(recalled);
   } catch {
