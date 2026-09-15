@@ -9,7 +9,8 @@
     "lint": "eslint",
     "voice:logs": "node scripts/voice-logs.mjs",
     "memory:check-decay": "node --experimental-strip-types scripts/check-decay.mjs",
-    "memory:check-extract": "node --experimental-strip-types scripts/check-extract.mjs"
+    "memory:check-extract": "node --experimental-strip-types scripts/check-extract.mjs",
+    "video:check-context": "node --experimental-strip-types scripts/check-video-context.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

@@ -18,6 +18,17 @@ import {
   type ReadyAttachment,
 } from "@/lib/voice/attachments";
 import {
+  captureVideoShot,
+  isVideoFile,
+  playableVideoSrc,
+  snapshotFromVideo,
+  startVideoFrameLoop,
+  titleFromVideoUrl,
+  VIDEO_ACCEPT,
+  VideoFrameBuffer,
+  type VideoSourceKind,
+} from "@/lib/voice/video";
+import {
   canShareScreen,
   startCameraStream,
   startScreenStream,
@@ -98,6 +109,27 @@ function ScreenShareIcon() {
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function FilmIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden>
+      <rect
+        x="3"
+        y="5"
+        width="18"
+        height="14"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M8 5v14M16 5v14M3 9h5M3 15h5M16 9h5M16 15h5"
+        stroke="currentColor"
+        strokeWidth="1.8"
       />
     </svg>
   );
@@ -192,8 +224,21 @@ export function VoiceHome() {
   const cameraSlot = useRef<VisionSlot>(emptyVisionSlot());
   const screenSlot = useRef<VisionSlot>(emptyVisionSlot());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoFileInputRef = useRef<HTMLInputElement>(null);
+  const watchVideoRef = useRef<HTMLVideoElement>(null);
+  const videoObjectUrl = useRef<string | null>(null);
+  const videoFrames = useRef(new VideoFrameBuffer());
+  const stopVideoLoop = useRef<(() => void) | null>(null);
+  const videoMeta = useRef<{ title: string; source: VideoSourceKind | null }>({
+    title: "",
+    source: null,
+  });
   const [chips, setChips] = useState<AttachmentChip[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
+  const [videoDraft, setVideoDraft] = useState("");
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [videoTitle, setVideoTitle] = useState("");
+  const [videoHint, setVideoHint] = useState<string | null>(null);
 
   function commitRows(nextRows: TranscriptRow[]) {
     const snapshot = nextRows.map((row) => ({ ...row }));
@@ -219,9 +264,24 @@ export function VoiceHome() {
       stopMediaStream(screenSlot.current.stream);
       cameraSlot.current = emptyVisionSlot();
       screenSlot.current = emptyVisionSlot();
+      stopVideoLoop.current?.();
+      if (videoObjectUrl.current) URL.revokeObjectURL(videoObjectUrl.current);
       sessionRef.current?.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (!videoSrc) return;
+    const video = watchVideoRef.current;
+    if (!video) return;
+    videoFrames.current.clear();
+    stopVideoLoop.current?.();
+    stopVideoLoop.current = startVideoFrameLoop(video, videoFrames.current);
+    return () => {
+      stopVideoLoop.current?.();
+      stopVideoLoop.current = null;
+    };
+  }, [videoSrc]);
 
   useEffect(() => {
     if (!cameraOn) return;
@@ -326,6 +386,10 @@ export function VoiceHome() {
     const nextChips: AttachmentChip[] = [];
     const errors: string[] = [];
     for (const file of Array.from(fileList)) {
+      if (isVideoFile(file)) {
+        loadVideoFile(file);
+        continue;
+      }
       const result = await processAttachment(file);
       if (!result.ok) {
         errors.push(result.message);
@@ -357,9 +421,75 @@ export function VoiceHome() {
     setChips((current) => current.filter((chip) => chip.id !== id));
   }
 
+  function bindVideoProvider(session: VoiceSession) {
+    session.setVideoContextProvider(async () =>
+      snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current),
+    );
+    if (videoMeta.current.source) {
+      session.notifyVideo(true, videoMeta.current);
+    }
+  }
+
+  function clearVideo(notify = true) {
+    stopVideoLoop.current?.();
+    stopVideoLoop.current = null;
+    videoFrames.current.clear();
+    if (videoObjectUrl.current) {
+      URL.revokeObjectURL(videoObjectUrl.current);
+      videoObjectUrl.current = null;
+    }
+    const hadVideo = Boolean(videoMeta.current.source);
+    videoMeta.current = { title: "", source: null };
+    setVideoSrc(null);
+    setVideoTitle("");
+    setVideoHint(null);
+    if (hadVideo && notify) sessionRef.current?.notifyVideo(false);
+  }
+
+  function loadVideoSrc(src: string, title: string, source: VideoSourceKind) {
+    if (videoObjectUrl.current && videoObjectUrl.current !== src) {
+      URL.revokeObjectURL(videoObjectUrl.current);
+      videoObjectUrl.current = null;
+    }
+    videoFrames.current.clear();
+    videoMeta.current = { title, source };
+    setVideoSrc(src);
+    setVideoTitle(title);
+    setVideoHint(null);
+    sessionRef.current?.notifyVideo(true, videoMeta.current);
+  }
+
+  function loadVideoUrl(raw: string) {
+    const trimmed = raw.trim();
+    const src = playableVideoSrc(trimmed);
+    if (!src) {
+      setVideoHint("Paste a direct mp4 or webm URL.");
+      return;
+    }
+    loadVideoSrc(src, titleFromVideoUrl(trimmed), "url");
+  }
+
+  function loadVideoFile(file: File) {
+    if (!isVideoFile(file)) {
+      setVideoHint("Use an mp4 or webm file.");
+      return false;
+    }
+    const url = URL.createObjectURL(file);
+    videoObjectUrl.current = url;
+    loadVideoSrc(url, file.name, "file");
+    return true;
+  }
+
+  function onVideoFilePicked(fileList: FileList | null) {
+    const file = fileList?.[0];
+    if (file) loadVideoFile(file);
+    if (videoFileInputRef.current) videoFileInputRef.current.value = "";
+  }
+
   function attach(session: VoiceSession) {
     sessionRef.current = session;
     setError(null);
+    bindVideoProvider(session);
   }
 
   function clearSession() {
@@ -383,6 +513,8 @@ export function VoiceHome() {
     await session.start();
     return session;
   }
+
+  // Voice start/stop must never pause or unload a watch-together video.
 
   async function stopSession() {
     const persisted = readVoiceSessionStore();
@@ -485,7 +617,7 @@ export function VoiceHome() {
       <header className="relative z-10 flex items-center justify-between px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
       </header>
-      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6">
+      <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${videoSrc ? "justify-end pb-2" : "justify-center"}`}>
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
@@ -499,6 +631,95 @@ export function VoiceHome() {
       </main>
       <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-2">
+          {videoSrc ? (
+            <div className="overflow-hidden rounded-2xl border border-zinc-400 bg-background shadow-md dark:border-zinc-500">
+              <video
+                ref={watchVideoRef}
+                src={videoSrc}
+                controls
+                playsInline
+                preload="metadata"
+                className="aspect-video w-full bg-black"
+                aria-label={videoTitle ? `Watch together: ${videoTitle}` : "Watch together video"}
+                onLoadedData={() => {
+                  const video = watchVideoRef.current;
+                  if (!video) return;
+                  const shot = captureVideoShot(video);
+                  if (shot) videoFrames.current.push(shot);
+                }}
+                onError={() => {
+                  setVideoHint(
+                    "Could not play that video. Use a direct mp4 or webm URL, or upload a file.",
+                  );
+                }}
+              />
+              <div className="flex items-center justify-between gap-3 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-foreground">
+                    {videoTitle || "Watch together"}
+                  </p>
+                  <p className="text-[11px] text-zinc-500">
+                    Headphones recommended — video audio and Lexi mix.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close video"
+                  onClick={() => clearVideo(true)}
+                  className="flex h-8 shrink-0 items-center rounded-full px-3 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form
+              className="flex items-center gap-2 rounded-full border border-zinc-400 bg-background px-2 py-1.5 dark:border-zinc-500"
+              onSubmit={(event) => {
+                event.preventDefault();
+                loadVideoUrl(videoDraft);
+              }}
+            >
+              <input
+                ref={videoFileInputRef}
+                id="lexi-video-file"
+                type="file"
+                accept={VIDEO_ACCEPT}
+                className="sr-only"
+                onChange={(event) => onVideoFilePicked(event.target.files)}
+              />
+              <button
+                type="button"
+                aria-label="Upload mp4 or webm"
+                title="Upload a video"
+                onClick={() => videoFileInputRef.current?.click()}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                <FilmIcon />
+              </button>
+              <label className="sr-only" htmlFor="lexi-video-url">
+                Video URL
+              </label>
+              <input
+                id="lexi-video-url"
+                type="url"
+                value={videoDraft}
+                onChange={(event) => setVideoDraft(event.target.value)}
+                placeholder="Watch together — mp4/webm URL"
+                autoComplete="off"
+                className="min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground outline-none placeholder:text-zinc-500"
+              />
+              <button
+                type="submit"
+                className="flex h-8 shrink-0 items-center rounded-full px-3 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Load
+              </button>
+            </form>
+          )}
+          {videoHint ? (
+            <p className="px-1 text-xs text-zinc-500">{videoHint}</p>
+          ) : null}
           <div className="flex items-end justify-between gap-3">
             {cameraOn ? (
               <video

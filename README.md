@@ -4,7 +4,15 @@ Lexi is a voice-first companion. The homepage composer talks to Grok Speech-to-S
 
 1. Copy `.env.example` to `.env.local`.
 2. Set `XAI_API_KEY` on the **server only**. The Next.js route `POST /api/realtime/session` exchanges it for a short-lived xAI client secret. The browser never sees the long-lived key.
-3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key). Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
+3. Run the dev server and open the app. Empty composer → stroked waveform starts voice mode. Typed text → send arrow (starts a session if needed, then `conversation.item.create` + `response.create`). While live, the animated waveform ends the session. Voice sessions include xAI `web_search` (server-side; no extra API key) plus a client `get_video_context` tool. Per-turn `CURRENT DECAY STATE` comes from Neon memories for cookie `lexi_user_id` (default user `ian`). Without `DATABASE_URL` the payload is `no active decay tags`.
+
+## Watch together
+
+Load a **direct** mp4/webm URL or upload a file from the bar above the composer. YouTube and similar pages will not play in the HTML5 player — download or use a direct file URL.
+
+Voice stays live while the video plays. Talking does **not** pause the video; pausing is only from the player controls. Lexi answers “what’s happening?” by calling `get_video_context`, which captures the current frame(s) and analyzes them with the documented xAI image-understanding API (`POST https://api.x.ai/v1/responses`, model `grok-4.6`) using server-only `XAI_API_KEY`.
+
+Video audio and Lexi’s voice mix in the same speakers. **Headphones are recommended** so the mic does not hear the movie or Lexi. Barge-in still cancels only Lexi’s speech, not the video.
 
 ## Memory (Neon)
 

@@ -22,6 +22,8 @@ import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
 import type { ReadyAttachment } from "@/lib/voice/attachments";
 import { stampRealtimeRequest } from "@/lib/voice/realtime-stamp";
+import type { VideoContextSnapshot, VideoSourceKind } from "@/lib/voice/video";
+import { formatTimecode } from "@/lib/voice/video";
 import type { VisionSource } from "@/lib/voice/vision";
 
 export type VoicePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking";
@@ -38,6 +40,8 @@ type SessionHandlers = {
   onError: (message: string) => void;
   onSessionId?: (sessionId: string | null) => void;
 };
+
+export type VideoContextProvider = () => Promise<VideoContextSnapshot>;
 
 const REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest&ngrok-skip-browser-warning=1";
 const PREOPEN_CAP = 40;
@@ -74,7 +78,11 @@ ${affectAndDecay}
 
 VISION
 
-When a camera or shared-screen frame is attached, you can see it. Comment on what is visible only when it is relevant to what the user is saying or asking. Do not narrate every frame. If no frame is attached, you cannot see the screen or camera. When the user attaches a photo, you can see it. When they attach a file, you receive its text or a short note with the file name, type, and size. Talk about those attachments when they are present.`;
+When a camera or shared-screen frame is attached, you can see it. Comment on what is visible only when it is relevant to what the user is saying or asking. Do not narrate every frame. If no frame is attached, you cannot see the screen or camera. When the user attaches a photo, you can see it. When they attach a file, you receive its text or a short note with the file name, type, and size. Talk about those attachments when they are present.
+
+WATCH TOGETHER
+
+The user can play a video in the app while they talk to you. Keep the conversation going while it plays. Never ask them to pause so you can listen, and never treat talking as a reason to stop the video. You do not hear the video soundtrack — only they do. You can see what is on screen only by calling get_video_context. Call that tool when they ask what is happening, who or what is on screen, or anything that needs the current picture. Do not call it on every turn. If no video is loaded, say you cannot see a video.`;
   const withFacts = memories ? `${base}\n\n${memories}` : base;
   const withChat = chat
     ? `${withFacts}\n\nPrior chat is context only — do not recap or repeat it verbatim unless asked.\n\n${chat}`
@@ -133,6 +141,23 @@ const UPSERT_FACT_TOOL = {
   },
 };
 
+const GET_VIDEO_CONTEXT_TOOL = {
+  type: "function",
+  name: "get_video_context",
+  description:
+    "Look at the video the user is watching with you right now. Call this when they ask what is happening, what is on screen, or any question that needs the current picture. Returns a short scene description from captured frames. Do not call this if no video is loaded.",
+  parameters: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description:
+          "What to look for on screen. Default: describe what is happening now.",
+      },
+    },
+  },
+};
+
 const SET_AFFECT_TOOL = {
   type: "function",
   name: "set_affect",
@@ -163,8 +188,8 @@ function buildSessionUpdate(memoryInstructions = "", priorChat = "", sessionId =
       instructions: buildInstructions(memoryInstructions, priorChat, sessionId),
       reasoning: { effort: "none" },
       turn_detection: { type: "server_vad" },
-      // web_search is server-side; upsert_fact / set_affect run on the client via POST /api/memory.
-      tools: [{ type: "web_search" }, UPSERT_FACT_TOOL, SET_AFFECT_TOOL],
+      // web_search is server-side; upsert_fact / set_affect / get_video_context run on the client.
+      tools: [{ type: "web_search" }, UPSERT_FACT_TOOL, SET_AFFECT_TOOL, GET_VIDEO_CONTEXT_TOOL],
       audio: {
         input: {
           format: { type: "audio/pcm", rate: TARGET_RATE },
@@ -242,7 +267,13 @@ export class VoiceSession {
   private toolResponseWaiting = false;
   private factWriteSucceeded = false;
   private pendingVisionNotices: Array<{ source: VisionSource; active: boolean }> = [];
+  private pendingVideoNotices: Array<{
+    active: boolean;
+    title?: string;
+    source?: VideoSourceKind | null;
+  }> = [];
   private pendingAttachments: ReadyAttachment[] = [];
+  private videoContextProvider: VideoContextProvider | null = null;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -369,6 +400,7 @@ export class VoiceSession {
       this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat, this.currentSessionId() ?? ""));
       this.injectPriorChat();
       this.flushPendingVision();
+      this.flushPendingVideo();
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
         for (const audio of this.pending) {
@@ -450,6 +482,19 @@ export class VoiceSession {
     );
   }
 
+  setVideoContextProvider(provider: VideoContextProvider | null) {
+    this.videoContextProvider = provider;
+  }
+
+  notifyVideo(active: boolean, meta?: { title?: string; source?: VideoSourceKind | null }) {
+    if (this.stopped) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.pendingVideoNotices.push({ active, title: meta?.title, source: meta?.source });
+      return;
+    }
+    this.emitVideoNotice(active, meta);
+  }
+
   notifyVision(source: VisionSource, active: boolean) {
     if (this.stopped) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -486,6 +531,31 @@ export class VoiceSession {
     for (const item of queued) this.emitVisionNotice(item.source, item.active);
   }
 
+  private flushPendingVideo() {
+    const queued = this.pendingVideoNotices.splice(0);
+    for (const item of queued) this.emitVideoNotice(item.active, item);
+  }
+
+  private emitVideoNotice(active: boolean, meta?: { title?: string; source?: VideoSourceKind | null }) {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const title = meta?.title?.trim();
+    const text = active
+      ? `The user started a watch-together video${title ? ` (${title})` : ""}. It keeps playing while you talk. You cannot hear the soundtrack. Call get_video_context when you need to see what is on screen.`
+      : "The user closed the watch-together video. You can no longer see frames from it.";
+    this.logger.log("video.state", { active, title: title || undefined, source: meta?.source ?? undefined });
+    this.send(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      },
+      true,
+    );
+  }
+
   private emitVisionNotice(source: VisionSource, active: boolean) {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const text = active
@@ -513,7 +583,9 @@ export class VoiceSession {
     if (this.stopped) return;
     this.stopped = true;
     this.pendingVisionNotices = [];
+    this.pendingVideoNotices = [];
     this.pendingAttachments = [];
+    this.videoContextProvider = null;
     this.by = by;
     this.logger.log("stop", { by, phase: this.phase });
     this.flushInWindow(true);
@@ -566,6 +638,7 @@ export class VoiceSession {
         const dropped = this.player?.flush() ?? 0;
         this.send({ type: "response.cancel" });
         this.logger.log("play.stop", { reason: "barge-in", dropped_ms: dropped });
+        // Barge-in cancels Lexi's speech only. Never pause or stop a watch-together video.
         this.setPhase("listening");
         break;
       }
@@ -774,7 +847,11 @@ export class VoiceSession {
 
     let result: Record<string, unknown> = { error: `Unknown function: ${name}` };
     try {
-      if (name === "upsert_fact" || name === "set_affect") {
+      if (name === "get_video_context") {
+        result = await this.runVideoContext(
+          typeof args.question === "string" ? args.question : "",
+        );
+      } else if (name === "upsert_fact" || name === "set_affect") {
         const userId = clientUserId();
         const response = await fetch("/api/memory", {
           method: "POST",
@@ -839,6 +916,83 @@ export class VoiceSession {
     }
     this.send({ type: "response.create" });
     this.setPhase("thinking");
+  }
+
+  private async runVideoContext(question: string): Promise<Record<string, unknown>> {
+    if (!this.videoContextProvider) {
+      return { error: "No video is loaded." };
+    }
+    const snapshot = await this.videoContextProvider();
+    if (!snapshot.loaded) {
+      return { error: "No video is loaded." };
+    }
+    if (snapshot.captureError && !snapshot.frames.length) {
+      return {
+        error: snapshot.captureError,
+        title: snapshot.title,
+        currentTime: snapshot.currentTime,
+        duration: snapshot.duration,
+        playing: snapshot.playing,
+      };
+    }
+
+    this.logger.log("video.context", {
+      title: snapshot.title,
+      frames: snapshot.frames.length,
+      current_time: snapshot.currentTime,
+      playing: snapshot.playing,
+    });
+
+    const response = await fetch("/api/video/context", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "1",
+      },
+      body: JSON.stringify({
+        frames: snapshot.frames,
+        question,
+        title: snapshot.title,
+        currentTime: snapshot.currentTime,
+        duration: snapshot.duration,
+        playing: snapshot.playing,
+        logSessionId: this.id,
+      }),
+    });
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await response.json()) as Record<string, unknown>;
+    } catch {
+      body = { error: `Video context returned ${response.status}.` };
+    }
+    if (!response.ok) {
+      this.logger.log("video.context.fail", {
+        status: response.status,
+        error: body.error,
+      });
+      return {
+        error: typeof body.error === "string" ? body.error : "Could not analyze the video.",
+        title: snapshot.title,
+        currentTime: snapshot.currentTime,
+        duration: snapshot.duration,
+        playing: snapshot.playing,
+      };
+    }
+    this.logger.log("video.context.ok", {
+      model: body.model,
+      chars: typeof body.description === "string" ? body.description.length : 0,
+    });
+    return {
+      description: body.description,
+      title: snapshot.title,
+      currentTime: snapshot.currentTime,
+      currentTimeLabel: formatTimecode(snapshot.currentTime),
+      duration: snapshot.duration,
+      durationLabel: formatTimecode(snapshot.duration),
+      playing: snapshot.playing,
+      paused: snapshot.paused,
+      source: snapshot.source,
+    };
   }
 
   private applyStoredFact(fact: Record<string, unknown>) {
