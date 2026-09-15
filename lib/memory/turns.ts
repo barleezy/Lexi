@@ -34,9 +34,19 @@ export function parseChatTurns(raw: unknown): ChatTurn[] {
   return turns.slice(-PRIOR_TURN_CAP);
 }
 
+/** Drop the newest user line so live audio/text is not also sitting in PRIOR CHAT. */
+export function withoutLatestUserLine(turns: ChatTurn[]): ChatTurn[] {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].user_text.trim()) {
+      return turns.map((turn, index) => (index === i ? { ...turn, user_text: "" } : turn));
+    }
+  }
+  return turns;
+}
+
 export function formatPriorChat(turns: ChatTurn[]) {
   const lines: string[] = [];
-  for (const turn of turns) {
+  for (const turn of withoutLatestUserLine(turns)) {
     const user = clip(turn.user_text);
     const assistant = clip(turn.assistant_text);
     if (user) lines.push(`User: ${user}`);
