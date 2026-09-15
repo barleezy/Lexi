@@ -1849,6 +1849,8 @@ export class VoiceSession {
   }
 
   private publishMicRoute(route: CarMicRoute, kind: "mic.ok" | "mic.reacquire" | "mic.car.select" | "mic.car.defer") {
+    this.handlers.onMicRoute?.(route);
+    if (!route.preferCar && route.kind !== "car" && !route.fallback) return;
     const signature = `${kind}:${route.kind}:${route.reason}:${route.label}:${route.fallback ?? ""}`;
     if (signature === this.lastCarMicLog) return;
     this.lastCarMicLog = signature;
@@ -1861,7 +1863,6 @@ export class VoiceSession {
       listed: route.listed ?? 0,
       constraint: route.constraint ?? "default",
     });
-    this.handlers.onMicRoute?.(route);
   }
 
   private async noteCarMicRoute(source: string, hidden = pageIsHidden() || this.pageHidden) {
