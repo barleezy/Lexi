@@ -90,6 +90,11 @@ expectEqual(keys("I'm a trans woman"), ["transexual=trans woman"], "trans woman"
 expectEqual(keys("I'm a trans man"), ["transexual=trans man"], "trans man");
 expectEqual(keys("she's trans"), [], "no trans about someone else");
 expectEqual(keys("I'm 17 and I'm trans"), [], "no trans under 21");
+expectEqual(keys("my favorite porn is hentai"), ["porn=hentai"], "favorite porn");
+expectEqual(keys("I watch amateur porn"), ["porn=amateur"], "watch genre porn");
+expectEqual(keys("I'm into lesbian porn"), ["porn=lesbian"], "into porn genre");
+expectEqual(keys("I watch The Boys"), [], "no porn from watch show");
+expectEqual(keys("I'm 17 and I watch porn"), [], "no porn under 21");
 expectEqual(keys("my favorite game is Zelda"), ["game=Zelda"], "favorite game");
 expectEqual(keys("I play Elden Ring on Steam"), ["game=Elden Ring"], "play game on platform");
 expectEqual(keys("my favorite movie is Inception"), ["movie=Inception"], "movie");
@@ -140,6 +145,7 @@ expectEqual(
     "leisure",
     "vacation",
     "sexual_preference",
+    "porn",
     "game",
     "movie",
     "tv",
@@ -150,6 +156,8 @@ expectEqual(
 expectEqual(isFactKey("birthday"), true, "birthday is fact key");
 expectEqual(isFactKey("music"), true, "music is fact key");
 expectEqual(isFactKey("transexual"), true, "transexual is fact key");
+expectEqual(isFactKey("porn"), true, "porn is fact key");
+expectEqual(isIdentityKey("porn"), false, "porn is not identity");
 expectEqual(isFactKey("dates"), false, "dates blob is not a key");
 expectEqual([...IDENTITY_KEYS], ["name", "transexual"], "identity keys");
 expectEqual(isIdentityKey("name"), true, "name is identity");

@@ -19,6 +19,7 @@ export const FACT_KEYS = [
   "leisure",
   "vacation",
   "sexual_preference",
+  "porn",
   "game",
   "movie",
   "tv",
@@ -479,6 +480,22 @@ export function extractTransexual(text: string) {
   return /^(transexual|transsexual)$/i.test(ident[1]) ? "transexual" : "trans";
 }
 
+export function extractPorn(text: string) {
+  const t = text.trim();
+  if (mentionsUnder21(t)) return null;
+  const fav = t.match(/\bmy favorite porn(?:\s+(?:genre|video|videos|to watch))?\s+is\s+([^.!?\n]{2,40})/i);
+  if (fav) return tidyPhrase(fav[1], 2, 40);
+  const watchGenre = t.match(/\bi watch\s+([^.!?\n]{2,40}?)\s+porn\b/i);
+  if (watchGenre) return tidyPhrase(watchGenre[1], 2, 40);
+  if (/\bi watch (?:porn|xxx|adult videos?)\b/i.test(t)) return "porn";
+  const intoGenre = t.match(/\bi(?:'m| am) into\s+([^.!?\n]{2,40}?)\s+porn\b/i);
+  if (intoGenre) return tidyPhrase(intoGenre[1], 2, 40);
+  if (/\bi(?:'m| am) into (?:porn|xxx|adult videos?)\b/i.test(t)) return "porn";
+  const like = t.match(/\bi like (?:watching )?(?:([^.!?\n]{2,40}?)\s+)?(?:porn|xxx|adult videos?)\b/i);
+  if (like) return tidyPhrase(like[1] || "porn", 2, 40);
+  return null;
+}
+
 export function extractSexualPreference(text: string) {
   const t = text.trim();
   if (mentionsUnder21(t)) return null;
@@ -576,6 +593,7 @@ export function extractFacts(userText: string, _assistantText = ""): ExtractedFa
   pushFact(facts, "leisure", extractLeisure(user));
   pushFact(facts, "vacation", extractVacation(user));
   pushFact(facts, "sexual_preference", extractSexualPreference(user));
+  pushFact(facts, "porn", extractPorn(user));
   pushFact(facts, "game", extractGame(user));
   pushFact(facts, "movie", extractMovie(user));
   pushFact(facts, "tv", extractTv(user));
