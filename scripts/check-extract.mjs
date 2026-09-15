@@ -1,6 +1,6 @@
 import { bumpAffect } from "../lib/memory/decay.ts";
 import { extractFacts, IDENTITY_KEYS, isIdentityKey } from "../lib/memory/extract.ts";
-import { DEFAULT_USER_ID, normalizeUserId } from "../lib/memory/user.ts";
+import { DEFAULT_USER_ID, normalizeUserId, resolveUserId } from "../lib/memory/user.ts";
 
 function storedAffect(key, incoming, existing) {
   if (isIdentityKey(key)) return 10;
@@ -23,6 +23,21 @@ expectEqual(normalizeUserId("IAN"), "Ian", "normalize IAN");
 expectEqual(normalizeUserId(" Ian "), "Ian", "normalize padded");
 expectEqual(normalizeUserId(""), "Ian", "normalize empty");
 expectEqual(normalizeUserId(null), "Ian", "normalize null");
+
+const bare = new Request("http://localhost/api/memory");
+expectEqual(resolveUserId(bare, null), "Ian", "GET defaults to Ian");
+expectEqual(resolveUserId(bare, "ian"), "Ian", "query ian");
+expectEqual(resolveUserId(bare, "IAN"), "Ian", "query IAN");
+expectEqual(
+  resolveUserId(new Request("http://localhost/api/memory", { headers: { "x-lexi-user-id": "ian" } }), null),
+  "Ian",
+  "header ian",
+);
+expectEqual(
+  resolveUserId(new Request("http://localhost/api/memory", { headers: { cookie: "lexi_user_id=IAN" } }), null),
+  "Ian",
+  "cookie IAN",
+);
 
 expectEqual(keys("my name is Ian"), ["name=Ian"], "my name is");
 expectEqual(keys("I'm Ian"), ["name=Ian"], "I'm");
