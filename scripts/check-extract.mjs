@@ -84,6 +84,12 @@ expectEqual(keys("I'm gay"), ["sexual_preference=gay"], "sexual orientation");
 expectEqual(keys("I'm into men"), ["sexual_preference=men"], "sexual into");
 expectEqual(keys("I'm into hiking"), [], "no sexual from hiking");
 expectEqual(keys("I'm 17 and I'm gay"), [], "no sexual under 21");
+expectEqual(keys("I'm trans"), ["transexual=trans"], "trans self-id");
+expectEqual(keys("I'm transexual"), ["transexual=transexual"], "transexual self-id");
+expectEqual(keys("I'm a trans woman"), ["transexual=trans woman"], "trans woman");
+expectEqual(keys("I'm a trans man"), ["transexual=trans man"], "trans man");
+expectEqual(keys("she's trans"), [], "no trans about someone else");
+expectEqual(keys("I'm 17 and I'm trans"), [], "no trans under 21");
 expectEqual(keys("my favorite game is Zelda"), ["game=Zelda"], "favorite game");
 expectEqual(keys("I play Elden Ring on Steam"), ["game=Elden Ring"], "play game on platform");
 expectEqual(keys("my favorite movie is Inception"), ["movie=Inception"], "movie");
@@ -115,6 +121,7 @@ expectEqual(
   [...FACT_KEYS],
   [
     "name",
+    "transexual",
     "pets",
     "location",
     "commitments",
@@ -142,15 +149,19 @@ expectEqual(
 );
 expectEqual(isFactKey("birthday"), true, "birthday is fact key");
 expectEqual(isFactKey("music"), true, "music is fact key");
+expectEqual(isFactKey("transexual"), true, "transexual is fact key");
 expectEqual(isFactKey("dates"), false, "dates blob is not a key");
-expectEqual([...IDENTITY_KEYS], ["name"], "identity keys");
+expectEqual([...IDENTITY_KEYS], ["name", "transexual"], "identity keys");
 expectEqual(isIdentityKey("name"), true, "name is identity");
+expectEqual(isIdentityKey("transexual"), true, "transexual is identity");
 expectEqual(isIdentityKey("pets"), false, "pets is not identity");
 expectEqual(isIdentityKey("location"), false, "location is not identity");
 expectEqual(isIdentityKey("commitments"), false, "commitments is not identity");
 expectEqual(isIdentityKey("birthday"), false, "birthday is not identity");
 expectEqual(storedAffect("name", 5), 10, "name insert is 10");
 expectEqual(storedAffect("name", 6, 6), 10, "name upsert is 10 not bump 7");
+expectEqual(storedAffect("transexual", 5), 10, "transexual insert is 10");
+expectEqual(storedAffect("transexual", 6, 6), 10, "transexual upsert is 10 not bump 7");
 expectEqual(storedAffect("pets", 5), 5, "pets insert uses scorer");
 expectEqual(storedAffect("pets", 3, 5), 6, "pets upsert still bumps");
 expectEqual(storedAffect("location", 4), 4, "location insert uses scorer");

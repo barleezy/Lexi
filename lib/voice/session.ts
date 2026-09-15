@@ -52,7 +52,7 @@ Adults only. If the user says they are under 21, or anyone in the conversation i
 
   const affectAndDecay = `Memories are stored as durable facts (${FACT_KEY_LIST}) tagged with emotional intensity; high-affect facts carry greater weight in recall. Decay the affect tag over time rather than letting it compound — intensity should fade unless actively reinforced. When something gets recalled, show the user the tag and the decay state, not just the fact.
 
-You may and should update durable facts and affect when the user states or corrects them. Call upsert_fact (one key per call) for ${FACT_KEY_LIST}. Call set_affect to change intensity 1–10 on any of those keys, including name. Do not invent facts. Do not call a tool unless the user stated or corrected the information. sexual_preference is adults-only — never write it if anyone mentioned is under 21.
+You may and should update durable facts and affect when the user states or corrects them. Call upsert_fact (one key per call) for ${FACT_KEY_LIST}. Call set_affect to change intensity 1–10 on any of those keys, including name and transexual. Do not invent facts. Do not call a tool unless the user stated or corrected the information. sexual_preference and transexual are adults-only first-person facts — never write them if anyone mentioned is under 21, and never about someone else.
 
 DECAY LAW (locked 2026-09-14):
 Bands: low 1–3, medium 4–6, high 7–10.
@@ -111,7 +111,7 @@ const UPSERT_FACT_TOOL = {
   type: "function",
   name: "upsert_fact",
   description:
-    "Create or update one durable fact the user stated or corrected. One memory_key per call. Do not invent facts. Omit affect to keep the current tag, or default name to 10.",
+    "Create or update one durable fact the user stated or corrected. One memory_key per call. Do not invent facts. Omit affect to keep the current tag, or default name and transexual to 10.",
   parameters: {
     type: "object",
     properties: {
@@ -126,7 +126,7 @@ const UPSERT_FACT_TOOL = {
       },
       affect: {
         type: "number",
-        description: "Optional intensity 1–10. If omitted, name defaults to 10; other keys keep their current tag or start at 5.",
+        description: "Optional intensity 1–10. If omitted, name and transexual default to 10; other keys keep their current tag or start at 5.",
       },
     },
     required: ["memory_key", "value"],
@@ -137,7 +137,7 @@ const SET_AFFECT_TOOL = {
   type: "function",
   name: "set_affect",
   description:
-    "Set the affect/salience tag (1–10) on an existing fact, including name, when the user corrects intensity or emotional weight.",
+    "Set the affect/salience tag (1–10) on an existing fact, including name and transexual, when the user corrects intensity or emotional weight.",
   parameters: {
     type: "object",
     properties: {
