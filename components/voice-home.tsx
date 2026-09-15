@@ -94,7 +94,17 @@ export function VoiceHome() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<TranscriptRow[]>([]);
+  const [caption, setCaption] = useState("");
+  const [streamTick, setStreamTick] = useState(0);
   const [draft, setDraft] = useState("");
+
+  function commitRows(nextRows: TranscriptRow[]) {
+    const snapshot = nextRows.map((row) => ({ ...row }));
+    const live = [...snapshot].reverse().find((row) => row.text.trim())?.text ?? "";
+    setRows(snapshot);
+    setCaption(live);
+    setStreamTick((tick) => tick + 1);
+  }
 
   useEffect(() => {
     return () => {
@@ -117,7 +127,7 @@ export function VoiceHome() {
   async function startSession() {
     const session = new VoiceSession({
       onPhase: setPhase,
-      onTranscripts: setRows,
+      onTranscripts: commitRows,
       onError: (message) => {
         setError(message);
         clearSession();
@@ -142,7 +152,7 @@ export function VoiceHome() {
       setError(null);
       let session = sessionRef.current;
       if (!session) {
-        setRows([]);
+        commitRows([]);
         session = await startSession();
       }
       session.sendText(text);
@@ -154,13 +164,14 @@ export function VoiceHome() {
       return;
     }
 
-    setRows([]);
+    commitRows([]);
     await startSession();
   }
 
   const live = phase !== "idle";
   const hasText = draft.trim().length > 0;
-  const latest = [...rows].reverse().find((row) => row.text.trim());
+  const latestText =
+    caption || [...rows].reverse().find((row) => row.text.trim())?.text || "";
   const placeholder = live ? HINTS[phase] : HINTS.idle;
   const status = error
     ? error
@@ -207,8 +218,11 @@ export function VoiceHome() {
           /ˈlek.si/
         </p>
         <h1 className="text-6xl font-semibold tracking-tight sm:text-7xl">Lexi</h1>
-        <p className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-          {error ?? (latest ? latest.text : "A voice-first companion.")}
+        <p
+          data-stream-tick={streamTick}
+          className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
+        >
+          {error ?? (latestText || "A voice-first companion.")}
         </p>
       </main>
       <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">

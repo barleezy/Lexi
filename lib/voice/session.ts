@@ -599,16 +599,19 @@ export class VoiceSession {
     this.upsert({
       id: responseId,
       role: "assistant",
-      text: `${existing?.text ?? ""}${delta}`,
+      text: existing ? existing.text + delta : delta,
     });
   }
 
   private upsert(row: TranscriptRow) {
     const index = this.rows.findIndex((item) => item.id === row.id);
-    if (index >= 0) this.rows[index] = { ...this.rows[index], ...row };
-    else this.rows.push(row);
-    // New array each time so React setState cannot skip the incremental render.
-    this.handlers.onTranscripts([...this.rows]);
+    // Never mutate a row React already holds. New array + new objects every time.
+    const next =
+      index >= 0
+        ? this.rows.map((item, i) => (i === index ? { ...item, ...row } : { ...item }))
+        : [...this.rows.map((item) => ({ ...item })), { ...row }];
+    this.rows = next;
+    this.handlers.onTranscripts(next.map((item) => ({ ...item })));
   }
 
   private setPhase(phase: VoicePhase) {
