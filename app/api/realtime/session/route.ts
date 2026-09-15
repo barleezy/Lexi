@@ -1,4 +1,4 @@
-import { formatDecayState, recallForUser } from "@/lib/memory/store";
+import { formatDecayState, formatMemoryInstructions, recallForUser } from "@/lib/memory/store";
 import { resolveUserId } from "@/lib/memory/user";
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
 
@@ -89,11 +89,15 @@ export async function POST(request: Request) {
   }
 
   let decayState = "no active decay tags";
+  let memoryInstructions = "";
   try {
-    decayState = formatDecayState(await recallForUser(resolveUserId(request)));
+    const recalled = await recallForUser(resolveUserId(request));
+    decayState = formatDecayState(recalled);
+    memoryInstructions = formatMemoryInstructions(recalled);
   } catch {
     decayState = "no active decay tags";
+    memoryInstructions = "";
   }
 
-  return Response.json({ token, decayState });
+  return Response.json({ token, decayState, memoryInstructions });
 }

@@ -20,6 +20,8 @@ export type MemoryRow = {
 
 export type DecayLine = {
   memoryKey: string;
+  rawText: string;
+  weightedText: string | null;
   startSalience: number;
   salience: number;
   band: string;
@@ -27,6 +29,8 @@ export type DecayLine = {
   days: number;
   t0: string;
 };
+
+export const MEMORY_INSTRUCTION_CAP = 10;
 
 function databaseUrl() {
   return process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || "";
@@ -223,6 +227,8 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
     );
     lines.push({
       memoryKey: row.memory_key,
+      rawText: row.raw_text,
+      weightedText: row.weighted_text,
       startSalience: row.start_salience,
       salience,
       band,
@@ -232,6 +238,31 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
     });
   }
   return lines;
+}
+
+export function rankMemoriesForInstructions(lines: DecayLine[]) {
+  return [...lines].sort((a, b) => {
+    if (b.salience !== a.salience) return b.salience - a.salience;
+    const t0 = Date.parse(b.t0) - Date.parse(a.t0);
+    if (t0 !== 0) return t0;
+    return a.memoryKey.localeCompare(b.memoryKey);
+  });
+}
+
+export function formatMemoryInstructions(lines: DecayLine[]) {
+  const selected = rankMemoriesForInstructions(lines)
+    .filter((line) => line.rawText.trim() || line.weightedText?.trim())
+    .slice(0, MEMORY_INSTRUCTION_CAP)
+    .map((line, index) => {
+      const text = line.rawText.trim() || line.weightedText?.trim() || "";
+      return `${index + 1}. [${line.memoryKey} start=${round(line.startSalience)} current=${round(line.salience)} band=${line.band}]\n${text}`;
+    });
+  if (selected.length === 0) return "";
+  return `RECALLED MEMORIES
+
+These are stored memories from prior sessions. Never present them as certain. Flag confidence on every recalled fact. When two stored facts conflict, surface the conflict rather than resolving it silently.
+
+${selected.join("\n\n")}`;
 }
 
 export function formatDecayState(lines: DecayLine[]) {
