@@ -18,7 +18,9 @@ import {
 import { DEFAULT_USER_ID, normalizeUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
+import type { ReadyAttachment } from "@/lib/voice/attachments";
 import { stampRealtimeRequest } from "@/lib/voice/realtime-stamp";
+import type { VisionSource } from "@/lib/voice/vision";
 
 export type VoicePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking";
 
@@ -64,7 +66,11 @@ ${personaAndRules}
 
 AFFECT AND DECAY
 
-${affectAndDecay}`;
+${affectAndDecay}
+
+VISION
+
+When a camera or shared-screen frame is attached, you can see it. Comment on what is visible only when it is relevant to what the user is saying or asking. Do not narrate every frame. If no frame is attached, you cannot see the screen or camera. When the user attaches a photo, you can see it. When they attach a file, you receive its text or a short note with the file name, type, and size. Talk about those attachments when they are present.`;
   const withFacts = memories ? `${base}\n\n${memories}` : base;
   const withChat = chat
     ? `${withFacts}\n\nPrior chat is context only — do not recap or repeat it verbatim unless asked.\n\n${chat}`
@@ -233,6 +239,8 @@ export class VoiceSession {
   private toolsThisResponse = false;
   private toolResponseWaiting = false;
   private factWriteSucceeded = false;
+  private pendingVisionNotices: Array<{ source: VisionSource; active: boolean }> = [];
+  private pendingAttachments: ReadyAttachment[] = [];
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -358,6 +366,7 @@ export class VoiceSession {
       this.logger.log("ws.open", { ms: Date.now() - opened });
       this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat, this.currentSessionId() ?? ""));
       this.injectPriorChat();
+      this.flushPendingVision();
       if (this.pending.length) {
         this.logger.log("audio.flush", { chunks: this.pending.length });
         for (const audio of this.pending) {
@@ -410,9 +419,99 @@ export class VoiceSession {
     void this.emitText(trimmed);
   }
 
+  sendVisionFrame(source: VisionSource, dataUrl: string) {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const payload = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : dataUrl;
+    this.logger.log("vision.frame", {
+      source,
+      bytes: Math.round((payload.length * 3) / 4),
+    });
+    this.send(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", image_url: dataUrl },
+            {
+              type: "input_text",
+              text:
+                source === "camera"
+                  ? "Camera viewfinder frame (user allowed)."
+                  : "Shared screen frame (user allowed).",
+            },
+          ],
+        },
+      },
+      true,
+    );
+  }
+
+  notifyVision(source: VisionSource, active: boolean) {
+    if (this.stopped) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.pendingVisionNotices.push({ source, active });
+      return;
+    }
+    this.emitVisionNotice(source, active);
+  }
+
+  sendAttachments(items: ReadyAttachment[], respond = true) {
+    if (this.stopped || !items.length) return;
+    for (const item of items) {
+      this.upsert({
+        id: crypto.randomUUID(),
+        role: "user",
+        text:
+          item.kind === "image"
+            ? `Attached photo: ${item.name}`
+            : item.text.split("\n")[0] || `Attached file: ${item.name}`,
+      });
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this.pendingAttachments.push(item);
+        continue;
+      }
+      this.emitAttachment(item);
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !respond) return;
+    this.send({ type: "response.create" });
+    this.setPhase("thinking");
+  }
+
+  private flushPendingVision() {
+    const queued = this.pendingVisionNotices.splice(0);
+    for (const item of queued) this.emitVisionNotice(item.source, item.active);
+  }
+
+  private emitVisionNotice(source: VisionSource, active: boolean) {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const text = active
+      ? source === "camera"
+        ? "The user allowed camera viewfinder frames. You can see what the camera shows when a frame is attached. Comment only when relevant."
+        : "The user started sharing their screen. You can see the shared screen when a frame is attached. Comment only when relevant."
+      : source === "camera"
+        ? "The user stopped the camera. You can no longer see the viewfinder."
+        : "The user stopped screen sharing. You can no longer see the screen.";
+    this.logger.log("vision.state", { source, active });
+    this.send(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      },
+      true,
+    );
+  }
+
   stop(by: "client" | "error" = "client") {
     if (this.stopped) return;
     this.stopped = true;
+    this.pendingVisionNotices = [];
+    this.pendingAttachments = [];
     this.by = by;
     this.logger.log("stop", { by, phase: this.phase });
     this.flushInWindow(true);
@@ -798,12 +897,51 @@ export class VoiceSession {
     this.setPhase("thinking");
   }
 
+  private emitAttachment(item: ReadyAttachment) {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (item.kind === "image") {
+      const payload = item.dataUrl.includes(",")
+        ? item.dataUrl.slice(item.dataUrl.indexOf(",") + 1)
+        : item.dataUrl;
+      this.logger.log("attachment.image", {
+        name: item.name,
+        bytes: Math.round((payload.length * 3) / 4),
+      });
+      this.send(
+        {
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_image", image_url: item.dataUrl },
+              { type: "input_text", text: `Attached photo: ${item.name}` },
+            ],
+          },
+        },
+        true,
+      );
+      return;
+    }
+    this.logger.log("attachment.file", { name: item.name, chars: item.text.length });
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: item.text }],
+      },
+    });
+  }
+
   private async flushPendingText() {
-    if (!this.pendingText.length) return false;
     const queued = this.pendingText.splice(0);
-    this.logger.log("text.flush", { messages: queued.length });
+    const attachments = this.pendingAttachments.splice(0);
+    if (!queued.length && !attachments.length) return false;
+    this.logger.log("text.flush", { messages: queued.length, attachments: attachments.length });
     this.decaySentForTurn = false;
     await this.refreshDecayState();
+    for (const item of attachments) this.emitAttachment(item);
     for (const text of queued) {
       this.send({
         type: "conversation.item.create",
