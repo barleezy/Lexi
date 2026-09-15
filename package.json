@@ -16,7 +16,8 @@
     "channels:check": "node --experimental-strip-types scripts/check-channels.mjs",
     "apple-music:check": "node --experimental-strip-types scripts/check-apple-music.mjs",
     "music:check": "node --experimental-strip-types scripts/check-background-music.mjs",
-    "watch:check-formats": "node --experimental-strip-types scripts/check-watch-formats.mjs"
+    "watch:check-formats": "node --experimental-strip-types scripts/check-watch-formats.mjs",
+    "vision:check": "node --experimental-strip-types scripts/check-vision.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

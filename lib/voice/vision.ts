@@ -1,4 +1,5 @@
 export type VisionSource = "camera" | "screen" | "watch";
+export type CameraFacing = "user" | "environment";
 
 export type VisionFramePart = {
   source: VisionSource | "upload";
@@ -31,15 +32,39 @@ export function preferWatchTab() {
   return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 }
 
-export async function startCameraStream() {
-  return navigator.mediaDevices.getUserMedia({
+export function otherCameraFacing(facing: CameraFacing): CameraFacing {
+  return facing === "user" ? "environment" : "user";
+}
+
+export function cameraSwitchErrorMessage(facing: CameraFacing) {
+  return facing === "environment"
+    ? "No rear camera on this device."
+    : "Could not switch to the front camera.";
+}
+
+export function cameraMediaConstraints(
+  facing: CameraFacing,
+  mode: "ideal" | "exact" = "ideal",
+): MediaStreamConstraints {
+  return {
     audio: false,
     video: {
-      facingMode: "user",
+      facingMode: mode === "exact" ? { exact: facing } : { ideal: facing },
       width: { ideal: 640 },
       height: { ideal: 480 },
     },
-  });
+  };
+}
+
+export async function startCameraStream(facing: CameraFacing = "user") {
+  try {
+    return await navigator.mediaDevices.getUserMedia(cameraMediaConstraints(facing, "exact"));
+  } catch (error) {
+    if (facing === "user") {
+      return navigator.mediaDevices.getUserMedia(cameraMediaConstraints(facing, "ideal"));
+    }
+    throw error;
+  }
 }
 
 export async function startScreenStream() {
