@@ -46,6 +46,8 @@ When you catch yourself reaching for a familiar explanation — especially one t
 
   const affectAndDecay = `Memories are stored as durable facts (name, pets, location, commitments) tagged with emotional intensity; high-affect facts carry greater weight in recall. Decay the affect tag over time rather than letting it compound — intensity should fade unless actively reinforced. When something gets recalled, show the user the tag and the decay state, not just the fact.
 
+You may and should update durable facts and affect when the user states or corrects them. Call upsert_fact (one key per call) for name, pets, location, or commitments. Call set_affect to change intensity 1–10 on any of those keys, including name. Do not invent facts. Do not call a tool unless the user stated or corrected the information.
+
 DECAY LAW (locked 2026-09-14):
 Bands: low 1–3, medium 4–6, high 7–10.
 new = old × (1 − rate)^days, floor 1
@@ -95,6 +97,56 @@ async function fetchDecayStateForTurn() {
   }
 }
 
+const FACT_TOOL_KEYS = ["name", "pets", "location", "commitments"] as const;
+
+const UPSERT_FACT_TOOL = {
+  type: "function",
+  name: "upsert_fact",
+  description:
+    "Create or update one durable fact the user stated or corrected. One memory_key per call. Do not invent facts. Omit affect to keep the current tag, or default name to 10.",
+  parameters: {
+    type: "object",
+    properties: {
+      memory_key: {
+        type: "string",
+        enum: [...FACT_TOOL_KEYS],
+        description: "Which durable fact to write: name, pets, location, or commitments.",
+      },
+      value: {
+        type: "string",
+        description: "The fact value exactly as the user stated it.",
+      },
+      affect: {
+        type: "number",
+        description: "Optional intensity 1–10. If omitted, name defaults to 10; other keys keep their current tag or start at 5.",
+      },
+    },
+    required: ["memory_key", "value"],
+  },
+};
+
+const SET_AFFECT_TOOL = {
+  type: "function",
+  name: "set_affect",
+  description:
+    "Set the affect/salience tag (1–10) on an existing fact, including name, when the user corrects intensity or emotional weight.",
+  parameters: {
+    type: "object",
+    properties: {
+      memory_key: {
+        type: "string",
+        enum: [...FACT_TOOL_KEYS],
+        description: "Which fact’s affect tag to change.",
+      },
+      affect: {
+        type: "number",
+        description: "New intensity from 1 (low) to 10 (high).",
+      },
+    },
+    required: ["memory_key", "affect"],
+  },
+};
+
 function buildSessionUpdate(memoryInstructions = "", priorChat = "", sessionId = "") {
   return {
     type: "session.update",
@@ -103,8 +155,8 @@ function buildSessionUpdate(memoryInstructions = "", priorChat = "", sessionId =
       instructions: buildInstructions(memoryInstructions, priorChat, sessionId),
       reasoning: { effort: "none" },
       turn_detection: { type: "server_vad" },
-      // Server-side web search; no client tool loop.
-      tools: [{ type: "web_search" }],
+      // web_search is server-side; upsert_fact / set_affect run on the client via POST /api/memory.
+      tools: [{ type: "web_search" }, UPSERT_FACT_TOOL, SET_AFFECT_TOOL],
       audio: {
         input: {
           format: { type: "audio/pcm", rate: TARGET_RATE },
@@ -116,6 +168,31 @@ function buildSessionUpdate(memoryInstructions = "", priorChat = "", sessionId =
       },
     },
   };
+}
+
+function readToolCall(event: Record<string, unknown>) {
+  const item = (event.item ?? {}) as Record<string, unknown>;
+  const name =
+    (typeof event.name === "string" && event.name) ||
+    (typeof item.name === "string" && item.name) ||
+    "";
+  const callId =
+    (typeof event.call_id === "string" && event.call_id) ||
+    (typeof item.call_id === "string" && item.call_id) ||
+    (typeof event.callId === "string" && event.callId) ||
+    "";
+  const rawArgs = event.arguments ?? item.arguments ?? event.input;
+  let args: Record<string, unknown> = {};
+  if (typeof rawArgs === "string") {
+    try {
+      args = JSON.parse(rawArgs) as Record<string, unknown>;
+    } catch {
+      args = {};
+    }
+  } else if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+    args = rawArgs as Record<string, unknown>;
+  }
+  return { name, callId, args };
 }
 
 function newSessionId() {
@@ -151,6 +228,11 @@ export class VoiceSession {
   private priorChat = "";
   private priorTurns: ChatTurn[] = [];
   private memorySessionId: string | null = null;
+  private inflightTools = new Set<string>();
+  private handledTools = new Set<string>();
+  private toolsThisResponse = false;
+  private toolResponseWaiting = false;
+  private factWriteSucceeded = false;
 
   constructor(private handlers: SessionHandlers) {
     this.logger = createVoiceLogger(this.id);
@@ -404,12 +486,18 @@ export class VoiceSession {
         if (this.pendingPersist) this.persistTurn();
         break;
       }
+      case "response.function_call_arguments.done":
+      case "response.function_call":
+        void this.handleFunctionCall(event);
+        break;
       case "response.created":
         this.ignoreOutputAudio = false;
         this.createdT = Date.now();
         this.firstAudio = false;
         this.outDeltas = 0;
         this.outBytes = 0;
+        this.toolsThisResponse = false;
+        this.factWriteSucceeded = false;
         this.player?.resetTurn();
         break;
       case "response.output_audio_transcript.delta":
@@ -448,8 +536,14 @@ export class VoiceSession {
           drain_ms_max: this.player?.drainMsMax ?? 0,
         });
         this.decaySentForTurn = false;
-        this.setPhase("listening");
         const status = typeof response.status === "string" ? response.status : "";
+        if (this.toolsThisResponse && status !== "cancelled" && status !== "failed") {
+          this.toolResponseWaiting = true;
+          this.flushToolBatch();
+        } else {
+          this.toolResponseWaiting = false;
+          this.setPhase("listening");
+        }
         if (status !== "cancelled" && status !== "failed" && status !== "incomplete") {
           this.pendingPersist = true;
           this.persistTurn();
@@ -563,6 +657,107 @@ export class VoiceSession {
         this.pendingPersist = true;
         this.logger.error("memory.write", error);
       });
+  }
+
+  private async handleFunctionCall(event: Record<string, unknown>) {
+    const { name, callId, args } = readToolCall(event);
+    const id = callId || `${name}:${JSON.stringify(args)}`;
+    if (!name || this.handledTools.has(id)) return;
+    if (name === "web_search" || name === "x_search" || name === "file_search" || name === "mcp") {
+      return;
+    }
+    this.handledTools.add(id);
+    this.inflightTools.add(id);
+    this.toolsThisResponse = true;
+    this.logger.log("memory.tool", { name, call_id: id });
+
+    let result: Record<string, unknown> = { error: `Unknown function: ${name}` };
+    try {
+      if (name === "upsert_fact" || name === "set_affect") {
+        const userId = clientUserId();
+        const response = await fetch("/api/memory", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-lexi-user-id": userId,
+            "ngrok-skip-browser-warning": "1",
+          },
+          body: JSON.stringify({
+            tool: name,
+            userId,
+            sessionId: this.currentSessionId(),
+            memory_key: args.memory_key ?? args.memoryKey,
+            value: args.value,
+            affect: args.affect,
+          }),
+        });
+        try {
+          result = (await response.json()) as Record<string, unknown>;
+        } catch {
+          result = { error: `Memory store returned ${response.status}.` };
+        }
+        if (!response.ok) {
+          this.logger.log("memory.tool.fail", { name, call_id: id, status: response.status, error: result.error });
+        } else {
+          const fact = (result.fact ?? null) as Record<string, unknown> | null;
+          if (fact) this.applyStoredFact(fact);
+          this.factWriteSucceeded = true;
+          this.logger.log("memory.tool.ok", {
+            name,
+            call_id: id,
+            memory_key: fact?.memory_key,
+            affect: fact?.affect,
+          });
+        }
+      }
+    } catch (error) {
+      result = { error: error instanceof Error ? error.message : "Fact write failed." };
+      this.logger.error("memory.tool", error, { name, call_id: id });
+    }
+
+    if (!this.stopped && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.send({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId || id,
+          output: JSON.stringify(result),
+        },
+      });
+    }
+    this.inflightTools.delete(id);
+    this.flushToolBatch();
+  }
+
+  private flushToolBatch() {
+    if (this.inflightTools.size > 0 || !this.toolResponseWaiting) return;
+    this.toolResponseWaiting = false;
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.factWriteSucceeded) {
+      this.send(buildSessionUpdate(this.memoryInstructions, this.priorChat, this.currentSessionId() ?? ""));
+    }
+    this.send({ type: "response.create" });
+    this.setPhase("thinking");
+  }
+
+  private applyStoredFact(fact: Record<string, unknown>) {
+    const key = typeof fact.memory_key === "string" ? fact.memory_key : "";
+    const value = typeof fact.value === "string" ? fact.value : "";
+    const affect = Number(fact.affect);
+    if (!key || !value || !Number.isFinite(affect)) return;
+    const rounded = Math.round(affect);
+    const line = `${key}: ${value} (affect ${rounded}/10, decayed from ${rounded})`;
+    const header = "RECALLED FACTS";
+    if (!this.memoryInstructions.includes(header)) {
+      this.memoryInstructions = this.memoryInstructions
+        ? `${this.memoryInstructions}\n\n${header}\n\n${line}`
+        : `${header}\n\n${line}`;
+      return;
+    }
+    const pattern = new RegExp(`^${key}:.*$`, "m");
+    this.memoryInstructions = pattern.test(this.memoryInstructions)
+      ? this.memoryInstructions.replace(pattern, line)
+      : `${this.memoryInstructions}\n${line}`;
   }
 
   private async refreshDecayState() {

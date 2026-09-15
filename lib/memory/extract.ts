@@ -9,6 +9,16 @@ export function isIdentityKey(key: string): key is IdentityKey {
   return (IDENTITY_KEYS as readonly string[]).includes(key);
 }
 
+export function isFactKey(key: string): key is FactKey {
+  return (FACT_KEYS as readonly string[]).includes(key);
+}
+
+export function parseFactKey(raw: unknown): FactKey | null {
+  if (typeof raw !== "string") return null;
+  const key = raw.trim().toLowerCase();
+  return isFactKey(key) ? key : null;
+}
+
 export type ExtractedFact = {
   memoryKey: FactKey;
   value: string;

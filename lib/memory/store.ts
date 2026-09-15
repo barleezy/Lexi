@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { bandFromStart, bumpAffect, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
+import { bandFromStart, bumpAffect, clampAffect, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
 import { extractNameFromBlob, FACT_KEYS, isIdentityKey, type FactKey } from "@/lib/memory/extract";
 import { parseSessionId } from "@/lib/memory/session-id";
 import { PRIOR_TURN_CAP, type ChatTurn } from "@/lib/memory/turns";
@@ -399,6 +399,8 @@ export async function upsertFact(input: {
   affect: number;
   tZero?: Date;
   sessionId?: string | null;
+  /** Tool writes: set the given affect, including on name. Extract path stays pin/bump. */
+  explicitAffect?: boolean;
 }): Promise<FactRow | null> {
   const db = await ensureTable();
   if (!db) return null;
@@ -409,11 +411,13 @@ export async function upsertFact(input: {
     `SELECT id, affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
     [userId, input.memoryKey],
   )) as { id: string; affect: number }[];
-  const affect = isIdentityKey(input.memoryKey)
-    ? 10
-    : existing[0]
-      ? bumpAffect(existing[0].affect, incoming)
-      : incoming;
+  const affect = input.explicitAffect
+    ? incoming
+    : isIdentityKey(input.memoryKey)
+      ? 10
+      : existing[0]
+        ? bumpAffect(existing[0].affect, incoming)
+        : incoming;
   if (existing[0]) {
     const rows = (await db.query(
       `UPDATE facts
@@ -439,6 +443,61 @@ export async function upsertFact(input: {
        updated_at = now()
      RETURNING *`,
     [userId, input.memoryKey, input.value, affect, tZero.toISOString(), sessionId],
+  )) as FactRow[];
+  return rows[0] ?? null;
+}
+
+export async function writeFactFromTool(input: {
+  userId: string;
+  memoryKey: FactKey;
+  value: string;
+  affect?: number;
+  sessionId?: string | null;
+}): Promise<FactRow | null> {
+  const db = await ensureTable();
+  if (!db) return null;
+  const userId = normalizeUserId(input.userId);
+  const existing = (await db.query(
+    `SELECT affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
+    [userId, input.memoryKey],
+  )) as { affect: number }[];
+  const affect =
+    input.affect !== undefined
+      ? clampAffect(input.affect)
+      : isIdentityKey(input.memoryKey)
+        ? 10
+        : existing[0]
+          ? clampAffect(existing[0].affect)
+          : 5;
+  return upsertFact({
+    userId,
+    memoryKey: input.memoryKey,
+    value: input.value,
+    affect,
+    sessionId: input.sessionId,
+    explicitAffect: true,
+  });
+}
+
+export async function setFactAffect(input: {
+  userId: string;
+  memoryKey: FactKey;
+  affect: number;
+  sessionId?: string | null;
+}): Promise<FactRow | null> {
+  const db = await ensureTable();
+  if (!db) return null;
+  const userId = normalizeUserId(input.userId);
+  const sessionId = parseSessionId(input.sessionId);
+  const affect = clampAffect(input.affect);
+  const rows = (await db.query(
+    `UPDATE facts
+     SET affect = $1,
+         session_id = COALESCE($2, session_id),
+         updated_at = now()
+     WHERE lower(user_id) = lower($3) AND memory_key = $4
+     RETURNING *`,
+    [affect, sessionId, userId, input.memoryKey],
   )) as FactRow[];
   return rows[0] ?? null;
 }
