@@ -8,6 +8,7 @@ import {
   type TranscriptRow,
   type VoicePhase,
 } from "@/lib/voice/session";
+import { carMicStatusLine } from "@/lib/voice/car-mic";
 import {
   readVoiceSessionStore,
   writeVoiceSessionStore,
@@ -330,6 +331,7 @@ export function VoiceHome() {
   const [tabHidden, setTabHidden] = useState(false);
   const [windowBlurred, setWindowBlurred] = useState(false);
   const [micResume, setMicResume] = useState(false);
+  const [micRouteNote, setMicRouteNote] = useState<string | null>(null);
   const [generated, setGenerated] = useState<GeneratedMediaItem[]>([]);
   const [channelNames, setChannelNames] = useState<string[]>([]);
   const [locationOn, setLocationOn] = useState(false);
@@ -1025,6 +1027,7 @@ export function VoiceHome() {
     setToyControl(false);
     setToyGrantPending(false);
     setMicResume(false);
+    setMicRouteNote(null);
   }
 
   function stopLocationWatch() {
@@ -1311,6 +1314,7 @@ export function VoiceHome() {
       },
       onMicNeedsGesture: () => setMicResume(true),
       onMicRecovered: () => setMicResume(false),
+      onMicRoute: (route) => setMicRouteNote(carMicStatusLine(route)),
       onError: (message) => {
         setError(message);
         releaseVision(undefined, false);
@@ -1781,11 +1785,13 @@ export function VoiceHome() {
                   </button>
                 ) : (
                   <p className="truncate text-[11px] text-zinc-500">
-                    {gameHasFocus
-                      ? "Still live — talk while Fortnite is up."
-                      : WATCH_UI_ENABLED
-                        ? "Stays live if you switch to Fortnite, change tabs, or open the watch tab."
-                        : "Stays live if you switch to Fortnite or change tabs."}
+                    {micRouteNote
+                      ? micRouteNote
+                      : gameHasFocus
+                        ? "Still live — talk while Fortnite is up."
+                        : WATCH_UI_ENABLED
+                          ? "Stays live if you switch to Fortnite, change tabs, or open the watch tab."
+                          : "Stays live if you switch to Fortnite or change tabs."}
                   </p>
                 )
               ) : null}

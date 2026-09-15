@@ -20,6 +20,7 @@
     "vision:check": "node --experimental-strip-types scripts/check-vision.mjs",
     "latency:check": "node --experimental-strip-types scripts/check-latency.mjs",
     "carplay:check": "node --experimental-strip-types scripts/check-carplay.mjs",
+    "car-mic:check": "node --experimental-strip-types scripts/check-car-mic.mjs",
     "keepalive:check": "node --experimental-strip-types scripts/check-keepalive.mjs",
     "mic:check": "node --experimental-strip-types scripts/check-mic-recovery.mjs"
   },

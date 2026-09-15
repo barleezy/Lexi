@@ -1,5 +1,18 @@
 import { CAPTURE_CHUNK_MS, PLAY_LEAD_SEC } from "@/lib/voice/realtime-latency";
-import { playbackGainForCoexist } from "@/lib/voice/keepalive";
+import { applyPlayAndRecordSession, playbackGainForCoexist } from "@/lib/voice/keepalive";
+import {
+  buildCarMicRoute,
+  describeOpenedTrack,
+  listMediaAudioInputs,
+  listedHasCarInput,
+  listedHasExplicitCarplay,
+  pickPreferredAudioInput,
+  shouldPreferCarMic,
+  shouldReplaceMicForCar,
+  type AudioInputInfo,
+  type CarMicPickReason,
+  type CarMicRoute,
+} from "@/lib/voice/car-mic";
 import {
   LISTEN_SAMPLE_RATE,
   MIC_AUDIO_CONSTRAINTS,
@@ -15,19 +28,211 @@ export {
   isPrimaryMicEnergy,
 } from "@/lib/voice/listen";
 
-export async function openUserMic() {
+export type { CarMicRoute };
+
+export type OpenUserMicOptions = {
+  ios?: boolean;
+  voiceOnly?: boolean;
+};
+
+export type OpenedUserMic = {
+  stream: MediaStream;
+  route: CarMicRoute;
+};
+
+function withDeviceId(
+  base: MediaTrackConstraints,
+  deviceId: string,
+  mode: "ideal" | "exact",
+): MediaTrackConstraints {
+  return {
+    ...base,
+    deviceId: mode === "exact" ? { exact: deviceId } : { ideal: deviceId },
+  };
+}
+
+async function getUserMediaAudio(constraints: MediaTrackConstraints | boolean) {
+  return navigator.mediaDevices.getUserMedia({ audio: constraints });
+}
+
+async function openMicDefault() {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
+    return await getUserMediaAudio(MIC_AUDIO_CONSTRAINTS);
   } catch {
     try {
-      return await navigator.mediaDevices.getUserMedia({
-        audio: MIC_AUDIO_CONSTRAINTS_FALLBACK,
-      });
+      return await getUserMediaAudio(MIC_AUDIO_CONSTRAINTS_FALLBACK);
     } catch {
       // Last try: unconstrained shared mic if a game already holds exclusive settings.
-      return await navigator.mediaDevices.getUserMedia({ audio: true });
+      return await getUserMediaAudio(true);
     }
   }
+}
+
+async function openMicWithDevice(deviceId: string, mode: "ideal" | "exact") {
+  try {
+    return {
+      stream: await getUserMediaAudio(withDeviceId(MIC_AUDIO_CONSTRAINTS, deviceId, mode)),
+      mode,
+    };
+  } catch {
+    try {
+      return {
+        stream: await getUserMediaAudio(withDeviceId(MIC_AUDIO_CONSTRAINTS_FALLBACK, deviceId, mode)),
+        mode,
+      };
+    } catch {
+      if (mode === "exact") throw new Error("overconstrained");
+      return { stream: await openMicDefault(), mode: "default" as const };
+    }
+  }
+}
+
+function stopStream(stream: MediaStream | null | undefined) {
+  stream?.getTracks().forEach((track) => {
+    try {
+      track.stop();
+    } catch {
+      // already stopped
+    }
+  });
+}
+
+export async function openUserMic(opts: OpenUserMicOptions = {}): Promise<OpenedUserMic> {
+  applyPlayAndRecordSession();
+
+  const listedBefore = await listMediaAudioInputs();
+  let preferCar = shouldPreferCarMic({
+    ios: opts.ios,
+    voiceOnly: opts.voiceOnly,
+    carInputPresent: listedHasCarInput(listedBefore),
+    explicitCarplayLabel: listedHasExplicitCarplay(listedBefore),
+  });
+
+  let stream: MediaStream | null = null;
+  let constraint: CarMicRoute["constraint"] = "default";
+  let fallbackReason: CarMicPickReason | undefined;
+
+  const firstPick = pickPreferredAudioInput(listedBefore, { preferCar });
+  try {
+    if (preferCar && firstPick.chosen) {
+      const opened = await openMicWithDevice(firstPick.chosen.deviceId, "ideal");
+      stream = opened.stream;
+      constraint = opened.mode;
+    } else {
+      stream = await openMicDefault();
+    }
+  } catch (error) {
+    stopStream(stream);
+    throw error;
+  }
+  if (!stream) throw new Error("Could not open the microphone.");
+
+  const listedAfter = await listMediaAudioInputs();
+  preferCar = shouldPreferCarMic({
+    ios: opts.ios,
+    voiceOnly: opts.voiceOnly,
+    carInputPresent: listedHasCarInput(listedAfter),
+    explicitCarplayLabel: listedHasExplicitCarplay(listedAfter),
+  });
+  const pickAfter = pickPreferredAudioInput(listedAfter, { preferCar });
+  let current = describeOpenedTrack(stream.getAudioTracks()[0], listedAfter);
+
+  if (shouldReplaceMicForCar({
+    preferCar,
+    currentKind: current.kind,
+    currentDeviceId: current.deviceId,
+    carInput: pickAfter.chosen,
+  }) && pickAfter.chosen) {
+    const previous = stream;
+    let candidate = previous;
+    try {
+      const opened = await openMicWithDevice(pickAfter.chosen.deviceId, "ideal");
+      candidate = opened.stream;
+      constraint = opened.mode;
+      current = describeOpenedTrack(candidate.getAudioTracks()[0], listedAfter);
+      if (
+        shouldReplaceMicForCar({
+          preferCar,
+          currentKind: current.kind,
+          currentDeviceId: current.deviceId,
+          carInput: pickAfter.chosen,
+        })
+      ) {
+        try {
+          const exact = await openMicWithDevice(pickAfter.chosen.deviceId, "exact");
+          if (candidate !== previous) stopStream(candidate);
+          candidate = exact.stream;
+          constraint = exact.mode;
+        } catch {
+          fallbackReason = "overconstrained";
+        }
+      }
+      current = describeOpenedTrack(candidate.getAudioTracks()[0], listedAfter);
+      if (candidate !== previous) {
+        stopStream(previous);
+        stream = candidate;
+      }
+    } catch {
+      fallbackReason = "overconstrained";
+      stream = previous;
+      current = describeOpenedTrack(stream.getAudioTracks()[0], listedAfter);
+    }
+  }
+
+  const pickReason = preferCar
+    ? pickAfter.reason
+    : ("os-default" as CarMicPickReason);
+  const route = buildCarMicRoute({
+    preferCar,
+    current,
+    pickReason,
+    ios: opts.ios,
+    constraint,
+    listed: listedAfter.length,
+    fallbackReason,
+  });
+
+  return { stream, route };
+}
+
+export function inspectLiveMicRoute(
+  track: MediaStreamTrack | null | undefined,
+  inputs: AudioInputInfo[],
+  opts: OpenUserMicOptions & { pageHidden?: boolean } = {},
+) {
+  const current = describeOpenedTrack(track, inputs);
+  const preferCar = shouldPreferCarMic({
+    ios: opts.ios,
+    voiceOnly: opts.voiceOnly,
+    carInputPresent: listedHasCarInput(inputs),
+    explicitCarplayLabel: listedHasExplicitCarplay(inputs),
+  });
+  const pick = pickPreferredAudioInput(inputs, { preferCar });
+  const reason: CarMicPickReason =
+    current.kind === "car"
+      ? "live-track-already-car"
+      : preferCar && opts.pageHidden
+        ? "hidden-cannot-switch"
+        : pick.reason;
+  return {
+    current,
+    preferCar,
+    pick,
+    shouldReplace: shouldReplaceMicForCar({
+      preferCar,
+      currentKind: current.kind,
+      currentDeviceId: current.deviceId,
+      carInput: pick.chosen,
+    }),
+    route: buildCarMicRoute({
+      preferCar,
+      current,
+      pickReason: pick.reason,
+      ios: opts.ios,
+      listed: inputs.length,
+      fallbackReason: reason === pick.reason ? undefined : reason,
+    }),
+  };
 }
 
 export function applyMicTrackHints(track: MediaStreamTrack) {

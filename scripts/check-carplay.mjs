@@ -13,6 +13,7 @@ import {
 } from "../lib/voice/realtime-latency.ts";
 import { VISION_INTERVAL_MS, VISION_INTERVAL_VOICE_ONLY_MS } from "../lib/voice/vision.ts";
 import { LISTEN_SAMPLE_RATE } from "../lib/voice/listen.ts";
+import { shouldPreferCarMic } from "../lib/voice/car-mic.ts";
 
 function expect(condition, label) {
   if (!condition) throw new Error(label);
@@ -62,5 +63,11 @@ expect(
 expect(shouldSendLiveVisionFrames({ pageHidden: false, source: "camera" }) === true, "visible camera still sends");
 expect(shouldClientGateMicToSilence(true) === false, "do not RMS-gate HFP/CarPlay");
 expect(shouldClientGateMicToSilence(false) === true, "gate TV/game bleed when not voice-only");
+
+expect(
+  shouldPreferCarMic({ voiceOnly: isInCarStyleRoute({ pageHidden: true, ios: true }), ios: true }) === true,
+  "hidden iOS prefers the car / HFP input",
+);
+expect(shouldPreferCarMic({ ios: true }) === false, "visible iOS without a car device stays default");
 
 console.log("carplay ok");
