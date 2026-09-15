@@ -659,7 +659,7 @@ export function VoiceHome() {
                     {videoTitle || "Watch together"}
                   </p>
                   <p className="text-[11px] text-zinc-500">
-                    Headphones recommended — video audio and Lexi mix.
+                    Headphones recommended — Lexi hears your mic only, not the video.
                   </p>
                 </div>
                 <button

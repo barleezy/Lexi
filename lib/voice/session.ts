@@ -2,11 +2,15 @@ import {
   TARGET_RATE,
   PcmPlayer,
   addCaptureWorklet,
+  applyMicTrackHints,
   base64ToBytes,
   createAudioContext,
   floatToPcm16,
+  isPrimaryMicEnergy,
+  openUserMic,
   pcm16ToBase64,
   resample,
+  updateMicNoiseFloor,
 } from "@/lib/voice/audio";
 import { scoreSalience } from "@/lib/memory/decay";
 import { FACT_KEY_LIST, FACT_KEYS } from "@/lib/memory/extract";
@@ -80,9 +84,13 @@ VISION
 
 When a camera or shared-screen frame is attached, you can see it. Comment on what is visible only when it is relevant to what the user is saying or asking. Do not narrate every frame. If no frame is attached, you cannot see the screen or camera. When the user attaches a photo, you can see it. When they attach a file, you receive its text or a short note with the file name, type, and size. Talk about those attachments when they are present.
 
+VOICE
+
+Only the live microphone is the user (Ian). Television, shared-tab or watch-together soundtrack, speakers, and other people in the room are not him. Do not treat those voices as a user turn. Do not answer them, continue their lines, or echo TV or video dialogue. If a transcript is clearly media or someone else, ignore it and wait for Ian on the mic.
+
 WATCH TOGETHER
 
-The user can play a video in the app while they talk to you. Keep the conversation going while it plays. Never ask them to pause so you can listen, and never treat talking as a reason to stop the video. You do not hear the video soundtrack — only they do. You can see what is on screen only by calling get_video_context. Call that tool when they ask what is happening, who or what is on screen, or anything that needs the current picture. Do not call it on every turn. If no video is loaded, say you cannot see a video.`;
+The user can play a video in the app while they talk to you. Keep the conversation going while it plays. Never ask them to pause so you can listen, and never treat talking as a reason to stop the video. You do not hear the video soundtrack — only they do. On-screen voices are not the user. You can see what is on screen only by calling get_video_context. Call that tool when they ask what is happening, who or what is on screen, or anything that needs the current picture. Do not call it on every turn. If no video is loaded, say you cannot see a video.`;
   const withFacts = memories ? `${base}\n\n${memories}` : base;
   const withChat = chat
     ? `${withFacts}\n\nPrior chat is context only — do not recap or repeat it verbatim unless asked.\n\n${chat}`
@@ -251,7 +259,8 @@ export class VoiceSession {
   private firstAudio = false;
   private outDeltas = 0;
   private outBytes = 0;
-  private inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0 };
+  private inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0, gated: 0 };
+  private micNoiseFloor = 0.02;
   private by = "client";
   private decaySentForTurn = false;
   private ignoreOutputAudio = false;
@@ -348,20 +357,14 @@ export class VoiceSession {
 
     const micStarted = Date.now();
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: { ideal: TARGET_RATE },
-          channelCount: 1,
-        },
-      });
+      this.stream = await openUserMic();
       const track = this.stream.getAudioTracks()[0];
+      if (track) applyMicTrackHints(track);
       const settings = track?.getSettings() ?? {};
       this.logger.log("mic.ok", {
         ms: Date.now() - micStarted,
         label: track?.label ?? "",
+        content_hint: track && "contentHint" in track ? track.contentHint : undefined,
         settings,
       });
     } catch (error) {
@@ -372,6 +375,7 @@ export class VoiceSession {
 
     await addCaptureWorklet(ctx);
     this.player = new PcmPlayer(ctx, TARGET_RATE);
+    // User mic only. Watch-together and display/tab audio play locally and are never mixed here.
     this.source = ctx.createMediaStreamSource(this.stream);
     this.worklet = new AudioWorkletNode(ctx, "pcm-capture");
     this.worklet.port.onmessage = (event) => {
@@ -540,7 +544,7 @@ export class VoiceSession {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const title = meta?.title?.trim();
     const text = active
-      ? `The user started a watch-together video${title ? ` (${title})` : ""}. It keeps playing while you talk. You cannot hear the soundtrack. Call get_video_context when you need to see what is on screen.`
+      ? `The user started a watch-together video${title ? ` (${title})` : ""}. It keeps playing while you talk. You cannot hear the soundtrack, and on-screen voices are not the user. Call get_video_context when you need to see what is on screen.`
       : "The user closed the watch-together video. You can no longer see frames from it.";
     this.logger.log("video.state", { active, title: title || undefined, source: meta?.source ?? undefined });
     this.send(
@@ -561,7 +565,7 @@ export class VoiceSession {
     const text = active
       ? source === "camera"
         ? "The user allowed camera viewfinder frames. You can see what the camera shows when a frame is attached. Comment only when relevant."
-        : "The user started sharing their screen. You can see the shared screen when a frame is attached. Comment only when relevant."
+        : "The user started sharing their screen. You can see the shared screen when a frame is attached. Voices or audio from the shared screen, TV, or other media are not the user. Comment only when relevant."
       : source === "camera"
         ? "The user stopped the camera. You can no longer see the viewfinder."
         : "The user stopped screen sharing. You can no longer see the screen.";
@@ -609,8 +613,11 @@ export class VoiceSession {
     const micRate = this.stream?.getAudioTracks()[0]?.getSettings().sampleRate ?? this.ctx.sampleRate;
     const resampled = resample(frame, micRate, TARGET_RATE);
     const pcm = floatToPcm16(resampled);
-    const audio = pcm16ToBase64(pcm.bytes);
-    this.noteIn(pcm.bytes.length, pcm.rms);
+    this.micNoiseFloor = updateMicNoiseFloor(this.micNoiseFloor, pcm.rms);
+    const primary = isPrimaryMicEnergy(pcm.rms, this.micNoiseFloor);
+    // Low / non-primary energy is sent as silence so server VAD does not treat TV bleed as speech.
+    const audio = pcm16ToBase64(primary ? pcm.bytes : new Uint8Array(pcm.bytes.length));
+    this.noteIn(pcm.bytes.length, pcm.rms, !primary);
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       if (this.pending.length < PREOPEN_CAP) this.pending.push(audio);
@@ -1132,13 +1139,14 @@ export class VoiceSession {
     this.ws.send(JSON.stringify(stamped));
   }
 
-  private noteIn(bytes: number, rms: number) {
+  private noteIn(bytes: number, rms: number, gated = false) {
     const now = Date.now();
     if (!this.inWindow.started) this.inWindow.started = now;
     this.inWindow.chunks += 1;
     this.inWindow.bytes += bytes;
     this.inWindow.rmsSum += rms;
     this.inWindow.rmsMax = Math.max(this.inWindow.rmsMax, rms);
+    if (gated) this.inWindow.gated += 1;
     if (now - this.inWindow.started >= 2000) this.flushInWindow();
   }
 
@@ -1149,11 +1157,13 @@ export class VoiceSession {
       bytes: this.inWindow.bytes,
       rms_max: this.inWindow.rmsMax,
       rms_avg: this.inWindow.chunks ? this.inWindow.rmsSum / this.inWindow.chunks : 0,
+      gated: this.inWindow.gated,
+      noise_floor: this.micNoiseFloor,
       pending: this.pending.length,
       mic_state: this.stream?.getAudioTracks()[0]?.readyState,
       phase: this.phase,
     });
-    this.inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0 };
+    this.inWindow = { started: 0, chunks: 0, bytes: 0, rmsSum: 0, rmsMax: 0, gated: 0 };
   }
 
   private seedPriorTranscripts() {

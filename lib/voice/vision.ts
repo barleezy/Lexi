@@ -23,10 +23,16 @@ export async function startCameraStream() {
 }
 
 export async function startScreenStream() {
-  return navigator.mediaDevices.getDisplayMedia({
+  const stream = await navigator.mediaDevices.getDisplayMedia({
     audio: false,
     video: { frameRate: { ideal: 1, max: 5 } },
   });
+  // Display / tab audio must never reach the realtime user-speech buffer.
+  for (const track of stream.getAudioTracks()) {
+    track.stop();
+    stream.removeTrack(track);
+  }
+  return stream;
 }
 
 export function stopMediaStream(stream: MediaStream | null | undefined) {

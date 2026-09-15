@@ -1,5 +1,67 @@
 export const TARGET_RATE = 48_000;
 
+/** Absolute floor: hush / room hiss is not user speech. */
+export const MIC_RMS_ABS_FLOOR = 0.012;
+/** Frames below this multiple of the slow noise floor are treated as non-primary. */
+export const MIC_RMS_NOISE_RATIO = 2.6;
+
+/**
+ * User-mic constraints only. Display / tab / watch-together audio must never use these
+ * or be mixed into the same MediaStream that feeds input_audio_buffer.append.
+ */
+export const MIC_AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  voiceIsolation: true,
+  sampleRate: { ideal: TARGET_RATE },
+  channelCount: 1,
+  googEchoCancellation: true,
+  googAutoGainControl: true,
+  googNoiseSuppression: true,
+  googHighpassFilter: true,
+  googTypingNoiseDetection: true,
+  googNoiseReduction: true,
+} as MediaTrackConstraints;
+
+export const MIC_AUDIO_CONSTRAINTS_FALLBACK: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  sampleRate: { ideal: TARGET_RATE },
+  channelCount: 1,
+};
+
+export async function openUserMic() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
+  } catch {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: MIC_AUDIO_CONSTRAINTS_FALLBACK,
+    });
+  }
+}
+
+export function applyMicTrackHints(track: MediaStreamTrack) {
+  try {
+    track.contentHint = "speech";
+  } catch {
+    // contentHint is best-effort
+  }
+}
+
+export function updateMicNoiseFloor(floor: number, rms: number) {
+  // Adapt only on hush / low room energy so speech does not raise the floor.
+  if (rms >= 0.045) return floor;
+  const alpha = rms < floor ? 0.2 : 0.06;
+  const next = floor + (rms - floor) * alpha;
+  return Math.min(0.025, Math.max(0.005, next));
+}
+
+export function isPrimaryMicEnergy(rms: number, noiseFloor: number) {
+  return rms >= Math.max(MIC_RMS_ABS_FLOOR, noiseFloor * MIC_RMS_NOISE_RATIO);
+}
+
 const WORKLET = `
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
