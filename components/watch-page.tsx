@@ -38,6 +38,7 @@ import {
   openWatchChannel,
   videoElementHasAudio,
   type WatchChannelMessage,
+  WATCH_UI_ENABLED,
 } from "@/lib/voice/watch-channel";
 
 type WatchSource =
@@ -508,7 +509,7 @@ export function WatchPage() {
     });
     channelRef.current = channel;
     channel?.postMessage({ type: "hello" });
-    const raw = new URLSearchParams(window.location.search).get("url");
+    const raw = WATCH_UI_ENABLED ? new URLSearchParams(window.location.search).get("url") : null;
     if (raw) {
       setDraft(raw);
       loadUrl(raw);
@@ -598,7 +599,9 @@ export function WatchPage() {
   return (
     <div className="flex min-h-dvh flex-col bg-black font-sans text-white">
       <header className="flex items-center justify-between gap-3 px-4 py-3">
-        <p className="text-sm font-medium uppercase tracking-[0.22em]">Watch</p>
+        <p className="text-sm font-medium uppercase tracking-[0.22em]">
+          {WATCH_UI_ENABLED ? "Watch" : "Lexi"}
+        </p>
         <a
           href="/"
           className="rounded-full px-3 py-1 text-xs text-zinc-400 hover:text-white"
@@ -655,15 +658,20 @@ export function WatchPage() {
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-            <p className="text-lg font-medium">Play a video for Lexi</p>
-            <p className="mt-2 max-w-sm text-sm text-zinc-400">
-              Paste a direct file or stream URL (mp4, webm, m3u8, get_file) — it plays in this feed,
-              not an embed. Upload a file, or a page URL if we can open it. Keep talktolexi.app open
-              in the other tab. She sees stills; soundtrack stays here.
-            </p>
+            {WATCH_UI_ENABLED ? (
+              <>
+                <p className="text-lg font-medium">Play a video for Lexi</p>
+                <p className="mt-2 max-w-sm text-sm text-zinc-400">
+                  Paste a direct file or stream URL (mp4, webm, m3u8, get_file) — it plays in this feed,
+                  not an embed. Upload a file, or a page URL if we can open it. Keep talktolexi.app open
+                  in the other tab. She sees stills; soundtrack stays here.
+                </p>
+              </>
+            ) : null}
           </div>
         )}
         <div className="px-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] pt-4">
+          {WATCH_UI_ENABLED ? (
           <form
             className="mx-auto flex w-full max-w-xl items-center gap-2 rounded-full border border-zinc-600 bg-zinc-950 px-2 py-1.5"
             onSubmit={onSubmit}
@@ -709,7 +717,8 @@ export function WatchPage() {
               Load
             </button>
           </form>
-          {hasPlayer ? (
+          ) : null}
+          {WATCH_UI_ENABLED && hasPlayer ? (
             <div className="mx-auto mt-3 flex max-w-xl items-center justify-between gap-3 px-1">
               <p className="min-w-0 truncate text-xs text-zinc-400">
                 {title || "Watch together"}
@@ -724,7 +733,7 @@ export function WatchPage() {
               </button>
             </div>
           ) : null}
-          {hint ? <p className="mx-auto mt-2 max-w-xl px-1 text-xs text-zinc-300">{hint}</p> : null}
+          {WATCH_UI_ENABLED && hint ? <p className="mx-auto mt-2 max-w-xl px-1 text-xs text-zinc-300">{hint}</p> : null}
         </div>
       </main>
     </div>

@@ -2,6 +2,9 @@ import type { VideoSourceKind } from "@/lib/voice/video";
 
 export const WATCH_CHANNEL_NAME = "lexi-watch";
 
+/** Flip to true to show the watch tab button and media URL load bar again. */
+export const WATCH_UI_ENABLED = false;
+
 export type WatchChannelMessage =
   | { type: "hello" }
   | { type: "ready" }

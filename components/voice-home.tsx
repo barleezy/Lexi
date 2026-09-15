@@ -47,7 +47,7 @@ import {
   VisionFrameBatcher,
   type VisionSource,
 } from "@/lib/voice/vision";
-import { openWatchChannel, watchTabHref } from "@/lib/voice/watch-channel";
+import { openWatchChannel, watchTabHref, WATCH_UI_ENABLED } from "@/lib/voice/watch-channel";
 import {
   GEO_WATCH_OPTIONS,
   locationFromPosition,
@@ -1077,7 +1077,7 @@ export function VoiceHome() {
       <header className="relative z-10 flex items-center justify-between px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
       </header>
-      <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${videoSrc || watchRemote ? "justify-end pb-2" : "justify-center"}`}>
+      <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
@@ -1096,7 +1096,7 @@ export function VoiceHome() {
       </main>
       <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-2">
-          {watchRemote ? (
+          {WATCH_UI_ENABLED && watchRemote ? (
             <div className="rounded-2xl border border-zinc-400 bg-background px-3 py-2 shadow-md dark:border-zinc-500">
               <p className="truncate text-xs font-medium text-foreground">
                 Watching from other tab
@@ -1110,7 +1110,7 @@ export function VoiceHome() {
               </p>
             </div>
           ) : null}
-          {videoSrc ? (
+          {WATCH_UI_ENABLED && videoSrc ? (
             <div className="overflow-hidden rounded-2xl border border-zinc-400 bg-background shadow-md dark:border-zinc-500">
               <video
                 ref={watchVideoRef}
@@ -1172,7 +1172,7 @@ export function VoiceHome() {
                 </button>
               </div>
             </div>
-          ) : (
+          ) : WATCH_UI_ENABLED ? (
             <>
               <a
                 href={watchTabHref(videoDraft)}
@@ -1230,8 +1230,8 @@ export function VoiceHome() {
                 </button>
               </form>
             </>
-          )}
-          {videoHint ? (
+          ) : null}
+          {WATCH_UI_ENABLED && videoHint ? (
             <p className="px-1 text-xs text-zinc-500">{videoHint}</p>
           ) : null}
           <div className="flex items-end justify-between gap-3">
@@ -1395,7 +1395,9 @@ export function VoiceHome() {
                   <p className="truncate text-[11px] text-zinc-500">
                     {gameHasFocus
                       ? "Still live — talk while Fortnite is up."
-                      : "Stays live if you switch to Fortnite, change tabs, or open the watch tab."}
+                      : WATCH_UI_ENABLED
+                        ? "Stays live if you switch to Fortnite, change tabs, or open the watch tab."
+                        : "Stays live if you switch to Fortnite or change tabs."}
                   </p>
                 )
               ) : null}
