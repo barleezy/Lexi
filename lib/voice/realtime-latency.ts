@@ -8,16 +8,19 @@
  */
 
 export const VAD_TYPE = "server_vad" as const;
-/** Default sensitivity. Higher misses soft speech (worse listening). */
-export const VAD_THRESHOLD = 0.5;
+/**
+ * Speech-probability gate. 0.5 (xAI default) drops quiet / mumbled words.
+ * 0.4 still commits soft speech without stealing the turn (silence stays 400ms).
+ */
+export const VAD_THRESHOLD = 0.4;
 /**
  * End-of-speech silence before she takes the turn.
  * 400ms is a finished-sentence pause, not a mid-clause breath (~200–350ms).
  * Tighter (200–280) would clip Ian mid-thought. We do not go below this.
  */
 export const VAD_SILENCE_DURATION_MS = 400;
-/** Keep first consonants. Lower padding clips word onsets. */
-export const VAD_PREFIX_PADDING_MS = 300;
+/** Keep first consonants, including mumbled onsets. Do not lower. */
+export const VAD_PREFIX_PADDING_MS = 350;
 
 /** Worklet flush. 100ms was extra hold before the socket; 40ms stays WS-safe. */
 export const CAPTURE_CHUNK_MS = 40;

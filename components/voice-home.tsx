@@ -4,6 +4,7 @@ import Image from "next/image";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   VoiceSession,
+  type GeneratedMediaItem,
   type TranscriptRow,
   type VoicePhase,
 } from "@/lib/voice/session";
@@ -255,7 +256,12 @@ export function VoiceHome() {
   const [phoneWatch, setPhoneWatch] = useState(false);
   const [toyControl, setToyControl] = useState(false);
   const [tabHidden, setTabHidden] = useState(false);
+  const [windowBlurred, setWindowBlurred] = useState(false);
   const [micResume, setMicResume] = useState(false);
+  const [generated, setGenerated] = useState<GeneratedMediaItem[]>([]);
+  const [channelNames, setChannelNames] = useState<string[]>([]);
+  const videoPolls = useRef(new Set<string>());
+  const generatedStills = useRef(new Set<string>());
   const videoSrcRef = useRef<string | null>(null);
   const watchTabActiveRef = useRef(false);
   const watchPlayingRef = useRef(false);
@@ -282,6 +288,15 @@ export function VoiceHome() {
       setRows(persisted.rows);
       setCaption(persisted.caption);
     }
+    void fetch("/api/channels", { headers: { "ngrok-skip-browser-warning": "1" } })
+      .then((response) => response.json())
+      .then((body: { platforms?: Record<string, boolean> }) => {
+        const platforms = body.platforms ?? {};
+        setChannelNames(
+          (["discord", "telegram", "sms", "email"] as const).filter((name) => platforms[name]),
+        );
+      })
+      .catch(() => {});
     setCanShare(canShareScreen() && !preferWatchTab());
     setPhoneWatch(preferWatchTab());
     visionBatcher.current.setFlush((parts) => {
@@ -349,12 +364,18 @@ export function VoiceHome() {
     });
     channel?.postMessage({ type: "ready" });
     const syncHidden = () => setTabHidden(document.visibilityState === "hidden");
+    const onBlur = () => setWindowBlurred(true);
+    const onFocus = () => setWindowBlurred(false);
     document.addEventListener("visibilitychange", syncHidden);
     window.addEventListener("pageshow", syncHidden);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
     syncHidden();
     return () => {
       document.removeEventListener("visibilitychange", syncHidden);
       window.removeEventListener("pageshow", syncHidden);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
       cameraSlot.current.stopLoop?.();
       screenSlot.current.stopLoop?.();
       stopMediaStream(cameraSlot.current.stream);
@@ -689,6 +710,78 @@ export function VoiceHome() {
     if (videoFileInputRef.current) videoFileInputRef.current.value = "";
   }
 
+  function upsertGenerated(item: GeneratedMediaItem) {
+    setGenerated((current) => {
+      const without = current.filter((row) => row.id !== item.id);
+      return [item, ...without].slice(0, 6);
+    });
+    if (item.kind === "video" && item.status === "pending" && item.requestId) {
+      pollGeneratedVideo(item);
+    }
+  }
+
+  function pollGeneratedVideo(item: GeneratedMediaItem) {
+    const requestId = item.requestId;
+    if (!requestId || videoPolls.current.has(requestId)) return;
+    videoPolls.current.add(requestId);
+    void (async () => {
+      try {
+        for (let attempt = 0; attempt < 90; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          const response = await fetch(`/api/generate/video/${encodeURIComponent(requestId)}`, {
+            headers: { "ngrok-skip-browser-warning": "1" },
+          });
+          let body: {
+            status?: string;
+            url?: string;
+            error?: string;
+            durationSec?: number;
+            model?: string;
+          } = {};
+          try {
+            body = (await response.json()) as typeof body;
+          } catch {
+            body = {};
+          }
+          if (body.status === "pending") continue;
+          const next: GeneratedMediaItem = {
+            ...item,
+            status: body.status === "done" && body.url ? "done" : "failed",
+            url: typeof body.url === "string" ? body.url : undefined,
+            error:
+              body.status === "done"
+                ? undefined
+                : typeof body.error === "string"
+                  ? body.error
+                  : "Video generation failed.",
+            durationSec: typeof body.durationSec === "number" ? body.durationSec : item.durationSec,
+            model: typeof body.model === "string" ? body.model : item.model,
+          };
+          setGenerated((current) => {
+            const without = current.filter((row) => row.id !== item.id && row.id !== requestId);
+            return [next, ...without].slice(0, 6);
+          });
+          if (next.status === "done" || next.status === "failed") {
+            sessionRef.current?.notifyGeneratedReady(next);
+          }
+          return;
+        }
+        const timedOut: GeneratedMediaItem = {
+          ...item,
+          status: "failed",
+          error: "Video is still generating. Try asking again in a moment.",
+        };
+        setGenerated((current) => {
+          const without = current.filter((row) => row.id !== item.id);
+          return [timedOut, ...without].slice(0, 6);
+        });
+        sessionRef.current?.notifyGeneratedReady(timedOut);
+      } finally {
+        videoPolls.current.delete(requestId);
+      }
+    })();
+  }
+
   function attach(session: VoiceSession) {
     sessionRef.current = session;
     setError(null);
@@ -710,6 +803,7 @@ export function VoiceHome() {
       onCaption: commitCaption,
       onSessionId: setSessionId,
       onToyControl: setToyControl,
+      onGeneratedMedia: upsertGenerated,
       onMicNeedsGesture: () => setMicResume(true),
       onMicRecovered: () => setMicResume(false),
       onError: (message) => {
@@ -781,6 +875,7 @@ export function VoiceHome() {
   }
 
   const live = phase !== "idle";
+  const gameHasFocus = tabHidden || windowBlurred;
   const hasUnsent = chips.some((chip) => !chip.sent);
   const hasText = draft.trim().length > 0 || hasUnsent;
   const latestText =
@@ -793,7 +888,7 @@ export function VoiceHome() {
   const status = error
     ? error
     : live
-      ? `${tabHidden ? "Still live in the background. " : ""}${
+      ? `${gameHasFocus ? "Still live while Fortnite or another app is up. " : ""}${
           sessionId ? `${HINTS[phase]} · session ${sessionId}` : HINTS[phase]
         }`
       : HINTS.idle;
@@ -835,6 +930,11 @@ export function VoiceHome() {
           /ˈlek.si/
         </p>
         <h1 className="text-6xl font-semibold tracking-tight sm:text-7xl">Lexi</h1>
+        {channelNames.length ? (
+          <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+            Also on {channelNames.join(" · ")}
+          </p>
+        ) : null}
         <p
           data-stream-tick={streamTick}
           className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
@@ -1063,6 +1163,58 @@ export function VoiceHome() {
           {attachError ? (
             <p className="px-1 text-xs text-red-600 dark:text-red-400">{attachError}</p>
           ) : null}
+          {generated.length ? (
+            <ul className="flex flex-col gap-2">
+              {generated.map((item) => (
+                <li
+                  key={item.id}
+                  className="overflow-hidden rounded-2xl border border-zinc-400 bg-background shadow-md dark:border-zinc-500"
+                >
+                  {item.kind === "image" && (item.dataUrl || item.url) ? (
+                    <img
+                      src={item.dataUrl || item.url}
+                      alt={item.prompt.slice(0, 120)}
+                      className="max-h-80 w-full object-contain bg-black"
+                    />
+                  ) : null}
+                  {item.kind === "video" && item.status === "done" && item.url ? (
+                    <video
+                      src={item.url}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="aspect-video w-full bg-black"
+                      aria-label={item.prompt.slice(0, 120)}
+                      onLoadedData={(event) => {
+                        if (generatedStills.current.has(item.id)) return;
+                        const video = event.currentTarget;
+                        if (!video.videoWidth) return;
+                        const shot = captureVideoShot(video);
+                        if (!shot?.dataUrl) return;
+                        generatedStills.current.add(item.id);
+                        sessionRef.current?.sendGeneratedStill(
+                          shot.dataUrl,
+                          "You generated this video. This is a still from the first frame. Look at it.",
+                        );
+                      }}
+                    />
+                  ) : null}
+                  <div className="px-3 py-2">
+                    <p className="truncate text-xs text-foreground">{item.prompt}</p>
+                    <p className="text-[11px] text-zinc-500">
+                      {item.status === "pending"
+                        ? `Making a ${item.kind}…`
+                        : item.status === "failed"
+                          ? item.error || `${item.kind} failed.`
+                          : item.kind === "video"
+                            ? "Generated video"
+                            : "Generated photo"}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {live ? (
             <div className="flex items-center justify-between gap-2 px-1">
               {micResume ? (
@@ -1075,9 +1227,9 @@ export function VoiceHome() {
                 </button>
               ) : (
                 <p className="text-[11px] text-zinc-500">
-                  {tabHidden
-                    ? "Still live in the background."
-                    : "Stays live if you switch tabs or open the watch tab."}
+                  {gameHasFocus
+                    ? "Still live — talk while Fortnite is up."
+                    : "Stays live if you switch to Fortnite, change tabs, or open the watch tab."}
                 </p>
               )}
               <button

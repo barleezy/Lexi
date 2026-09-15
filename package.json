@@ -11,6 +11,9 @@
     "memory:check-decay": "node --experimental-strip-types scripts/check-decay.mjs",
     "memory:check-extract": "node --experimental-strip-types scripts/check-extract.mjs",
     "video:check-context": "node --experimental-strip-types scripts/check-video-context.mjs",
+    "fortnite:check": "node --experimental-strip-types scripts/check-fortnite.mjs",
+    "generate:check": "node --experimental-strip-types scripts/check-generate.mjs",
+    "channels:check": "node --experimental-strip-types scripts/check-channels.mjs",
     "watch:check-formats": "node --experimental-strip-types scripts/check-watch-formats.mjs"
   },
   "dependencies": {

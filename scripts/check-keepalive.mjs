@@ -1,6 +1,8 @@
 import {
   AUDIO_SESSION_INTERRUPT_EVENTS,
   BACKGROUND_KEEP_EVENTS,
+  EXCLUSIVE_MIC_ERROR_NAMES,
+  GAME_FOREGROUND_EVENTS,
   IOS_KEEPALIVE_AMP,
   IOS_KEEPALIVE_HZ,
   IOS_KEEPALIVE_INTERVAL_MS,
@@ -8,12 +10,21 @@ import {
   KEEPALIVE_SILENCE_MS,
   MEDIA_SESSION_TITLE,
   PLAY_AND_RECORD_TYPES,
+  PLAYBACK_DUCK_GAIN,
+  PLAYBACK_FULL_GAIN,
   buildKeepAliveWavDataUrl,
+  isAudioContextInterrupted,
   isAudioSessionInterrupted,
+  isExclusiveMicError,
+  isGameLikeForeground,
   isIOSChrome,
   isIOSWebKit,
+  isVoiceAudioInterrupted,
+  playbackGainForCoexist,
   shouldDisconnectForLifecycle,
+  shouldDuckPlaybackForCoexist,
   shouldPauseKeepAliveOnHide,
+  shouldReclaimAfterExclusiveRelease,
   shouldReclaimForLifecycle,
 } from "../lib/voice/keepalive.ts";
 
@@ -67,6 +78,36 @@ expect(shouldReclaimForLifecycle({ type: "statechange", audioSessionState: "inte
 expect(shouldReclaimForLifecycle({ type: "statechange", audioSessionState: "active" }) === true, "active reclaims");
 expect(isAudioSessionInterrupted("interrupted") === true, "interrupted state");
 expect(isAudioSessionInterrupted("active") === false, "active is not interrupted");
+expect(isAudioContextInterrupted("interrupted") === true, "AudioContext interrupted");
+expect(isAudioContextInterrupted("running") === false, "running is not interrupted");
+expect(isVoiceAudioInterrupted({ audioContextState: "interrupted" }) === true, "voice interrupted by ctx");
+expect(isVoiceAudioInterrupted({ audioSessionState: "interrupted" }) === true, "voice interrupted by session");
+expect(isVoiceAudioInterrupted({ audioContextState: "running" }) === false, "running voice is not interrupted");
+
+expect(GAME_FOREGROUND_EVENTS.includes("blur"), "game foreground includes blur");
+expect(GAME_FOREGROUND_EVENTS.includes("audiocontextinterrupted"), "game foreground includes ctx interrupt");
+expect(isGameLikeForeground({ type: "blur" }) === true, "blur is game-like");
+expect(isGameLikeForeground({ pageHidden: true }) === true, "hidden tab is game-like");
+expect(isGameLikeForeground({ blurred: true }) === true, "blurred window is game-like");
+expect(isGameLikeForeground({ audioContextState: "interrupted" }) === true, "stolen ctx is game-like");
+expect(isGameLikeForeground({ type: "visibilitychange", visibilityState: "hidden" }) === true, "hidden visibility is game-like");
+expect(isGameLikeForeground({ type: "visibilitychange", visibilityState: "visible" }) === false, "visible is not game-like");
+expect(shouldDisconnectForLifecycle({ type: "blur" }) === false, "game blur must not hang up");
+expect(shouldDuckPlaybackForCoexist({ pageHidden: true }) === true, "duck when hidden");
+expect(shouldDuckPlaybackForCoexist({ blurred: true }) === true, "duck when blurred");
+expect(shouldDuckPlaybackForCoexist({}) === false, "full volume in foreground");
+expect(playbackGainForCoexist(true) === PLAYBACK_DUCK_GAIN, "duck gain");
+expect(playbackGainForCoexist(false) === PLAYBACK_FULL_GAIN, "full gain");
+expect(PLAYBACK_DUCK_GAIN > 0 && PLAYBACK_DUCK_GAIN < 1, "duck never mutes");
+expect(EXCLUSIVE_MIC_ERROR_NAMES.includes("NotReadableError"), "exclusive mic NotReadableError");
+expect(isExclusiveMicError({ name: "NotReadableError" }) === true, "NotReadableError is exclusive");
+expect(isExclusiveMicError(Object.assign(new Error("mic"), { name: "NotReadableError" })) === true, "Error NotReadableError");
+expect(isExclusiveMicError(Object.assign(new Error("mic"), { name: "NotAllowedError" })) === true, "NotAllowedError still resume");
+expect(isExclusiveMicError(Object.assign(new Error("mic"), { name: "TypeError" })) === false, "TypeError is not exclusive");
+expect(shouldReclaimAfterExclusiveRelease({ type: "devicechange" }) === true, "devicechange reclaims after exclusive");
+expect(shouldReclaimAfterExclusiveRelease({ type: "focus" }) === true, "alt-tab back reclaims");
+expect(shouldReclaimAfterExclusiveRelease({ type: "statechange", audioContextState: "running" }) === true, "ctx running reclaims");
+expect(shouldReclaimAfterExclusiveRelease({ type: "visibilitychange", visibilityState: "hidden" }) === false, "hidden does not reclaim");
 
 const wav = buildKeepAliveWavDataUrl(1, 8000);
 expect(wav.startsWith("data:audio/wav;base64,"), "wav data url");

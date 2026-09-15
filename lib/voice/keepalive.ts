@@ -12,6 +12,12 @@
  *
  * Keep-alive audio is destination / HTMLMediaElement only. It must never be
  * mixed into the mic MediaStream or input_audio_buffer.
+ *
+ * Game coexistence (Fortnite in the foreground on the same machine): treat
+ * hide/blur/AudioContext interrupted like an iOS audio-session interrupt —
+ * keep the WebSocket, keep play-and-record, do not hang up. Desktop Chrome
+ * uses shared-mode Web Audio (never exclusive WASAPI). If the game takes the
+ * mic exclusively, show Tap to resume and auto-reclaim on focus / devicechange.
  */
 
 export const MEDIA_SESSION_TITLE = "Lexi";
@@ -38,6 +44,23 @@ export const BACKGROUND_KEEP_EVENTS = [
   "pageshow",
   "pagehide",
 ] as const;
+export const GAME_FOREGROUND_EVENTS = [
+  "visibilitychange",
+  "webkitvisibilitychange",
+  "blur",
+  "audiocontextinterrupted",
+  "devicechange",
+] as const;
+export const EXCLUSIVE_MIC_ERROR_NAMES = [
+  "NotReadableError",
+  "AbortError",
+  "NotAllowedError",
+  "SecurityError",
+  "OverconstrainedError",
+] as const;
+/** Duck Lexi under game audio — never mute unless the OS forces it. */
+export const PLAYBACK_DUCK_GAIN = 0.42;
+export const PLAYBACK_FULL_GAIN = 1;
 
 export function isIOSWebKit(
   ua = typeof navigator === "undefined" ? "" : navigator.userAgent,
@@ -156,6 +179,86 @@ export function isAudioSessionInterrupted(state?: string) {
   return current === "interrupted";
 }
 
+export function isAudioContextInterrupted(state?: string) {
+  return state === "interrupted";
+}
+
+/** iOS audioSession or desktop AudioContext stolen by another app (a game). */
+export function isVoiceAudioInterrupted(opts?: {
+  audioSessionState?: string;
+  audioContextState?: string;
+}) {
+  if (isAudioSessionInterrupted(opts?.audioSessionState)) return true;
+  return isAudioContextInterrupted(opts?.audioContextState);
+}
+
+export function isExclusiveMicError(error: unknown) {
+  if (typeof error === "string") {
+    return (EXCLUSIVE_MIC_ERROR_NAMES as readonly string[]).includes(error);
+  }
+  const name =
+    error && typeof error === "object" && "name" in error && typeof error.name === "string"
+      ? error.name
+      : "";
+  return (EXCLUSIVE_MIC_ERROR_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * Fortnite (or another game) has OS focus / stole the audio session.
+ * Hold the socket. Do not treat this as hang-up.
+ */
+export function isGameLikeForeground(event: {
+  type?: string;
+  visibilityState?: string;
+  audioContextState?: string;
+  audioSessionState?: string;
+  pageHidden?: boolean;
+  blurred?: boolean;
+}) {
+  if (event.audioSessionState === "interrupted") return true;
+  if (event.audioContextState === "interrupted") return true;
+  if (event.pageHidden || event.blurred) return true;
+  const type = (event.type ?? "").toLowerCase();
+  if (type === "blur" || type === "audiocontextinterrupted") return true;
+  if (type === "visibilitychange" || type === "webkitvisibilitychange") {
+    return event.visibilityState === "hidden";
+  }
+  if (type === "interruptionbegin" || type === "begininterruption") return true;
+  return false;
+}
+
+export function shouldDuckPlaybackForCoexist(opts: {
+  pageHidden?: boolean;
+  blurred?: boolean;
+  audioContextState?: string;
+  audioSessionState?: string;
+}) {
+  if (opts.audioSessionState === "interrupted") return true;
+  if (opts.audioContextState === "interrupted") return true;
+  return Boolean(opts.pageHidden || opts.blurred);
+}
+
+export function playbackGainForCoexist(ducked: boolean) {
+  return ducked ? PLAYBACK_DUCK_GAIN : PLAYBACK_FULL_GAIN;
+}
+
+export function shouldReclaimAfterExclusiveRelease(event: {
+  type: string;
+  visibilityState?: string;
+  audioSessionState?: string;
+  audioContextState?: string;
+}) {
+  const type = event.type.toLowerCase();
+  if (type === "devicechange") return true;
+  if (
+    event.audioContextState === "running" &&
+    (type === "statechange" || type === "audiocontextstatechange")
+  ) {
+    return true;
+  }
+  return shouldReclaimForLifecycle(event);
+}
+
 export function applyPlayAndRecordSession() {
   const session = readAudioSession();
   if (!session) return false;
@@ -229,12 +332,21 @@ export function pageIsHidden() {
   return document.visibilityState === "hidden" || doc.webkitHidden === true;
 }
 
+export type VoiceCoexistState = {
+  hidden: boolean;
+  blurred: boolean;
+  interrupted: boolean;
+  ducked: boolean;
+};
+
 export type VoiceKeepAliveHandlers = {
   resumeAudio: () => Promise<void> | void;
   ensureMic: () => Promise<void> | void;
   ping: () => void;
   reclaim?: () => Promise<void> | void;
   onUnload?: () => void;
+  onCoexist?: (state: VoiceCoexistState) => void;
+  audioContextState?: () => string | undefined;
 };
 
 export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
@@ -245,6 +357,28 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   setLiveTabTitle(true);
   let wake: WakeLockSentinel | null = null;
   let reclaiming = false;
+  let blurred = false;
+
+  const voiceInterrupted = () =>
+    isVoiceAudioInterrupted({
+      audioContextState: handlers.audioContextState?.(),
+    });
+
+  const publishCoexist = () => {
+    const hidden = pageIsHidden();
+    const audioContextState = handlers.audioContextState?.();
+    const interrupted = isVoiceAudioInterrupted({ audioContextState });
+    handlers.onCoexist?.({
+      hidden,
+      blurred,
+      interrupted,
+      ducked: shouldDuckPlaybackForCoexist({
+        pageHidden: hidden,
+        blurred,
+        audioContextState,
+      }),
+    });
+  };
 
   const hold = () => {
     applyPlayAndRecordSession();
@@ -256,19 +390,22 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
 
   const tick = () => {
     hold();
-    if (!isAudioSessionInterrupted()) void handlers.ensureMic();
+    if (!voiceInterrupted()) void handlers.ensureMic();
     void requestLock();
+    publishCoexist();
   };
 
   const reclaim = () => {
-    if (reclaiming || isAudioSessionInterrupted()) {
+    if (reclaiming || voiceInterrupted()) {
       hold();
+      publishCoexist();
       return;
     }
     reclaiming = true;
     const run = handlers.reclaim ?? tick;
     void Promise.resolve(run()).finally(() => {
       reclaiming = false;
+      publishCoexist();
     });
   };
 
@@ -287,12 +424,16 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   }
 
   const onForeground = () => {
+    blurred = false;
     reclaim();
   };
 
   const onBackground = () => {
     // Never pause the keep-alive element — iOS suspends JS if it thinks media stopped.
+    // Game in the foreground is the same hold: keep the socket, keep trying play-and-record.
+    blurred = true;
     hold();
+    publishCoexist();
   };
 
   const onVisibility = () => {
@@ -306,9 +447,10 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
     const interrupted =
       type === "interruptionbegin" ||
       type === "begininterruption" ||
-      isAudioSessionInterrupted();
+      voiceInterrupted();
     if (interrupted) {
       hold();
+      publishCoexist();
       return;
     }
     reclaim();
@@ -319,7 +461,7 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
   };
 
   const onDeviceChange = () => {
-    if (!isAudioSessionInterrupted()) void handlers.ensureMic();
+    if (!voiceInterrupted()) void handlers.ensureMic();
   };
 
   document.addEventListener("visibilitychange", onVisibility);

@@ -345,6 +345,19 @@ export async function createOrResumeSession(userId: string, sessionId?: string |
   return created[0] ?? null;
 }
 
+export async function latestOpenSession(userId: string) {
+  const db = await ensureTable();
+  if (!db) return null;
+  const rows = (await db.query(
+    `SELECT id, user_id, started_at, ended_at FROM sessions
+     WHERE lower(user_id) = lower($1) AND ended_at IS NULL
+     ORDER BY started_at DESC
+     LIMIT 1`,
+    [normalizeUserId(userId)],
+  )) as SessionRow[];
+  return rows[0] ?? null;
+}
+
 export async function endSession(userId: string, sessionId: string) {
   const db = await ensureTable();
   if (!db) return null;

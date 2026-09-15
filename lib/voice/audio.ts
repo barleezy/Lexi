@@ -1,46 +1,32 @@
 import { CAPTURE_CHUNK_MS, PLAY_LEAD_SEC } from "@/lib/voice/realtime-latency";
+import { playbackGainForCoexist } from "@/lib/voice/keepalive";
+import {
+  LISTEN_SAMPLE_RATE,
+  MIC_AUDIO_CONSTRAINTS,
+  MIC_AUDIO_CONSTRAINTS_FALLBACK,
+} from "@/lib/voice/listen";
 
-export const TARGET_RATE = 48_000;
-
-/** Absolute floor: hush / room hiss is not user speech. */
-export const MIC_RMS_ABS_FLOOR = 0.012;
-/** Frames below this multiple of the slow noise floor are treated as non-primary. */
-export const MIC_RMS_NOISE_RATIO = 2.6;
-
-/**
- * User-mic constraints only. Display / tab / watch-together audio must never use these
- * or be mixed into the same MediaStream that feeds input_audio_buffer.append.
- */
-export const MIC_AUDIO_CONSTRAINTS = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-  voiceIsolation: true,
-  sampleRate: { ideal: TARGET_RATE },
-  channelCount: 1,
-  googEchoCancellation: true,
-  googAutoGainControl: true,
-  googNoiseSuppression: true,
-  googHighpassFilter: true,
-  googTypingNoiseDetection: true,
-  googNoiseReduction: true,
-} as MediaTrackConstraints;
-
-export const MIC_AUDIO_CONSTRAINTS_FALLBACK: MediaTrackConstraints = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-  sampleRate: { ideal: TARGET_RATE },
-  channelCount: 1,
-};
+export const TARGET_RATE = LISTEN_SAMPLE_RATE;
+export {
+  MIC_AUDIO_CONSTRAINTS,
+  MIC_AUDIO_CONSTRAINTS_FALLBACK,
+  MIC_RMS_ABS_FLOOR,
+  MIC_RMS_NOISE_RATIO,
+  isPrimaryMicEnergy,
+} from "@/lib/voice/listen";
 
 export async function openUserMic() {
   try {
     return await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
   } catch {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: MIC_AUDIO_CONSTRAINTS_FALLBACK,
-    });
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: MIC_AUDIO_CONSTRAINTS_FALLBACK,
+      });
+    } catch {
+      // Last try: unconstrained shared mic if a game already holds exclusive settings.
+      return await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
   }
 }
 
@@ -144,10 +130,6 @@ export function updateMicNoiseFloor(floor: number, rms: number) {
   return Math.min(0.025, Math.max(0.005, next));
 }
 
-export function isPrimaryMicEnergy(rms: number, noiseFloor: number) {
-  return rms >= Math.max(MIC_RMS_ABS_FLOOR, noiseFloor * MIC_RMS_NOISE_RATIO);
-}
-
 const WORKLET = `
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -178,12 +160,18 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 registerProcessor("pcm-capture", PcmCaptureProcessor);
 `;
 
+/** Shared-mode Web Audio — never request an exclusive output sink Fortnite can steal forever. */
+export const AUDIO_CONTEXT_OPTIONS: AudioContextOptions = {
+  sampleRate: TARGET_RATE,
+  latencyHint: "interactive",
+};
+
 export function createAudioContext() {
   const Ctor =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("Web Audio is not available in this browser.");
-  return new Ctor({ sampleRate: TARGET_RATE });
+  return new Ctor(AUDIO_CONTEXT_OPTIONS);
 }
 
 export async function addCaptureWorklet(ctx: AudioContext) {
@@ -248,15 +236,34 @@ export class PcmPlayer {
   private lastScheduled = 0;
   private started = false;
   private sources: AudioBufferSourceNode[] = [];
+  private output: GainNode;
+  private ducking = false;
 
   constructor(
     private ctx: AudioContext,
     private rate = TARGET_RATE,
     private lead = PLAY_LEAD_SEC,
-  ) {}
+  ) {
+    this.output = ctx.createGain();
+    this.output.gain.value = playbackGainForCoexist(false);
+    this.output.connect(ctx.destination);
+  }
 
   get state() {
     return this.ctx.state;
+  }
+
+  setDuck(ducked: boolean) {
+    if (this.ducking === ducked) return;
+    this.ducking = ducked;
+    const target = playbackGainForCoexist(ducked);
+    const now = this.ctx.currentTime;
+    try {
+      this.output.gain.cancelScheduledValues(now);
+      this.output.gain.setTargetAtTime(target, now, 0.04);
+    } catch {
+      this.output.gain.value = target;
+    }
   }
 
   resetTurn() {
@@ -281,7 +288,7 @@ export class PcmPlayer {
     buffer.copyToChannel(floats, 0);
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.ctx.destination);
+    source.connect(this.output);
 
     const now = this.ctx.currentTime;
     if (!this.started) {
