@@ -104,6 +104,8 @@ assert.ok(stripeSrc.includes("constructEvent"), "webhook verifies signature");
 assert.ok(stripeSrc.includes("voicePackById"), "webhook remaps pack → seconds on server");
 assert.ok(stripeSrc.includes("stripeEventId: event.id"), "idempotent on event id");
 assert.ok(!/Number\(session\.metadata\?\.seconds\)/.test(stripeSrc), "webhook does not trust metadata seconds alone");
+assert.ok(stripeSrc.includes("missing_checkout_metadata"), "test events without metadata return ok");
+assert.ok(!stripeSrc.includes("Checkout metadata missing user/pack"), "missing metadata is not a 400");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutRoute.includes("packId"), "checkout takes packId");

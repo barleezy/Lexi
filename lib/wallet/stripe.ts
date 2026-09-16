@@ -74,14 +74,20 @@ export async function handleStripeWebhook(input: {
 
   const session = event.data.object as Stripe.Checkout.Session;
   const userId =
-    (typeof session.metadata?.userId === "string" && session.metadata.userId) ||
-    (typeof session.client_reference_id === "string" && session.client_reference_id) ||
+    (typeof session.metadata?.userId === "string" && session.metadata.userId.trim()) ||
+    (typeof session.client_reference_id === "string" && session.client_reference_id.trim()) ||
     "";
   // Seconds always from server pack map — never trust a client-invented amount.
   const pack = voicePackById(session.metadata?.packId);
   const seconds = pack?.seconds ?? 0;
+  // Stripe Dashboard / CLI test events often omit our metadata. Ack 200 so Stripe
+  // marks delivery success; only real Checkout sessions with user+pack credit.
   if (!userId || seconds <= 0) {
-    return { ok: false as const, status: 400, error: "Checkout metadata missing user/pack." };
+    return {
+      ok: true as const,
+      ignored: true as const,
+      reason: "missing_checkout_metadata",
+    };
   }
 
   const credited = await creditVoiceSeconds({
