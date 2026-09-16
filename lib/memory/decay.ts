@@ -7,9 +7,9 @@ export function bandFromStart(startSalience: number): Band {
 }
 
 export function rateForBand(band: Band): number {
-  if (band === "low") return 0.08;
-  if (band === "medium") return 0.02;
-  return 0.005;
+  if (band === "low") return 0.04;
+  if (band === "medium") return 0.01;
+  return 0.0025;
 }
 
 export function daysElapsed(recall: Date, clock: Date): number {

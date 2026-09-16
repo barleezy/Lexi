@@ -43,3 +43,17 @@ next-env.d.ts
 
 # voice debug logs
 /.voice-logs
+
+# fortnitepy sidecar
+__pycache__/
+*.py[cod]
+sidecars/fortnite/.venv/
+
+# Xcode
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/*.xcuserstate
+ios/**/*.moved-aside
+ios/**/*.ipa
+ios/**/*.dSYM
+ios/**/*.dSYM.zip

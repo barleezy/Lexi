@@ -55,7 +55,7 @@ export function readVoiceSessionStore(): VoiceSessionStore {
     return {
       sessionId: null,
       started: false,
-      userId: "Ian",
+      userId: "",
       caption: "",
       rows: [],
     };
@@ -64,7 +64,7 @@ export function readVoiceSessionStore(): VoiceSessionStore {
   return {
     sessionId,
     started: memory.getItem(VOICE_STORAGE_KEYS.started) === "1",
-    userId: memory.getItem(VOICE_STORAGE_KEYS.userId)?.trim() || "Ian",
+    userId: memory.getItem(VOICE_STORAGE_KEYS.userId)?.trim() || "",
     caption: memory.getItem(VOICE_STORAGE_KEYS.caption) ?? "",
     rows: parseTranscripts(memory.getItem(VOICE_STORAGE_KEYS.transcripts)),
   };
@@ -87,7 +87,9 @@ export function writeVoiceSessionStore(update: {
     memory.setItem(VOICE_STORAGE_KEYS.started, update.started ? "1" : "0");
   }
   if (update.userId !== undefined) {
-    memory.setItem(VOICE_STORAGE_KEYS.userId, update.userId.trim() || "Ian");
+    const nextUserId = update.userId.trim();
+    if (nextUserId) memory.setItem(VOICE_STORAGE_KEYS.userId, nextUserId);
+    else memory.removeItem(VOICE_STORAGE_KEYS.userId);
   }
   if (update.caption !== undefined) {
     memory.setItem(VOICE_STORAGE_KEYS.caption, update.caption);

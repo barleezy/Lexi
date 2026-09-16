@@ -1,0 +1,2 @@
+fortnitepy>=3.6.0,<4
+aiohttp>=3.8.0,<4

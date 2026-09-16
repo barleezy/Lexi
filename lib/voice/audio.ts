@@ -1,11 +1,221 @@
-export const TARGET_RATE = 48_000;
+import { CAPTURE_CHUNK_MS, PLAY_LEAD_SEC } from "@/lib/voice/realtime-latency";
+import { playbackGainForCoexist, setCarAudioRoute } from "@/lib/voice/keepalive";
+import {
+  isCarLikeAudioInput,
+  listAudioInputs,
+  MIC_RECLAIM_ATTEMPTS,
+  MIC_RECLAIM_RETRY_MS,
+  micNeedsReroute,
+  pickPreferredAudioInput,
+} from "@/lib/voice/audio-devices";
+import {
+  LISTEN_SAMPLE_RATE,
+  MIC_AUDIO_CONSTRAINTS,
+  MIC_AUDIO_CONSTRAINTS_FALLBACK,
+  micConstraintChain,
+} from "@/lib/voice/listen";
+
+export const TARGET_RATE = LISTEN_SAMPLE_RATE;
+export {
+  MIC_AUDIO_CONSTRAINTS,
+  MIC_AUDIO_CONSTRAINTS_FALLBACK,
+  MIC_AUDIO_CONSTRAINTS_CAR,
+  MIC_AUDIO_CONSTRAINTS_CAR_FALLBACK,
+  MIC_RMS_ABS_FLOOR,
+  MIC_RMS_NOISE_RATIO,
+  isPrimaryMicEnergy,
+} from "@/lib/voice/listen";
+export {
+  isCarLikeAudioInput,
+  micNeedsReroute,
+  muteReclaimDelayMs,
+  resolvePreferredAudioInput,
+} from "@/lib/voice/audio-devices";
+
+async function getUserMediaAudio(audio: MediaTrackConstraints | boolean) {
+  return navigator.mediaDevices.getUserMedia({ audio });
+}
+
+async function getUserMediaWithChain(deviceId?: string, car = false) {
+  let lastError: unknown;
+  for (const audio of micConstraintChain(deviceId, car)) {
+    try {
+      return await getUserMediaAudio(audio);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  try {
+    return await getUserMediaAudio(true);
+  } catch (error) {
+    throw lastError ?? error;
+  }
+}
+
+function rememberMicRoute(stream: MediaStream) {
+  const label = stream.getAudioTracks()[0]?.label ?? "";
+  setCarAudioRoute(isCarLikeAudioInput(label));
+}
+
+export async function openUserMic() {
+  const labeled = await listAudioInputs();
+  const preferred = pickPreferredAudioInput(labeled);
+  const car = preferred ? isCarLikeAudioInput(preferred.label) : false;
+
+  if (preferred?.deviceId && preferred.label) {
+    try {
+      const stream = await getUserMediaWithChain(preferred.deviceId, car);
+      rememberMicRoute(stream);
+      return stream;
+    } catch {
+      // device disappeared — fall through to default
+    }
+  }
+
+  const bootstrap = await getUserMediaWithChain(preferred?.deviceId, car);
+  const after = pickPreferredAudioInput(await listAudioInputs());
+  const currentId = bootstrap.getAudioTracks()[0]?.getSettings().deviceId;
+  if (after?.deviceId && after.label && after.deviceId !== currentId) {
+    try {
+      const switched = await getUserMediaWithChain(
+        after.deviceId,
+        isCarLikeAudioInput(after.label),
+      );
+      bootstrap.getTracks().forEach((track) => track.stop());
+      rememberMicRoute(switched);
+      return switched;
+    } catch {
+      // keep bootstrap
+    }
+  }
+  rememberMicRoute(bootstrap);
+  return bootstrap;
+}
+
+export async function openUserMicWithRetry(attempts = MIC_RECLAIM_ATTEMPTS) {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await openUserMic();
+    } catch (error) {
+      lastError = error;
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, MIC_RECLAIM_RETRY_MS * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+export function applyMicTrackHints(track: MediaStreamTrack) {
+  try {
+    track.contentHint = "speech";
+  } catch {
+    // contentHint is best-effort
+  }
+}
+
+export async function applyMicConstraints(track: MediaStreamTrack) {
+  applyMicTrackHints(track);
+  const car = isCarLikeAudioInput(track.label);
+  const chain = micConstraintChain(track.getSettings().deviceId, car).filter(
+    (item): item is MediaTrackConstraints => typeof item === "object",
+  );
+  for (const constraints of chain) {
+    try {
+      await track.applyConstraints(constraints);
+      return;
+    } catch {
+      // try the next, looser set
+    }
+  }
+}
+
+export function micTrackUsable(track?: MediaStreamTrack | null): track is MediaStreamTrack {
+  return Boolean(track && track.readyState === "live" && track.enabled && !track.muted);
+}
+
+export async function resumeAudioContext(ctx: AudioContext | null | undefined) {
+  if (!ctx) return;
+  const state = ctx.state as string;
+  if (state === "closed") return;
+  if (state === "suspended" || state === "interrupted") {
+    try {
+      await ctx.resume();
+    } catch {
+      // Autoplay policy may block until the next user gesture.
+    }
+  }
+}
+
+/** Near-silent hold on the destination only — never the mic graph. */
+export function startDestinationKeepAlive(ctx: AudioContext, ios = false) {
+  const gain = ctx.createGain();
+  gain.gain.value = ios ? 0.004 : 0.00006;
+  gain.connect(ctx.destination);
+
+  if (ios) {
+    const seconds = 1;
+    const rate = ctx.sampleRate;
+    const buffer = ctx.createBuffer(1, Math.max(1, Math.floor(rate * seconds)), rate);
+    const data = buffer.getChannelData(0);
+    const hz = 48;
+    for (let i = 0; i < data.length; i += 1) {
+      data[i] = Math.sin((2 * Math.PI * hz * i) / rate);
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(gain);
+    source.start();
+    return () => {
+      try {
+        source.stop();
+      } catch {
+        // already stopped
+      }
+      try {
+        source.disconnect();
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+    };
+  }
+
+  const osc = ctx.createOscillator();
+  osc.frequency.value = 19;
+  osc.connect(gain);
+  osc.start();
+  return () => {
+    try {
+      osc.stop();
+    } catch {
+      // already stopped
+    }
+    try {
+      osc.disconnect();
+      gain.disconnect();
+    } catch {
+      // already disconnected
+    }
+  };
+}
+
+export function updateMicNoiseFloor(floor: number, rms: number) {
+  // Adapt only on hush / low room energy so speech does not raise the floor.
+  if (rms >= 0.045) return floor;
+  const alpha = rms < floor ? 0.2 : 0.06;
+  const next = floor + (rms - floor) * alpha;
+  return Math.min(0.025, Math.max(0.005, next));
+}
 
 const WORKLET = `
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this._chunks = [];
-    this._frames = Math.round(sampleRate * 0.1);
+    this._frames = Math.round(sampleRate * ${CAPTURE_CHUNK_MS / 1000});
   }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0];
@@ -30,12 +240,18 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 registerProcessor("pcm-capture", PcmCaptureProcessor);
 `;
 
+/** Shared-mode Web Audio — never request an exclusive output sink Fortnite can steal forever. */
+export const AUDIO_CONTEXT_OPTIONS: AudioContextOptions = {
+  sampleRate: TARGET_RATE,
+  latencyHint: "interactive",
+};
+
 export function createAudioContext() {
   const Ctor =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("Web Audio is not available in this browser.");
-  return new Ctor({ sampleRate: TARGET_RATE });
+  return new Ctor(AUDIO_CONTEXT_OPTIONS);
 }
 
 export async function addCaptureWorklet(ctx: AudioContext) {
@@ -95,32 +311,58 @@ export class PcmPlayer {
   underruns = 0;
   drainMsMax = 0;
   maxGapMs = 0;
-  queuedMs = 0;
   private next = 0;
   private lastScheduled = 0;
   private started = false;
   private sources: AudioBufferSourceNode[] = [];
+  private output: GainNode;
+  private ducking = false;
+
+  /** Live remainder — not the value from the last scheduled chunk. */
+  get queuedMs() {
+    if (!this.started || this.next <= 0) return 0;
+    return Math.max(0, (this.next - this.ctx.currentTime) * 1000);
+  }
 
   constructor(
     private ctx: AudioContext,
     private rate = TARGET_RATE,
-    private lead = 0.15,
-  ) {}
+    private lead = PLAY_LEAD_SEC,
+  ) {
+    this.output = ctx.createGain();
+    this.output.gain.value = playbackGainForCoexist(false);
+    this.output.connect(ctx.destination);
+  }
 
   get state() {
     return this.ctx.state;
   }
 
+  setDuck(ducked: boolean) {
+    if (this.ducking === ducked) return;
+    this.ducking = ducked;
+    const target = playbackGainForCoexist(ducked);
+    const now = this.ctx.currentTime;
+    try {
+      this.output.gain.cancelScheduledValues(now);
+      this.output.gain.setTargetAtTime(target, now, 0.04);
+    } catch {
+      this.output.gain.value = target;
+    }
+  }
+
   resetTurn() {
+    this.clearSources();
     this.underruns = 0;
     this.drainMsMax = 0;
     this.maxGapMs = 0;
-    this.queuedMs = 0;
     this.started = false;
+    this.next = 0;
     this.lastScheduled = 0;
   }
 
   play(pcm16: Uint8Array) {
+    if (this.ctx.state !== "running") void this.ctx.resume();
     const even = pcm16.byteLength % 2 === 0 ? pcm16 : pcm16.subarray(0, pcm16.byteLength - 1);
     const samples = new Int16Array(even.buffer, even.byteOffset, even.byteLength / 2);
     const floats = new Float32Array(samples.length);
@@ -130,7 +372,7 @@ export class PcmPlayer {
     buffer.copyToChannel(floats, 0);
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.ctx.destination);
+    source.connect(this.output);
 
     const now = this.ctx.currentTime;
     if (!this.started) {
@@ -149,7 +391,6 @@ export class PcmPlayer {
     this.drainMsMax = Math.max(this.drainMsMax, drain);
     source.start(this.next);
     this.next += buffer.duration;
-    this.queuedMs = Math.max(0, (this.next - now) * 1000);
     this.lastScheduled = now;
     this.sources.push(source);
     source.onended = () => {
@@ -163,6 +404,14 @@ export class PcmPlayer {
 
   stop() {
     const droppedMs = Math.max(0, (this.next - this.ctx.currentTime) * 1000);
+    this.clearSources();
+    this.started = false;
+    this.next = 0;
+    this.lastScheduled = 0;
+    return droppedMs;
+  }
+
+  private clearSources() {
     const sources = this.sources.splice(0);
     for (const source of sources) {
       source.onended = null;
@@ -177,10 +426,5 @@ export class PcmPlayer {
         // already disconnected
       }
     }
-    this.started = false;
-    this.next = 0;
-    this.lastScheduled = 0;
-    this.queuedMs = 0;
-    return droppedMs;
   }
 }

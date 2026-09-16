@@ -1,8 +1,27 @@
 import { bumpAffect } from "../lib/memory/decay.ts";
-import { extractFacts, FACT_KEYS, IDENTITY_KEYS, isFactKey, isIdentityKey } from "../lib/memory/extract.ts";
-import { DEFAULT_USER_ID, normalizeUserId, resolveUserId } from "../lib/memory/user.ts";
+import {
+  extractFacts,
+  extractFactsMemo,
+  FACT_KEYS,
+  IDENTITY_KEYS,
+  isFactKey,
+  isIdentityKey,
+  isPinnedKey,
+  OUR_SONG_VALUE,
+  PINNED_AFFECT,
+  PINNED_KEYS,
+} from "../lib/memory/extract.ts";
+import {
+  ADMIN_USER_IDS,
+  DEFAULT_USER_ID,
+  IAN_USER_ID,
+  isAdminUserId,
+  normalizeUserId,
+  resolveUserId,
+} from "../lib/memory/user.ts";
 
 function storedAffect(key, incoming, existing) {
+  if (isPinnedKey(key)) return PINNED_AFFECT;
   if (isIdentityKey(key)) return 10;
   return existing != null ? bumpAffect(existing, incoming) : incoming;
 }
@@ -17,17 +36,27 @@ function expectEqual(actual, expected, label) {
   if (left !== right) throw new Error(`${label}: ${left} !== ${right}`);
 }
 
-expectEqual(DEFAULT_USER_ID, "Ian", "default user id");
+expectEqual(DEFAULT_USER_ID, "Ian", "Ian account id");
+expectEqual(IAN_USER_ID, "Ian", "Ian user id");
+expectEqual(ADMIN_USER_IDS.includes("Ian"), true, "Ian is admin");
+expectEqual(isAdminUserId("Ian"), true, "Ian admin");
+expectEqual(isAdminUserId("ian"), true, "ian admin");
+expectEqual(isAdminUserId("Alex"), false, "Alex is not admin");
+expectEqual(isAdminUserId(""), false, "blank is not admin");
 expectEqual(normalizeUserId("ian"), "Ian", "normalize ian");
 expectEqual(normalizeUserId("IAN"), "Ian", "normalize IAN");
 expectEqual(normalizeUserId(" Ian "), "Ian", "normalize padded");
-expectEqual(normalizeUserId(""), "Ian", "normalize empty");
-expectEqual(normalizeUserId(null), "Ian", "normalize null");
+expectEqual(normalizeUserId(""), "", "normalize empty");
+expectEqual(normalizeUserId(null), "", "normalize null");
+expectEqual(normalizeUserId("Alex"), "Alex", "normalize other user");
+expectEqual(normalizeUserId("Barleezy"), "Ian", "normalize Barleezy to admin");
+expectEqual(normalizeUserId("barleezy"), "Ian", "normalize barleezy");
 
 const bare = new Request("http://localhost/api/memory");
-expectEqual(resolveUserId(bare, null), "Ian", "GET defaults to Ian");
+expectEqual(resolveUserId(bare, null), "", "GET does not invent Ian");
 expectEqual(resolveUserId(bare, "ian"), "Ian", "query ian");
 expectEqual(resolveUserId(bare, "IAN"), "Ian", "query IAN");
+expectEqual(resolveUserId(bare, "Alex"), "Alex", "query other user");
 expectEqual(
   resolveUserId(new Request("http://localhost/api/memory", { headers: { "x-lexi-user-id": "ian" } }), null),
   "Ian",
@@ -44,6 +73,13 @@ expectEqual(keys("I'm Ian"), ["name=Ian"], "I'm");
 expectEqual(keys("I am Ian"), ["name=Ian"], "I am");
 expectEqual(keys("call me Ian"), ["name=Ian"], "call me");
 expectEqual(keys("my name is ian"), ["name=Ian"], "lowercase name");
+expectEqual(keys("call me daddy"), [], "daddy is a nickname not a name");
+expectEqual(keys("call me leezy"), [], "leezy is a nickname not a name");
+expectEqual(
+  keys("my nicknames are daddy, barleezy, menace, barleezus, and leezy"),
+  ["nicknames=daddy, barleezy, menace, barleezus, and leezy"],
+  "nicknames labeled",
+);
 
 expectEqual(keys("I have a dog named Rex"), ["pets=Rex (dog)"], "named dog");
 expectEqual(keys("my cat is Whiskers"), ["pets=Whiskers (cat)"], "named cat");
@@ -73,6 +109,8 @@ expectEqual(keys("my timezone is EST"), ["timezone=EST"], "timezone");
 expectEqual(keys("my favorite food is pizza"), ["food=pizza"], "food");
 expectEqual(keys("I listen to jazz"), ["music=jazz"], "music listen");
 expectEqual(keys("my favorite music is Radiohead"), ["music=Radiohead"], "favorite music");
+expectEqual(keys("our song is Down Low by Astrid S"), ["our_song=Down Low by Astrid S"], "our song");
+expectEqual(keys("my favorite song is Radiohead"), ["music=Radiohead"], "favorite song is not our_song");
 expectEqual(keys("my favorite sport is basketball"), ["sport=basketball"], "favorite sport");
 expectEqual(keys("I play soccer"), ["sport=soccer"], "play sport not game");
 expectEqual(keys("my hobby is painting"), ["hobby=painting"], "hobby");
@@ -104,6 +142,13 @@ expectEqual(keys("I want to go to the store"), [], "no vacation from store");
 expectEqual(keys("hi"), [], "greeting hi");
 expectEqual(keys("hello!"), [], "greeting hello");
 expectEqual(keys("thanks"), [], "greeting thanks");
+expectEqual(keys("cool"), [], "noop cool");
+expectEqual(keys("got it"), [], "noop got it");
+expectEqual(keys("sure"), [], "noop sure");
+const memoFirst = extractFactsMemo("My name is Ian");
+const memoAgain = extractFactsMemo("My name is Ian");
+expectEqual(memoFirst, memoAgain, "memo reuses the same extract");
+expectEqual(memoAgain, [{ memoryKey: "name", value: "Ian" }], "memo keeps name quality");
 expectEqual(keys("I'm going to the store"), [], "no name from going");
 expectEqual(keys("I'm in a meeting"), [], "no location from meeting");
 expectEqual(keys("I'm tired"), [], "no name from tired");
@@ -124,6 +169,7 @@ expectEqual(
   [...FACT_KEYS],
   [
     "name",
+    "nicknames",
     "pets",
     "location",
     "commitments",
@@ -137,6 +183,7 @@ expectEqual(
     "timezone",
     "food",
     "music",
+    "our_song",
     "sport",
     "hobby",
     "leisure",
@@ -150,8 +197,16 @@ expectEqual(
   ],
   "fact key pool",
 );
+expectEqual(isFactKey("nicknames"), true, "nicknames is fact key");
+expectEqual(isIdentityKey("nicknames"), false, "nicknames is not identity");
 expectEqual(isFactKey("birthday"), true, "birthday is fact key");
 expectEqual(isFactKey("music"), true, "music is fact key");
+expectEqual(isFactKey("our_song"), true, "our_song is fact key");
+expectEqual(isPinnedKey("our_song"), true, "our_song is pinned");
+expectEqual(isPinnedKey("music"), false, "music is not pinned");
+expectEqual(isPinnedKey("name"), false, "name is identity not pinned");
+expectEqual([...PINNED_KEYS], ["our_song"], "pinned keys");
+expectEqual(OUR_SONG_VALUE, "Down Low by Astrid S", "canonical our song");
 expectEqual(isFactKey("transexual"), false, "transexual is not a user fact key");
 expectEqual(isFactKey("porn"), true, "porn is fact key");
 expectEqual(isIdentityKey("porn"), false, "porn is not identity");
@@ -165,6 +220,8 @@ expectEqual(isIdentityKey("commitments"), false, "commitments is not identity");
 expectEqual(isIdentityKey("birthday"), false, "birthday is not identity");
 expectEqual(storedAffect("name", 5), 10, "name insert is 10");
 expectEqual(storedAffect("name", 6, 6), 10, "name upsert is 10 not bump 7");
+expectEqual(storedAffect("our_song", 3), 10, "our_song insert is 10");
+expectEqual(storedAffect("our_song", 1, 10), 10, "our_song stays 10 not overwritten down");
 expectEqual(storedAffect("pets", 5), 5, "pets insert uses scorer");
 expectEqual(storedAffect("pets", 3, 5), 6, "pets upsert still bumps");
 expectEqual(storedAffect("location", 4), 4, "location insert uses scorer");

@@ -1,33 +1,56 @@
-import { PHOTO_MAX_EDGE } from "@/lib/voice/vision";
+import { jpegDataUrlFromImage, PHOTO_MAX_EDGE } from "@/lib/voice/vision";
+import {
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_VIDEO_MAX_BYTES,
+  ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
+  ATTACHMENT_VIDEO_MAX_FRAMES,
+  formatFileSize,
+  isAttachmentVideoFile,
+  uploadVideoFirstLookCount,
+  uploadVideoSampleTimes,
+} from "@/lib/voice/upload-frames";
 
-const PHOTO_JPEG_QUALITY = 0.72;
+export {
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_VIDEO_EVERY_SEC,
+  ATTACHMENT_VIDEO_MAX_BYTES,
+  ATTACHMENT_VIDEO_MAX_FRAMES,
+  ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
+  ATTACHMENT_VIDEO_MIN_FRAMES,
+  formatFileSize,
+  isAttachmentVideoFile,
+  uploadVideoFirstLookCount,
+  uploadVideoSampleTimes,
+} from "@/lib/voice/upload-frames";
 
-let photoCanvas: HTMLCanvasElement | null = null;
-let photoCtx: CanvasRenderingContext2D | null = null;
-
-function jpegFromSource(image: CanvasImageSource, sourceWidth: number, sourceHeight: number) {
-  if (!sourceWidth || !sourceHeight) return null;
-  const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(sourceWidth, sourceHeight));
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-  if (!photoCanvas) photoCanvas = document.createElement("canvas");
-  if (!photoCtx) {
-    photoCtx = photoCanvas.getContext("2d", { alpha: false });
-  }
-  if (!photoCtx) return null;
-  photoCanvas.width = width;
-  photoCanvas.height = height;
-  photoCtx.drawImage(image, 0, 0, width, height);
-  return photoCanvas.toDataURL("image/jpeg", PHOTO_JPEG_QUALITY);
-}
-
-export const ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
 export const ATTACHMENT_TEXT_MAX_CHARS = 24_000;
-export const ATTACHMENT_ACCEPT = "image/*,.pdf,.txt,.md,.json";
+const UPLOAD_FRAME_MAX_EDGE = 800;
+const UPLOAD_FRAME_QUALITY = 0.62;
+
+export const ATTACHMENT_ACCEPT =
+  "image/*,video/*,video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v,.ogv,.mkv,.pdf,.txt,.md,.json";
+
+export type UploadedVideoFrame = {
+  dataUrl: string;
+  timeSec: number;
+};
 
 export type ReadyAttachment =
   | { kind: "image"; name: string; dataUrl: string }
-  | { kind: "text"; name: string; text: string };
+  | { kind: "text"; name: string; text: string }
+  | {
+      kind: "video";
+      name: string;
+      frames: UploadedVideoFrame[];
+      durationSec: number;
+      hasAudio: boolean;
+      analysis?: "first-look" | "refine";
+    };
+
+export type AttachmentProgress = {
+  attachment: ReadyAttachment;
+  done: boolean;
+};
 
 export type ProcessAttachmentResult =
   | { ok: true; attachment: ReadyAttachment }
@@ -35,12 +58,6 @@ export type ProcessAttachmentResult =
 
 const TEXT_EXT = /\.(txt|md|markdown|json|csv)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|heic|heif|svg)$/i;
-
-export function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function isImageFile(file: File) {
   return file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
@@ -96,7 +113,7 @@ async function jpegFromFile(file: File) {
   try {
     const bitmap = await createImageBitmap(file);
     try {
-      const dataUrl = jpegFromSource(bitmap, bitmap.width, bitmap.height);
+      const dataUrl = jpegDataUrlFromImage(bitmap, bitmap.width, bitmap.height);
       if (dataUrl) return dataUrl;
     } finally {
       bitmap.close();
@@ -113,10 +130,11 @@ async function jpegFromFile(file: File) {
       el.onerror = () => reject(new Error("Could not decode image."));
       el.src = objectUrl;
     });
-    const dataUrl = jpegFromSource(
+    const dataUrl = jpegDataUrlFromImage(
       image,
       image.naturalWidth || image.width,
       image.naturalHeight || image.height,
+      PHOTO_MAX_EDGE,
     );
     if (!dataUrl) throw new Error("Could not encode photo.");
     return dataUrl;
@@ -125,7 +143,274 @@ async function jpegFromFile(file: File) {
   }
 }
 
-export async function processAttachment(file: File): Promise<ProcessAttachmentResult> {
+function waitForVideoEvent(video: HTMLVideoElement, event: string, timeoutMs = 10_000) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for ${event}.`));
+    }, timeoutMs);
+    const onOk = () => {
+      cleanup();
+      resolve();
+    };
+    const onErr = () => {
+      cleanup();
+      reject(new Error("Could not decode video."));
+    };
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      video.removeEventListener(event, onOk);
+      video.removeEventListener("error", onErr);
+    };
+    video.addEventListener(event, onOk);
+    video.addEventListener("error", onErr);
+  });
+}
+
+async function seekVideo(video: HTMLVideoElement, timeSec: number) {
+  if (
+    Math.abs(video.currentTime - timeSec) < 0.02 &&
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  ) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Seek timed out."));
+    }, 6000);
+    const onSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Could not seek video."));
+    };
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+    };
+    video.addEventListener("seeked", onSeeked);
+    video.addEventListener("error", onError);
+    try {
+      video.currentTime = timeSec;
+    } catch {
+      cleanup();
+      reject(new Error("Could not seek video."));
+    }
+  });
+}
+
+function captureUploadFrame(video: HTMLVideoElement): UploadedVideoFrame | null {
+  const dataUrl = jpegDataUrlFromImage(
+    video,
+    video.videoWidth,
+    video.videoHeight,
+    UPLOAD_FRAME_MAX_EDGE,
+    UPLOAD_FRAME_QUALITY,
+  );
+  if (!dataUrl) return null;
+  return {
+    dataUrl,
+    timeSec: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+  };
+}
+
+function videoElementHasAudio(video: HTMLVideoElement) {
+  const extended = video as HTMLVideoElement & {
+    mozHasAudio?: boolean;
+    webkitAudioDecodedByteCount?: number;
+    audioTracks?: { length: number };
+  };
+  if (extended.audioTracks && extended.audioTracks.length > 0) return true;
+  if (extended.mozHasAudio === true) return true;
+  if ((extended.webkitAudioDecodedByteCount ?? 0) > 0) return true;
+  return false;
+}
+
+async function peekVideoAudioViaWebAudio(file: File) {
+  if (typeof AudioContext === "undefined" || file.size > 12 * 1024 * 1024) return false;
+  const ctx = new AudioContext();
+  try {
+    // Decode only — never connect to destination or the mic capture graph.
+    const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+    return decoded.numberOfChannels > 0 && decoded.duration > 0;
+  } catch {
+    return false;
+  } finally {
+    await ctx.close().catch(() => {});
+  }
+}
+
+function attachHiddenVideo() {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.controls = false;
+  video.tabIndex = -1;
+  video.setAttribute("muted", "");
+  video.setAttribute("playsinline", "");
+  video.setAttribute("aria-hidden", "true");
+  video.style.cssText =
+    "position:fixed;left:-9999px;top:0;width:16px;height:16px;opacity:0;pointer-events:none;";
+  document.body.appendChild(video);
+  return video;
+}
+
+async function sampleUploadedVideo(
+  file: File,
+  onFirstLook?: (partial: {
+    frames: UploadedVideoFrame[];
+    durationSec: number;
+    hasAudio: boolean;
+  }) => void,
+) {
+  const objectUrl = URL.createObjectURL(file);
+  const video = attachHiddenVideo();
+  video.src = objectUrl;
+  try {
+    await waitForVideoEvent(video, "loadedmetadata");
+    if (!Number.isFinite(video.duration) || video.duration <= 0) {
+      await waitForVideoEvent(video, "loadeddata").catch(() => {});
+    }
+
+    const frames: UploadedVideoFrame[] = [];
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const sampleTimes = duration > 0 ? uploadVideoSampleTimes(duration) : [];
+    const firstLookAt = uploadVideoFirstLookCount(
+      sampleTimes.length || ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
+    );
+    let firstLookSent = false;
+    const emitFirstLook = () => {
+      if (firstLookSent || !frames.length || frames.length < firstLookAt) return;
+      firstLookSent = true;
+      onFirstLook?.({
+        frames: frames.slice(0, firstLookAt),
+        durationSec: duration || frames[frames.length - 1]?.timeSec || 0,
+        hasAudio: videoElementHasAudio(video),
+      });
+    };
+
+    if (duration > 0) {
+      for (const time of sampleTimes) {
+        try {
+          await seekVideo(video, time);
+          const shot = captureUploadFrame(video);
+          if (shot) frames.push(shot);
+          emitFirstLook();
+        } catch {
+          // Skip a failed seek and keep the rest of the clip.
+        }
+      }
+    }
+
+    if (!frames.length) {
+      try {
+        await video.play();
+        await waitForVideoEvent(video, "playing", 4000).catch(() => {});
+        const deadline = Date.now() + 8000;
+        while (frames.length < ATTACHMENT_VIDEO_MAX_FRAMES && Date.now() < deadline) {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            const shot = captureUploadFrame(video);
+            if (
+              shot &&
+              !frames.some((frame) => Math.abs(frame.timeSec - shot.timeSec) < 0.15)
+            ) {
+              frames.push(shot);
+              emitFirstLook();
+            }
+          }
+          if (video.ended) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
+        }
+      } catch {
+        // Headless or codec-missing browsers fail here; caller surfaces a clear error.
+      } finally {
+        video.pause();
+      }
+    }
+
+    if (!frames.length) {
+      throw new Error(`Could not read video ${file.name}. The browser could not decode it.`);
+    }
+
+    if (!firstLookSent) emitFirstLook();
+    if (!firstLookSent && frames.length) {
+      firstLookSent = true;
+      onFirstLook?.({
+        frames: frames.slice(0, firstLookAt),
+        durationSec: duration || frames[frames.length - 1]?.timeSec || 0,
+        hasAudio: videoElementHasAudio(video),
+      });
+    }
+
+    let hasAudio = videoElementHasAudio(video);
+    if (!hasAudio) hasAudio = await peekVideoAudioViaWebAudio(file);
+
+    return {
+      frames,
+      durationSec: duration || frames[frames.length - 1]?.timeSec || 0,
+      hasAudio,
+    };
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+export async function processAttachment(
+  file: File,
+  onProgress?: (update: AttachmentProgress) => void,
+): Promise<ProcessAttachmentResult> {
+  if (isAttachmentVideoFile(file)) {
+    if (file.size > ATTACHMENT_VIDEO_MAX_BYTES) {
+      return {
+        ok: false,
+        message: `${file.name} is ${formatFileSize(file.size)}. Video max is 40 MB.`,
+      };
+    }
+    try {
+      const sampled = await sampleUploadedVideo(file, (partial) => {
+        onProgress?.({
+          done: false,
+          attachment: {
+            kind: "video",
+            name: file.name,
+            frames: partial.frames,
+            durationSec: partial.durationSec,
+            hasAudio: partial.hasAudio,
+            analysis: "first-look",
+          },
+        });
+      });
+      return {
+        ok: true,
+        attachment: {
+          kind: "video",
+          name: file.name,
+          frames: sampled.frames,
+          durationSec: sampled.durationSec,
+          hasAudio: sampled.hasAudio,
+        },
+      };
+    } catch (caught) {
+      return {
+        ok: false,
+        message:
+          caught instanceof Error
+            ? caught.message
+            : `Could not read video ${file.name}.`,
+      };
+    }
+  }
+
   if (file.size > ATTACHMENT_MAX_BYTES) {
     return {
       ok: false,

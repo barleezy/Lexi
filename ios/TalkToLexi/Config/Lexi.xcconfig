@@ -1,0 +1,7 @@
+// https:// in xcconfig: // starts a comment, so splice the host with /$().
+// Apex talktolexi.app 307s POSTs to www — hit www so session mint is not redirected.
+LEXI_API_HOST = https:/$()/www.talktolexi.app
+// Alternate production host:
+// LEXI_API_HOST = https:/$()/talktolexi.app
+// Local Next.js:
+// LEXI_API_HOST = http:/$()/127.0.0.1:3000
