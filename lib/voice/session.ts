@@ -837,6 +837,11 @@ export class VoiceSession {
   private stream: MediaStream | null = null;
   private worklet: AudioWorkletNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
+  private captureMix: GainNode | null = null;
+  private tabSource: MediaStreamAudioSourceNode | null = null;
+  private tabGain: GainNode | null = null;
+  private tabAudioActive = false;
+  private pendingTabAudio: MediaStream | null = null;
   private player: PcmPlayer | null = null;
   private logger: VoiceLogger;
   private pending: string[] = [];
@@ -977,11 +982,9 @@ export class VoiceSession {
     this.worklet.port.onmessage = (event) => {
       this.onMic(event.data as Float32Array);
     };
-    // User mic only. Watch-together and display/tab audio play locally and are never mixed here.
-    if (this.stream) {
-      this.source = ctx.createMediaStreamSource(this.stream);
-      this.source.connect(this.worklet);
-    }
+    // Mic stays on its own MediaStream. Shared-tab soundtrack joins via captureMix.
+    if (this.stream) this.rebindCapture();
+    this.attachPendingTabAudio();
 
     this.logger.log("env", {
       ua: navigator.userAgent,
@@ -1190,6 +1193,13 @@ export class VoiceSession {
     this.emitVisionNotice(source, active);
   }
 
+  /** Shared-tab soundtrack only — never added to the mic MediaStream. */
+  setSharedTabAudio(stream: MediaStream | null) {
+    this.clearSharedTabAudio();
+    this.pendingTabAudio = stream;
+    this.attachPendingTabAudio();
+  }
+
   sendGeneratedStill(dataUrl: string, note?: string) {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!dataUrl.startsWith("data:image/")) return;
@@ -1313,10 +1323,10 @@ export class VoiceSession {
     const text = active
       ? source === "camera"
         ? "The user allowed camera viewfinder frames. You can see what the camera shows when a frame is attached. Comment only when relevant."
-        : "The user started sharing a browser tab or screen. You are receiving a live video stream of exactly what they are viewing — not a poster or one still. Voices or audio from the shared tab, TV, or other media are not the user. Comment only when relevant."
+        : "The user started sharing a browser tab or screen. You are receiving a live video stream of exactly what they are viewing, plus the shared tab soundtrack when they enabled Share tab audio. That soundtrack and on-screen voices are not the user. The microphone is still the user. Comment only when relevant."
       : source === "camera"
         ? "The user stopped the camera. You can no longer see the viewfinder."
-        : "The user stopped screen sharing. You can no longer see the screen.";
+        : "The user stopped screen sharing. You can no longer see or hear the shared tab.";
     this.logger.log("vision.state", { source, active });
     this.send(
       {
@@ -1359,9 +1369,17 @@ export class VoiceSession {
     this.sessionUpdateDeferred = false;
     this.flushInWindow(true);
     this.player?.stop();
+    this.clearSharedTabAudio();
+    this.pendingTabAudio = null;
     this.worklet?.port.close();
     this.worklet?.disconnect();
     this.source?.disconnect();
+    try {
+      this.captureMix?.disconnect();
+    } catch {
+      // already disconnected
+    }
+    this.captureMix = null;
     this.stream?.getTracks().forEach((track) => track.stop());
     this.wsGeneration += 1;
     try {
@@ -1601,6 +1619,54 @@ export class VoiceSession {
     this.destKeepAliveStop = startDestinationKeepAlive(this.ctx, isIOSWebKit());
   }
 
+  private captureDestination() {
+    if (this.captureMix) return this.captureMix;
+    if (!this.ctx || !this.worklet) return null;
+    this.captureMix = this.ctx.createGain();
+    this.captureMix.gain.value = 1;
+    this.captureMix.connect(this.worklet);
+    return this.captureMix;
+  }
+
+  private attachPendingTabAudio() {
+    const stream = this.pendingTabAudio;
+    if (!stream || this.stopped || !this.ctx || !this.worklet) return;
+    const tracks = stream.getAudioTracks().filter((track) => track.readyState === "live");
+    if (!tracks.length) {
+      this.logger.log("share.audio.none", {});
+      return;
+    }
+    const dest = this.captureDestination();
+    if (!dest) return;
+    this.tabSource = this.ctx.createMediaStreamSource(new MediaStream(tracks));
+    this.tabGain = this.ctx.createGain();
+    this.tabGain.gain.value = 1;
+    this.tabSource.connect(this.tabGain);
+    this.tabGain.connect(dest);
+    this.tabAudioActive = true;
+    this.rebindCapture();
+    this.logger.log("share.audio.on", {
+      tracks: tracks.length,
+      label: tracks[0]?.label ?? "",
+    });
+  }
+
+  private clearSharedTabAudio() {
+    try {
+      this.tabSource?.disconnect();
+    } catch {
+      // already disconnected
+    }
+    try {
+      this.tabGain?.disconnect();
+    } catch {
+      // already disconnected
+    }
+    this.tabSource = null;
+    this.tabGain = null;
+    this.tabAudioActive = false;
+  }
+
   private rebindCapture() {
     if (this.stopped || !this.ctx || !this.stream || !this.worklet) return;
     try {
@@ -1608,8 +1674,9 @@ export class VoiceSession {
     } catch {
       // already disconnected
     }
+    const dest = this.captureDestination() ?? this.worklet;
     this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.source.connect(this.worklet);
+    this.source.connect(dest);
   }
 
   private bindMic(stream: MediaStream) {
@@ -1659,10 +1726,7 @@ export class VoiceSession {
       this.stream?.getTracks().forEach((item) => item.stop());
       this.stream = next;
       this.bindMic(next);
-      if (this.worklet) {
-        this.source = this.ctx.createMediaStreamSource(next);
-        this.source.connect(this.worklet);
-      }
+      if (this.worklet) this.rebindCapture();
       this.logger.log("mic.reacquire", {
         label: next.getAudioTracks()[0]?.label ?? "",
         state: next.getAudioTracks()[0]?.readyState,
@@ -1713,10 +1777,14 @@ export class VoiceSession {
     const micRate = this.stream?.getAudioTracks()[0]?.getSettings().sampleRate ?? this.ctx.sampleRate;
     const resampled = resample(frame, micRate, TARGET_RATE);
     const pcm = floatToPcm16(resampled);
-    this.micNoiseFloor = updateMicNoiseFloor(this.micNoiseFloor, pcm.rms);
+    if (!this.tabAudioActive) {
+      this.micNoiseFloor = updateMicNoiseFloor(this.micNoiseFloor, pcm.rms);
+    }
     const primary = isPrimaryMicEnergy(pcm.rms, this.micNoiseFloor);
-    // Low / non-primary energy is sent as silence so server VAD does not treat TV bleed as speech.
-    const audio = pcm16ToBase64(primary ? pcm.bytes : new Uint8Array(pcm.bytes.length));
+    // Shared-tab soundtrack stays in the mix so Lexi can hear it. Mic-only
+    // silence still gates room hiss when nothing is shared.
+    const keep = primary || this.tabAudioActive;
+    const audio = pcm16ToBase64(keep ? pcm.bytes : new Uint8Array(pcm.bytes.length));
     this.noteIn(pcm.bytes.length, pcm.rms, !primary);
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {

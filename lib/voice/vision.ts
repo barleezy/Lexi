@@ -14,7 +14,8 @@ export type SendVisionFramesOptions = {
 /** Grok realtime has no video-track item — live camera/tab use high-cadence `input_image`. */
 export const VISION_INTERVAL_MS = 200;
 export const CAMERA_VISION_INTERVAL_MS = 250;
-export const SCREEN_VISION_INTERVAL_MS = 200;
+export const SCREEN_VISION_FPS = 30;
+export const SCREEN_VISION_INTERVAL_MS = Math.round(1000 / SCREEN_VISION_FPS);
 export const VISION_BATCH_SIZE = 4;
 export const VISION_BATCH_GAP_MS = 600;
 export const VISION_BATCH_FLUSH_MS = 800;
@@ -83,29 +84,60 @@ export async function startCameraStream(facing: CameraFacing = "user") {
   throw lastError instanceof Error ? lastError : new Error("Could not start the camera.");
 }
 
+const SCREEN_AUDIO_CONSTRAINTS = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  // Keep local playback so Ian still hears the tab; we also capture it for Lexi.
+  suppressLocalAudioPlayback: false,
+} as MediaTrackConstraints;
+
 export async function startScreenStream() {
-  const stream = await navigator.mediaDevices.getDisplayMedia({
-    audio: false,
-    video: {
-      frameRate: { ideal: 24, max: 30 },
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      displaySurface: "browser",
+  const video = {
+    frameRate: { ideal: SCREEN_VISION_FPS, max: SCREEN_VISION_FPS },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    displaySurface: "browser",
+  };
+  const attempts = [
+    {
+      audio: SCREEN_AUDIO_CONSTRAINTS,
+      video,
+      preferCurrentTab: false,
+      selfBrowserSurface: "include",
+      surfaceSwitching: "include",
+      systemAudio: "include",
+      monitorTypeSurfaces: "include",
     },
-    preferCurrentTab: false,
-    selfBrowserSurface: "include",
-    surfaceSwitching: "include",
-    systemAudio: "exclude",
-    monitorTypeSurfaces: "include",
-  } as DisplayMediaStreamOptions);
+    {
+      audio: true,
+      video,
+      systemAudio: "include",
+    },
+    { audio: true, video },
+    { audio: false, video },
+  ];
+  let stream: MediaStream | null = null;
+  let lastError: unknown;
+  for (const constraints of attempts) {
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia(constraints as DisplayMediaStreamOptions);
+      break;
+    } catch (error) {
+      lastError = error;
+      const name = error instanceof DOMException ? error.name : "";
+      if (name === "NotAllowedError" || name === "AbortError") break;
+    }
+  }
+  if (!stream) {
+    throw lastError instanceof Error ? lastError : new Error("Could not share the screen.");
+  }
   const videoTrack = stream.getVideoTracks()[0];
   if (videoTrack && "contentHint" in videoTrack) {
     videoTrack.contentHint = "motion";
   }
-  // Display / tab audio must never reach the realtime user-speech buffer.
   for (const track of stream.getAudioTracks()) {
-    track.stop();
-    stream.removeTrack(track);
+    if ("contentHint" in track) track.contentHint = "music";
   }
   return stream;
 }

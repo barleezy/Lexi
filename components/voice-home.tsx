@@ -665,6 +665,7 @@ export function VoiceHome() {
     if (!source || source === "screen") {
       const wasOn = Boolean(screenSlot.current.stream);
       screenSlot.current.stopLoop?.();
+      sessionRef.current?.setSharedTabAudio(null);
       stopMediaStream(screenSlot.current.stream);
       screenSlot.current = emptyVisionSlot();
       setScreenOn(false);
@@ -688,7 +689,10 @@ export function VoiceHome() {
         });
       }
       if (source === "camera") setCameraOn(true);
-      else setScreenOn(true);
+      else {
+        setScreenOn(true);
+        sessionRef.current?.setSharedTabAudio(stream);
+      }
       sessionRef.current?.notifyVision(source, true);
     } catch (caught) {
       releaseVision(source, false);
@@ -1572,6 +1576,7 @@ export function VoiceHome() {
     await session.start();
     if (cameraSlot.current.stream) session.notifyVision("camera", true);
     if (screenSlot.current.stream) {
+      session.setSharedTabAudio(screenSlot.current.stream);
       session.notifyVision("screen", true);
       const shot = screenVideoRef.current ? captureVideoShot(screenVideoRef.current) : null;
       if (shot) {
@@ -2148,7 +2153,7 @@ export function VoiceHome() {
           ) : null}
           {screenOn ? (
             <p className="text-right text-xs text-zinc-500">
-              Lexi is watching this live share.
+              Lexi is watching this live share. Check Share tab audio in Chrome so she can hear it too.
             </p>
           ) : null}
           {chips.length ? (

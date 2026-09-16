@@ -7,8 +7,8 @@ export const MIC_RMS_ABS_FLOOR = 0.008;
 export const MIC_RMS_NOISE_RATIO = 2.0;
 
 /**
- * User-mic constraints only. Display / tab / watch-together audio must never use these
- * or be mixed into the same MediaStream that feeds input_audio_buffer.append.
+ * User-mic constraints only. Shared-tab soundtrack is mixed in Web Audio as a
+ * separate source — never added to this mic MediaStream.
  *
  * Intelligibility over aggressive isolation: keep AEC so Fortnite/TV is not “Ian”,
  * but do not stack voiceIsolation + Chrome NS extras — those clip consonants when
