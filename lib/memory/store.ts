@@ -103,7 +103,7 @@ async function migrateTable() {
   const db = sql();
   if (!db) return null;
   await db.query(`
-    CREATE TABLE IF NOT EXISTS memories (
+    CREATE TABLE IF NOT EXISTS call_memories (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id text NOT NULL,
       memory_key text NOT NULL,
@@ -125,79 +125,79 @@ async function migrateTable() {
   await db.query(`
     DO $$
     BEGIN
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS user_id text;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS memory_key text;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS raw_text text;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS weighted_text text;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS start_salience double precision;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS salience double precision;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS band text;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS rate double precision;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS t0 timestamptz;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_decay timestamptz;
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS user_id text;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS memory_key text;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS raw_text text;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS weighted_text text;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS start_salience double precision;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS salience double precision;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS band text;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS rate double precision;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS t0 timestamptz;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS last_decay timestamptz;
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+      ALTER TABLE call_memories ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'raw_event'
+        WHERE table_schema = 'public' AND table_name = 'call_memories' AND column_name = 'raw_event'
       ) THEN
-        UPDATE memories SET raw_text = raw_event WHERE raw_text IS NULL;
+        UPDATE call_memories SET raw_text = raw_event WHERE raw_text IS NULL;
       END IF;
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'weighted_version'
+        WHERE table_schema = 'public' AND table_name = 'call_memories' AND column_name = 'weighted_version'
       ) THEN
-        UPDATE memories SET weighted_text = weighted_version WHERE weighted_text IS NULL;
+        UPDATE call_memories SET weighted_text = weighted_version WHERE weighted_text IS NULL;
       END IF;
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'affect'
+        WHERE table_schema = 'public' AND table_name = 'call_memories' AND column_name = 'affect'
       ) THEN
-        UPDATE memories SET start_salience = affect::double precision WHERE start_salience IS NULL;
-        UPDATE memories SET salience = affect::double precision WHERE salience IS NULL;
+        UPDATE call_memories SET start_salience = affect::double precision WHERE start_salience IS NULL;
+        UPDATE call_memories SET salience = affect::double precision WHERE salience IS NULL;
       END IF;
 
-      UPDATE memories SET memory_key = 'legacy-' || id::text WHERE memory_key IS NULL;
-      UPDATE memories SET raw_text = '' WHERE raw_text IS NULL;
-      UPDATE memories SET start_salience = 3 WHERE start_salience IS NULL;
-      UPDATE memories SET salience = start_salience WHERE salience IS NULL;
-      UPDATE memories SET band = CASE
+      UPDATE call_memories SET memory_key = 'legacy-' || id::text WHERE memory_key IS NULL;
+      UPDATE call_memories SET raw_text = '' WHERE raw_text IS NULL;
+      UPDATE call_memories SET start_salience = 3 WHERE start_salience IS NULL;
+      UPDATE call_memories SET salience = start_salience WHERE salience IS NULL;
+      UPDATE call_memories SET band = CASE
         WHEN start_salience <= 3 THEN 'low'
         WHEN start_salience <= 6 THEN 'medium'
         ELSE 'high'
       END
       WHERE band IS NULL OR band NOT IN ('low', 'medium', 'high');
-      UPDATE memories SET rate = CASE band
+      UPDATE call_memories SET rate = CASE band
         WHEN 'low' THEN 0.04
         WHEN 'medium' THEN 0.01
         ELSE 0.0025
       END
       WHERE rate IS NULL;
-      UPDATE memories SET t0 = COALESCE(created_at, now()) WHERE t0 IS NULL;
-      UPDATE memories SET created_at = now() WHERE created_at IS NULL;
-      UPDATE memories SET updated_at = COALESCE(created_at, now()) WHERE updated_at IS NULL;
+      UPDATE call_memories SET t0 = COALESCE(created_at, now()) WHERE t0 IS NULL;
+      UPDATE call_memories SET created_at = now() WHERE created_at IS NULL;
+      UPDATE call_memories SET updated_at = COALESCE(created_at, now()) WHERE updated_at IS NULL;
 
-      ALTER TABLE memories ALTER COLUMN memory_key SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN raw_text SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN start_salience SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN salience SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN band SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN rate SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN t0 SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN created_at SET NOT NULL;
-      ALTER TABLE memories ALTER COLUMN updated_at SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN memory_key SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN raw_text SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN start_salience SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN salience SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN band SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN rate SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN t0 SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN created_at SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN updated_at SET NOT NULL;
     END $$;
   `);
-  await db.query(`UPDATE memories SET user_id = $1 WHERE user_id IS NULL`, [defaultUserId()]);
+  await db.query(`UPDATE call_memories SET user_id = $1 WHERE user_id IS NULL`, [defaultUserId()]);
   await db.query(`
     DO $$
     BEGIN
-      ALTER TABLE memories ALTER COLUMN user_id SET NOT NULL;
+      ALTER TABLE call_memories ALTER COLUMN user_id SET NOT NULL;
     END $$;
   `);
-  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS memories_user_id_memory_key_uidx ON memories (user_id, memory_key)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS memories_user_id_idx ON memories (user_id)`);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS call_memories_user_id_memory_key_uidx ON call_memories (user_id, memory_key)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS call_memories_user_id_idx ON call_memories (user_id)`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS facts (
@@ -244,7 +244,7 @@ async function migrateTable() {
   const renamedUserIds = await renameDefaultUserIds(db);
   const nameFactsBackfilled = await backfillNameFacts(db);
   await ensurePinnedFacts(db, defaultUserId());
-  const legacyCount = (await db.query(`SELECT COUNT(*)::int AS n FROM memories`)) as { n: number }[];
+  const legacyCount = (await db.query(`SELECT COUNT(*)::int AS n FROM call_memories`)) as { n: number }[];
   lastMigrate = {
     ok: true,
     defaultUserId: defaultUserId(),
@@ -258,12 +258,12 @@ async function migrateTable() {
 async function renameDefaultUserIds(db: NonNullable<ReturnType<typeof sql>>) {
   const target = defaultUserId();
   const memories = (await db.query(
-    `UPDATE memories m
+    `UPDATE call_memories m
      SET user_id = $1
      WHERE lower(m.user_id) = lower($1)
        AND m.user_id <> $1
        AND NOT EXISTS (
-         SELECT 1 FROM memories x
+         SELECT 1 FROM call_memories x
          WHERE x.user_id = $1
            AND x.memory_key IS NOT DISTINCT FROM m.memory_key
            AND x.id <> m.id
@@ -299,7 +299,7 @@ async function renameDefaultUserIds(db: NonNullable<ReturnType<typeof sql>>) {
 async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
   const blobs = (await db.query(
     `SELECT user_id, raw_text, start_salience, t0
-     FROM memories
+     FROM call_memories
      WHERE raw_text IS NOT NULL AND btrim(raw_text) <> ''
      ORDER BY t0 ASC`,
   )) as { user_id: string; raw_text: string; start_salience: number; t0: string }[];

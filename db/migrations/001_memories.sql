@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS memories (
+CREATE TABLE IF NOT EXISTS call_memories (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id text NOT NULL,
   memory_key text NOT NULL,
@@ -15,4 +15,4 @@ CREATE TABLE IF NOT EXISTS memories (
   UNIQUE (user_id, memory_key)
 );
 
-CREATE INDEX IF NOT EXISTS memories_user_id_idx ON memories (user_id);
+CREATE INDEX IF NOT EXISTS call_memories_user_id_idx ON call_memories (user_id);
