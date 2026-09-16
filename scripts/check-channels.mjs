@@ -156,9 +156,13 @@ const inboundAnon = parseInboundPayload({ platform: "telegram", text: "ping" });
 expect(inboundAnon.userId === "", "inbound does not invent Ian");
 
 expect(CHAT_COMPLETIONS_URL === "https://api.x.ai/v1/chat/completions", "chat url");
-expect(DEFAULT_CHAT_MODEL === "grok-4.6", "default chat model");
+expect(DEFAULT_CHAT_MODEL === "grok-4-1-fast-reasoning", "default chat model");
 expect(chatModelFromEnv({}) === DEFAULT_CHAT_MODEL, "chat model default");
 expect(chatModelFromEnv({ XAI_CHAT_MODEL: "grok-4" }) === "grok-4", "chat model override");
+expect(
+  chatModelFromEnv({ XAI_CHAT_MODEL: "grok-voice-latest" }) === DEFAULT_CHAT_MODEL,
+  "never put voice model on text chat",
+);
 expect(readChatText({ choices: [{ message: { content: "  hey " } }] }) === "hey", "chat text");
 expect(readChatError({ error: { message: "nope" } }) === "nope", "chat error");
 

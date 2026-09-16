@@ -1,9 +1,12 @@
 export const VOICE_STORAGE_KEYS = {
   sessionId: "lexi.sessionId",
+  /** Hangup must delete this (web localStorage). Next Call sends null. */
+  previousSessionId: "lexi.previousSessionId",
   started: "lexi.started",
   userId: "lexi.userId",
   caption: "lexi.caption",
   transcripts: "lexi.transcripts",
+  voiceSessionId: "lexi.voiceSessionId",
 } as const;
 
 export type StoredTranscriptRow = {
@@ -14,16 +17,28 @@ export type StoredTranscriptRow = {
 
 export type VoiceSessionStore = {
   sessionId: string | null;
+  previousSessionId: string | null;
+  voiceSessionId: string | null;
   started: boolean;
   userId: string;
   caption: string;
   rows: StoredTranscriptRow[];
 };
 
-function store() {
+function sessionStore() {
   try {
     if (typeof sessionStorage === "undefined") return null;
     return sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** previousSessionId lives in localStorage per product rule. */
+function localStore() {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage;
   } catch {
     return null;
   }
@@ -49,11 +64,36 @@ export function parseTranscripts(raw: string | null | undefined): StoredTranscri
   }
 }
 
+export function readPreviousSessionId() {
+  const local = localStore();
+  const fromLocal = local?.getItem(VOICE_STORAGE_KEYS.previousSessionId)?.trim() || null;
+  if (fromLocal) return fromLocal;
+  // Migrate leftover sessionStorage key if present.
+  const session = sessionStore();
+  const legacy = session?.getItem(VOICE_STORAGE_KEYS.previousSessionId)?.trim() || null;
+  if (legacy) {
+    session?.removeItem(VOICE_STORAGE_KEYS.previousSessionId);
+    local?.setItem(VOICE_STORAGE_KEYS.previousSessionId, legacy);
+  }
+  return legacy;
+}
+
+export function writePreviousSessionId(value: string | null) {
+  const local = localStore();
+  const session = sessionStore();
+  session?.removeItem(VOICE_STORAGE_KEYS.previousSessionId);
+  if (!local) return;
+  if (value) local.setItem(VOICE_STORAGE_KEYS.previousSessionId, value);
+  else local.removeItem(VOICE_STORAGE_KEYS.previousSessionId);
+}
+
 export function readVoiceSessionStore(): VoiceSessionStore {
-  const memory = store();
+  const memory = sessionStore();
   if (!memory) {
     return {
       sessionId: null,
+      previousSessionId: readPreviousSessionId(),
+      voiceSessionId: null,
       started: false,
       userId: "",
       caption: "",
@@ -63,6 +103,8 @@ export function readVoiceSessionStore(): VoiceSessionStore {
   const sessionId = memory.getItem(VOICE_STORAGE_KEYS.sessionId)?.trim() || null;
   return {
     sessionId,
+    previousSessionId: readPreviousSessionId(),
+    voiceSessionId: memory.getItem(VOICE_STORAGE_KEYS.voiceSessionId)?.trim() || null,
     started: memory.getItem(VOICE_STORAGE_KEYS.started) === "1",
     userId: memory.getItem(VOICE_STORAGE_KEYS.userId)?.trim() || "",
     caption: memory.getItem(VOICE_STORAGE_KEYS.caption) ?? "",
@@ -72,16 +114,25 @@ export function readVoiceSessionStore(): VoiceSessionStore {
 
 export function writeVoiceSessionStore(update: {
   sessionId?: string | null;
+  previousSessionId?: string | null;
+  voiceSessionId?: string | null;
   started?: boolean;
   userId?: string;
   caption?: string;
   rows?: StoredTranscriptRow[];
 }) {
-  const memory = store();
+  const memory = sessionStore();
+  if (update.previousSessionId !== undefined) {
+    writePreviousSessionId(update.previousSessionId);
+  }
   if (!memory) return;
   if (update.sessionId !== undefined) {
     if (update.sessionId) memory.setItem(VOICE_STORAGE_KEYS.sessionId, update.sessionId);
     else memory.removeItem(VOICE_STORAGE_KEYS.sessionId);
+  }
+  if (update.voiceSessionId !== undefined) {
+    if (update.voiceSessionId) memory.setItem(VOICE_STORAGE_KEYS.voiceSessionId, update.voiceSessionId);
+    else memory.removeItem(VOICE_STORAGE_KEYS.voiceSessionId);
   }
   if (update.started !== undefined) {
     memory.setItem(VOICE_STORAGE_KEYS.started, update.started ? "1" : "0");
@@ -99,8 +150,25 @@ export function writeVoiceSessionStore(update: {
   }
 }
 
+/** Hang up: drop previousSessionId + transcript. Keep userId for recalled facts. */
+export function clearCallContinuityStore() {
+  writePreviousSessionId(null);
+  writeVoiceSessionStore({
+    sessionId: null,
+    previousSessionId: null,
+    voiceSessionId: null,
+    started: false,
+    caption: "",
+    rows: [],
+  });
+}
+
 export function clearVoiceSessionStore() {
-  const memory = store();
+  writePreviousSessionId(null);
+  const memory = sessionStore();
   if (!memory) return;
-  for (const key of Object.values(VOICE_STORAGE_KEYS)) memory.removeItem(key);
+  for (const key of Object.values(VOICE_STORAGE_KEYS)) {
+    if (key === VOICE_STORAGE_KEYS.previousSessionId) continue;
+    memory.removeItem(key);
+  }
 }

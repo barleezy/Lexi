@@ -7,6 +7,7 @@ final class AccountStore {
         static let token = "lexi.ios.token"
         static let userId = "lexi.ios.userId"
         static let guestUserId = "lexi.ios.guestUserId"
+        static let previousSessionId = "lexi.previousSessionId"
         static let host = "lexi.ios.host"
         static let routeThroughPS5PartyChat = "lexi.ios.routeThroughPS5PartyChat"
         static let psnOnlineId = "lexi.ios.psnOnlineId"
@@ -53,6 +54,23 @@ final class AccountStore {
         let next = "guest_\(hex)"
         defaults.set(next, forKey: Key.guestUserId)
         return next
+    }
+
+    var previousSessionId: String {
+        get { defaults.string(forKey: Key.previousSessionId) ?? "" }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: Key.previousSessionId)
+            } else {
+                defaults.set(trimmed, forKey: Key.previousSessionId)
+            }
+        }
+    }
+
+    /// Hang up: drop previousSessionId. Keep userId so recalled facts still load.
+    func clearCallContinuity() {
+        previousSessionId = ""
     }
 
     func apply(token: String, userId: String) {

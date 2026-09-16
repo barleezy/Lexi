@@ -65,8 +65,18 @@ export function hashResetToken(token: string) {
 
 export function publicAppUrl(request: Request) {
   const configured = process.env.APP_URL?.trim() || process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (configured) return configured.replace(/\/$/, "");
-  return new URL(request.url).origin;
+  const raw = (configured || new URL(request.url).origin).replace(/\/$/, "");
+  // Apex talktolexi.app 307s to www on Vercel. Prefer www so Checkout/webhooks never use the redirecting host.
+  try {
+    const url = new URL(raw);
+    if (url.hostname === "talktolexi.app") {
+      url.hostname = "www.talktolexi.app";
+      return url.origin;
+    }
+  } catch {
+    // keep raw
+  }
+  return raw;
 }
 
 function resetEmailBody(userId: string, token: string, resetUrl: string) {

@@ -250,16 +250,28 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         connectGeneration += 1
         isConnecting = false
         let sessionId = realtime.memorySessionId
+        let voiceSessionId = realtime.voiceSessionId
         realtime.stop()
+        realtime.memorySessionId = nil
+        realtime.voiceSessionId = nil
+        // Hang up: clear previousSessionId. Next Call sends null + empty prior; facts stay.
+        AccountStore.shared.clearCallContinuity()
         camera.stop(notify: false)
         toys.reset()
         refreshStatus()
-        Task { await api.endMemorySession(sessionId: sessionId) }
+        Task {
+            await api.settleVoiceSession(voiceSessionId: voiceSessionId)
+            await api.endMemorySession(sessionId: sessionId)
+        }
     }
 
     private func openRealtime(generation gen: Int) async throws {
+        // Fresh Call: no previousSessionId, no prior transcript. Recalled facts still load server-side.
+        AccountStore.shared.clearCallContinuity()
+        realtime.memorySessionId = nil
+        realtime.voiceSessionId = nil
         let session = try await api.startRealtimeSession(
-            sessionId: realtime.memorySessionId,
+            sessionId: nil,
             previousSessionId: nil,
             timeZone: TimeZone.current.identifier,
             location: location.payload(),
@@ -269,6 +281,13 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         )
         guard gen == connectGeneration else { return }
         realtime.memorySessionId = session.sessionId
+        realtime.voiceSessionId = session.voiceSessionId
+        if let capAtMs = session.capAtMs {
+            realtime.armVoiceCap(capAtMs: capAtMs) { [weak self] in
+                self?.lastError = "Out of minutes."
+                self?.endCall()
+            }
+        }
         var update = session.sessionUpdate
         if update == nil {
             update = [

@@ -2,12 +2,17 @@ import { cookies } from "next/headers";
 import { AccountAuthError } from "@/lib/auth/accounts";
 import {
   LEXI_USER_COOKIE,
-  lexiUserCookieOptions,
   loginAccount,
   parseAuthAction,
   publicAppUrl,
   runPasswordFlow,
 } from "@/lib/auth/login";
+import {
+  LEXI_SESSION_COOKIE,
+  lexiSessionCookieOptions,
+  lexiUserDisplayCookieOptions,
+  signAuthSession,
+} from "@/lib/auth/session";
 import {
   callbackURLWithToken,
   iosSigningSecret,
@@ -102,7 +107,9 @@ export async function POST(request: Request) {
   }
 
   const jar = await cookies();
-  jar.set(LEXI_USER_COOKIE, userId, lexiUserCookieOptions());
+  const webSession = signAuthSession(userId);
+  if (webSession) jar.set(LEXI_SESSION_COOKIE, webSession, lexiSessionCookieOptions());
+  jar.set(LEXI_USER_COOKIE, userId, lexiUserDisplayCookieOptions());
 
   return Response.json({
     ok: true,

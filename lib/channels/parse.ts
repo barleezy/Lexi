@@ -3,7 +3,7 @@ export const TELEGRAM_API = "https://api.telegram.org";
 export const TWILIO_API = "https://api.twilio.com/2010-04-01";
 export const RESEND_API = "https://api.resend.com/emails";
 export const CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions";
-export const DEFAULT_CHAT_MODEL = "grok-4.6";
+export const DEFAULT_CHAT_MODEL = "grok-4-1-fast-reasoning";
 
 export const DISCORD_PING = 1;
 export const DISCORD_APPLICATION_COMMAND = 2;
@@ -36,7 +36,10 @@ export function twilioMessagesUrl(accountSid: string) {
 }
 
 export function chatModelFromEnv(env: NodeJS.ProcessEnv = process.env) {
-  return env.XAI_CHAT_MODEL?.trim() || DEFAULT_CHAT_MODEL;
+  const override = env.XAI_CHAT_MODEL?.trim();
+  // Never allow a voice/realtime model on text chat paths.
+  if (override && /grok-voice|realtime/i.test(override)) return DEFAULT_CHAT_MODEL;
+  return override || DEFAULT_CHAT_MODEL;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

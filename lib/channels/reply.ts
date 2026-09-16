@@ -94,7 +94,7 @@ export async function replyOnChannel(input: {
         instructions: withDecay,
         prior,
       }),
-      max_tokens: 400,
+      max_tokens: 800,
       temperature: 0.8,
     }),
   });
