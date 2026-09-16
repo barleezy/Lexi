@@ -9,6 +9,7 @@ import {
   listRecentTurns,
   recallForUser,
 } from "@/lib/memory/store";
+import { formatCallMemories, listCallMemories, mergeMemoryInstructions } from "@/lib/memory/call-summaries";
 import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
 import { APPLE_MUSIC_USER_COOKIE, isAppleMusicConfigured } from "@/lib/apple-music/config";
 import type { DeviceLocationState } from "@/lib/voice/location";
@@ -277,9 +278,9 @@ export async function buildIosSession(input: {
   const userId = resolveUserId(input.request, input.requestedUserId);
   let sessionId = parseSessionId(input.sessionId) ?? "";
   const previousSessionId = parseSessionId(input.previousSessionId);
-  // Fresh Call (previousSessionId null): keep recalled facts, drop transcript prior.
+  // Fresh Call (previousSessionId null): keep recalled facts + call summaries, drop transcript prior.
   const includePrior = Boolean(previousSessionId);
-  const [recalled, turns, session] = await Promise.all([
+  const [recalled, turns, session, callMemories] = await Promise.all([
     recallForUser(userId).catch(() => []),
     includePrior ? listRecentTurns(userId).catch(() => []) : Promise.resolve([]),
     (async () => {
@@ -288,8 +289,12 @@ export async function buildIosSession(input: {
       }
       return createOrResumeSession(userId, sessionId || null);
     })().catch(() => null),
+    listCallMemories(userId).catch(() => []),
   ]);
-  const memoryInstructions = formatMemoryInstructions(recalled);
+  const memoryInstructions = mergeMemoryInstructions(
+    formatMemoryInstructions(recalled),
+    formatCallMemories(callMemories),
+  );
   const decayState = formatDecayState(recalled);
   const priorChat = includePrior ? formatPriorChat(turns) : "";
   const memorySessionId = session?.id ?? parseSessionId(sessionId);

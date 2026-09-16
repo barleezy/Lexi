@@ -260,7 +260,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         toys.reset()
         refreshStatus()
         Task {
-            await api.settleVoiceSession(voiceSessionId: voiceSessionId)
+            await api.settleVoiceSession(voiceSessionId: voiceSessionId, memorySessionId: sessionId)
             await api.endMemorySession(sessionId: sessionId)
         }
     }

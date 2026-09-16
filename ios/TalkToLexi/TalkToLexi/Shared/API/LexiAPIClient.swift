@@ -160,12 +160,16 @@ final class LexiAPIClient {
         ])
     }
 
-    func settleVoiceSession(voiceSessionId: String?) async {
+    func settleVoiceSession(voiceSessionId: String?, memorySessionId: String? = nil) async {
         guard let voiceSessionId, !voiceSessionId.isEmpty else { return }
-        _ = try? await postJSON("/api/voice/settle", body: [
+        var body: [String: Any] = [
             "userId": account.sessionUserId,
             "voiceSessionId": voiceSessionId,
-        ])
+        ]
+        if let memorySessionId, !memorySessionId.isEmpty {
+            body["sessionId"] = memorySessionId
+        }
+        _ = try? await postJSON("/api/voice/settle", body: body)
     }
 
     func channels() async -> [String] {

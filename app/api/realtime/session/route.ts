@@ -6,6 +6,7 @@ import {
   listRecentTurns,
   recallForUser,
 } from "@/lib/memory/store";
+import { formatCallMemories, listCallMemories, mergeMemoryInstructions } from "@/lib/memory/call-summaries";
 import { formatSessionIdLine, parseSessionId } from "@/lib/memory/session-id";
 import { formatPriorChat } from "@/lib/memory/turns";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
@@ -209,14 +210,14 @@ export async function POST(request: Request) {
     return Response.json({ error }, { status: 502 });
   }
 
-  // Empty prior on fresh Call (previousSessionId null). Keep short memory facts only.
+  // Empty prior on fresh Call (previousSessionId null). Keep short memory facts + call summaries.
   const includePrior = Boolean(parseSessionId(previousSessionId));
   let decayState = "no active decay tags";
   let memoryInstructions = "";
   let priorChat = "";
   let priorTurns: Awaited<ReturnType<typeof listRecentTurns>> = [];
   let memorySessionId: string | null = null;
-  const [recalled, turns, session] = await Promise.all([
+  const [recalled, turns, session, callMemories] = await Promise.all([
     recallForUser(userId).catch(() => []),
     includePrior ? listRecentTurns(userId).catch(() => []) : Promise.resolve([]),
     (async () => {
@@ -225,9 +226,13 @@ export async function POST(request: Request) {
       }
       return createOrResumeSession(userId, sessionId || null);
     })().catch(() => null),
+    listCallMemories(userId).catch(() => []),
   ]);
   decayState = formatDecayState(recalled);
-  memoryInstructions = formatMemoryInstructions(recalled);
+  memoryInstructions = mergeMemoryInstructions(
+    formatMemoryInstructions(recalled),
+    formatCallMemories(callMemories),
+  );
   priorTurns = includePrior ? turns : [];
   priorChat = includePrior ? formatPriorChat(priorTurns) : "";
   memorySessionId = session?.id ?? parseSessionId(sessionId);
