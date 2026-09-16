@@ -96,7 +96,7 @@ export function buyPagePacks(env: NodeJS.ProcessEnv = process.env) {
       label: pack.label,
       minutes: pack.minutes,
       priceLabel: pack.priceLabel,
-      thumbnail: existsSync(publicFile) ? pack.thumbnail : "",
+      thumbnail: existsSync(publicFile) ? pack.thumbnail : "/lexi.jpg",
       priceId,
       configured: Boolean(priceId),
     };

@@ -1,67 +1,26 @@
 "use client";
 
-import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { BuyPacks, type BuyPackCard } from "@/components/buy-packs";
 
-export type BuyPackCard = {
-  id: string;
-  label: string;
-  minutes: number;
-  priceLabel: string;
-  thumbnail: string;
-  priceId: string;
-  configured: boolean;
-};
+export type { BuyPackCard };
 
-export function BuyClient({ packs }: { packs: BuyPackCard[] }) {
-  const [pendingId, setPendingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function buy(pack: BuyPackCard) {
-    if (!pack.configured || !pack.priceId) {
-      setError("That pack is not for sale yet.");
-      return;
-    }
-    setError(null);
-    setPendingId(pack.id);
-    try {
-      const response = await fetch("/api/checkout", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "1",
-        },
-        body: JSON.stringify({ priceId: pack.priceId }),
-      });
-      const body = (await response.json()) as { url?: string; error?: string };
-      if (response.status === 401) {
-        window.location.href = "/?next=/buy";
-        return;
-      }
-      if (!response.ok || !body.url) {
-        throw new Error(body.error || "Could not start Checkout.");
-      }
-      window.location.href = body.url;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start Checkout.");
-      setPendingId(null);
-    }
-  }
-
+export function BuyClient({
+  packs,
+  signedIn = false,
+  stripeReady = false,
+}: {
+  packs: BuyPackCard[];
+  signedIn?: boolean;
+  stripeReady?: boolean;
+}) {
   return (
     <div className="buy-page relative flex min-h-dvh flex-1 flex-col overflow-hidden">
       <style>{`
         .buy-page {
           --buy-pink: #f472b6;
           --buy-pink-muted: #e8a0c0;
-          --buy-pink-glow: rgba(244, 114, 182, 0.55);
-          --buy-card: rgba(12, 8, 14, 0.55);
-          --buy-muted: #a3a3a3;
-        }
-        @keyframes buy-card-in {
-          from { opacity: 0; transform: translateY(14px); }
-          to { opacity: 1; transform: translateY(0); }
         }
         @keyframes buy-title-in {
           from { opacity: 0; transform: translateY(8px); }
@@ -69,36 +28,6 @@ export function BuyClient({ packs }: { packs: BuyPackCard[] }) {
         }
         .buy-title { animation: buy-title-in 0.7s ease-out both; }
         .buy-subtitle { animation: buy-title-in 0.7s ease-out 0.12s both; }
-        .buy-card {
-          animation: buy-card-in 0.65s ease-out both;
-          background: var(--buy-card);
-          border: 1px solid var(--buy-pink);
-          box-shadow:
-            0 0 0 1px rgba(244, 114, 182, 0.15),
-            0 0 24px var(--buy-pink-glow),
-            inset 0 0 24px rgba(244, 114, 182, 0.06);
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
-        }
-        .buy-card:nth-child(1) { animation-delay: 0.18s; }
-        .buy-card:nth-child(2) { animation-delay: 0.28s; }
-        .buy-card:nth-child(3) { animation-delay: 0.38s; }
-        .buy-card:hover {
-          box-shadow:
-            0 0 0 1px rgba(244, 114, 182, 0.35),
-            0 0 36px rgba(244, 114, 182, 0.7),
-            inset 0 0 28px rgba(244, 114, 182, 0.1);
-        }
-        .buy-buy-btn {
-          background: var(--buy-pink);
-          color: #140810;
-          transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-        }
-        .buy-buy-btn:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow: 0 0 18px var(--buy-pink-glow);
-        }
-        .buy-buy-btn:disabled { opacity: 0.45; }
       `}</style>
 
       <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-black">
@@ -127,59 +56,20 @@ export function BuyClient({ packs }: { packs: BuyPackCard[] }) {
           </p>
         </header>
 
-        <ul className="mt-12 grid w-full max-w-4xl gap-5 sm:mt-16 sm:grid-cols-3 sm:gap-6">
-          {packs.map((pack) => (
-            <li
-              key={pack.id}
-              className="buy-card flex flex-col items-center overflow-hidden rounded-[1.75rem] text-center"
-            >
-              {pack.thumbnail ? (
-                <div className="relative aspect-[4/3] w-full overflow-hidden">
-                  <Image
-                    src={pack.thumbnail}
-                    alt=""
-                    fill
-                    sizes="(max-width: 640px) 100vw, 33vw"
-                    className="object-cover object-center"
-                    priority={pack.id === "whisper"}
-                  />
-                </div>
-              ) : null}
-              <div className="flex w-full flex-col items-center px-6 py-8">
-                <p className="text-lg font-medium tracking-wide" style={{ color: "var(--buy-pink)" }}>
-                  {pack.label}
-                </p>
-                <p className="mt-4 text-5xl font-semibold tracking-tight text-white sm:text-6xl">
-                  {pack.priceLabel}
-                </p>
-                <p className="mt-3 text-sm" style={{ color: "var(--buy-muted)" }}>
-                  {pack.minutes} minutes
-                </p>
-                <button
-                  type="button"
-                  disabled={pendingId != null || !pack.configured}
-                  onClick={() => void buy(pack)}
-                  className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
-                >
-                  {pendingId === pack.id ? "Starting…" : "Buy"}
-                </button>
-                {!pack.configured ? (
-                  <p className="mt-3 text-xs" style={{ color: "var(--buy-muted)" }}>
-                    Not configured yet.
-                  </p>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
-
-        {error ? (
-          <p className="mt-8 text-sm text-zinc-300" role="alert">
-            {error}
+        {!stripeReady ? (
+          <p className="mt-8 max-w-xl text-center text-sm text-zinc-300" role="status">
+            Checkout is not configured on this server yet. Whisper, Murmur, and Echo are listed
+            below — payment will not start until billing is set up.
+          </p>
+        ) : !signedIn ? (
+          <p className="mt-8 max-w-xl text-center text-sm text-zinc-300" role="status">
+            Sign in to buy minutes. Your packs stay on this page after you come back.
           </p>
         ) : null}
 
-        <p className="mt-auto pt-12 text-sm" style={{ color: "var(--buy-muted)" }}>
+        <BuyPacks packs={packs} signedIn={signedIn} className="mt-12 w-full max-w-4xl sm:mt-16" />
+
+        <p className="mt-auto pt-12 text-sm text-zinc-400">
           <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
             Back to Call
           </Link>

@@ -80,17 +80,40 @@ assert.ok(packsSrc.includes("/buy/murmur.jpg"), "murmur thumbnail path");
 assert.ok(packsSrc.includes("/buy/echo.jpg"), "echo thumbnail path");
 
 const buyPage = readFileSync(new URL("../app/buy/page.tsx", import.meta.url), "utf8");
-assert.ok(buyPage.includes("redirect"), "buy requires sign-in");
-assert.ok(buyPage.includes("/?next=/buy"), "buy redirects to sign-in");
+assert.ok(!buyPage.includes("redirect"), "buy catalog is public");
+assert.ok(buyPage.includes("buyPagePacks"), "buy always loads packs");
+assert.ok(buyPage.includes("BuyClient"), "buy renders pack client");
 
 const buyClient = readFileSync(new URL("../app/buy/buy-client.tsx", import.meta.url), "utf8");
 assert.ok(buyClient.includes("Talk To Lexi"), "buy brand hero");
 assert.ok(buyClient.includes("Choose Your AI Companion Plan"), "buy subtitle");
-assert.ok(buyClient.includes("pack.thumbnail"), "buy cards render thumbnails when present");
-assert.ok(buyClient.includes("/api/checkout"), "buy posts checkout");
-assert.ok(buyClient.includes("priceId"), "buy sends priceId");
 assert.ok(buyClient.includes("/lexi.jpg"), "buy uses Lexi portrait");
-assert.ok(buyClient.includes("Buy"), "buy buttons");
+assert.ok(buyClient.includes("Whisper") || buyPage.includes("buyPagePacks"), "buy loads named packs");
+assert.ok(buyClient.includes("BuyPacks"), "buy page uses shared pack cards");
+assert.ok(buyClient.includes("signedIn"), "buy passes sign-in to cards");
+assert.ok(buyClient.includes("stripeReady"), "buy surfaces billing status");
+
+const buyPacks = readFileSync(new URL("../components/buy-packs.tsx", import.meta.url), "utf8");
+assert.ok(buyPacks.includes("pack.thumbnail"), "buy cards render thumbnails when present");
+assert.ok(buyPacks.includes("/api/checkout"), "buy posts checkout");
+assert.ok(buyPacks.includes("priceId"), "buy sends priceId");
+assert.ok(buyPacks.includes("Buy"), "buy buttons");
+assert.ok(buyPacks.includes("Sign in to buy"), "unsigned buy asks to sign in");
+assert.ok(buyPacks.includes("Checkout is not configured yet"), "unconfigured packs explain why");
+assert.ok(!/disabled=\{pendingId != null \|\| !pack\.configured\}/.test(buyPacks), "buy is not silently disabled");
+
+const homeSrc = readFileSync(new URL("../components/voice-home.tsx", import.meta.url), "utf8");
+assert.ok(homeSrc.includes('href="/buy"'), "home Buy links to /buy");
+assert.ok(homeSrc.includes("BuyPacks"), "home can show pack cards");
+assert.ok(homeSrc.includes("Rehearsal"), "rehearsal screen label");
+assert.ok(homeSrc.includes("catalogPacks"), "home receives public catalog");
+assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
+
+const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs");
+
+const balanceSrc = readFileSync(new URL("../app/api/billing/balance/route.ts", import.meta.url), "utf8");
+assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
 
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
 assert.ok(buySuccess.includes("Minutes added"), "success copy");

@@ -1,5 +1,5 @@
 import { requireAuthSessionUserId } from "@/lib/auth/session";
-import { publicPacks, isStripeConfigured } from "@/lib/wallet/packs";
+import { buyPagePacks, publicPacks, isStripeConfigured } from "@/lib/wallet/packs";
 import { formatVoiceMinutes, readVoiceSeconds, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 
 export async function GET(request: Request) {
@@ -16,6 +16,7 @@ export async function GET(request: Request) {
     voiceSeconds,
     label: formatVoiceMinutes(voiceSeconds),
     packs: publicPacks(),
+    buyPacks: buyPagePacks(),
     stripeConfigured: isStripeConfigured(),
   });
 }

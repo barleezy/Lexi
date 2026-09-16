@@ -1,7 +1,9 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { BuyPacks, type BuyPackCard } from "@/components/buy-packs";
 import {
   VoiceSession,
   type GeneratedMediaItem,
@@ -314,7 +316,13 @@ function LiveClock() {
   );
 }
 
-export function VoiceHome() {
+export function VoiceHome({
+  catalogPacks = [],
+  billingReady = false,
+}: {
+  catalogPacks?: BuyPackCard[];
+  billingReady?: boolean;
+} = {}) {
   const sessionRef = useRef<VoiceSession | null>(null);
   const [phase, setPhase] = useState<VoicePhase>("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -322,7 +330,10 @@ export function VoiceHome() {
   const [accountId, setAccountId] = useState("");
   const [voiceSeconds, setVoiceSeconds] = useState<number | null>(null);
   const [voiceLabel, setVoiceLabel] = useState("");
-  const [stripeConfigured, setStripeConfigured] = useState(false);
+  const [stripeConfigured, setStripeConfigured] = useState(billingReady);
+  const [buyPacks, setBuyPacks] = useState<BuyPackCard[]>(catalogPacks);
+  const [buyIntent, setBuyIntent] = useState(false);
+  const [rehearsal, setRehearsal] = useState(false);
   const [accountDraft, setAccountDraft] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
@@ -429,6 +440,10 @@ export function VoiceHome() {
       sessionRef.current.setMusicPlayback(false);
     }
   }
+
+  useEffect(() => {
+    setBuyIntent(new URLSearchParams(window.location.search).get("next") === "/buy");
+  }, []);
 
   useEffect(() => {
     const persisted = readVoiceSessionStore();
@@ -1195,17 +1210,23 @@ export function VoiceHome() {
       if (response.status === 401) {
         setVoiceSeconds(null);
         setVoiceLabel("");
+        setBuyPacks(catalogPacks);
+        setRehearsal(false);
         return;
       }
       const body = (await response.json()) as {
         voiceSeconds?: number;
         label?: string;
         stripeConfigured?: boolean;
+        buyPacks?: BuyPackCard[];
       };
       if (!response.ok) return;
-      setVoiceSeconds(typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0);
+      const seconds = typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0;
+      setVoiceSeconds(seconds);
       setVoiceLabel(typeof body.label === "string" ? body.label : "");
       setStripeConfigured(body.stripeConfigured === true);
+      setBuyPacks(Array.isArray(body.buyPacks) && body.buyPacks.length ? body.buyPacks : catalogPacks);
+      setRehearsal(seconds <= 0);
     } catch {
       // ignore
     }
@@ -1692,6 +1713,7 @@ export function VoiceHome() {
       onMicRecovered: () => setMicResume(false),
       onError: (message) => {
         setError(message);
+        if (/^out of minutes\.?$/i.test(message.trim())) setRehearsal(true);
         releaseVision(undefined, false);
         clearSession();
       },
@@ -1711,6 +1733,7 @@ export function VoiceHome() {
     }
     const urlWasPlaying = backgroundAudio.current.playing;
     await session.start();
+    if (sessionRef.current) setRehearsal(false);
     if (urlWasPlaying && !backgroundAudio.current.playing) {
       try {
         await backgroundAudio.current.resume();
@@ -1871,14 +1894,12 @@ export function VoiceHome() {
               {isAdminUserId(accountId) ? " · admin" : ""}
               {voiceSeconds != null ? ` · ${voiceLabel || `${voiceSeconds}s`}` : ""}
             </span>
-            {stripeConfigured ? (
-              <a
-                href="/buy"
-                className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-              >
-                Buy minutes
-              </a>
-            ) : null}
+            <a
+              href="/buy"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Buy minutes
+            </a>
             <button
               type="button"
               onClick={signOutAccount}
@@ -1888,7 +1909,15 @@ export function VoiceHome() {
             </button>
           </div>
         ) : (
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <a
+              href="/buy"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Buy minutes
+            </a>
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
+          </div>
         )}
       </header>
       <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
@@ -1905,8 +1934,33 @@ export function VoiceHome() {
           data-stream-tick={streamTick}
           className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
         >
-          {error ?? (latestText || (accountId ? "A voice-first companion." : "Sign in to talk."))}
+          {rehearsal && accountId && !live
+            ? "Rehearsal is free practice. Buy minutes for a live Call."
+            : buyIntent && !accountId
+              ? "Sign in to buy Whisper, Murmur, or Echo."
+              : error ?? (latestText || (accountId ? "A voice-first companion." : "Sign in to talk."))}
         </p>
+        {(rehearsal && accountId && !live) || (buyIntent && !live) ? (
+          <section className="mt-6 flex w-full max-w-4xl flex-col items-center" aria-label="Rehearsal">
+            <p className="text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
+              {rehearsal && accountId ? "Rehearsal" : "Minutes"}
+            </p>
+            <Link
+              href="/buy"
+              className="mt-4 rounded-full bg-pink-400 px-6 py-3 text-sm font-semibold text-zinc-950"
+            >
+              Buy
+            </Link>
+            {!stripeConfigured ? (
+              <p className="mt-4 max-w-md text-center text-sm text-zinc-500">
+                Checkout is not configured yet. Whisper, Murmur, and Echo are listed below.
+              </p>
+            ) : null}
+            {buyPacks.length ? (
+              <BuyPacks packs={buyPacks} signedIn={Boolean(accountId)} className="mt-8 w-full" />
+            ) : null}
+          </section>
+        ) : null}
         {!accountId ? (
           <form
             noValidate
