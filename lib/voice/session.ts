@@ -1621,6 +1621,7 @@ export class VoiceSession {
     if (this.settlePosted || !this.voiceSessionId) return;
     this.settlePosted = true;
     const voiceSessionId = this.voiceSessionId;
+    const sessionId = this.currentSessionId();
     const userId = clientUserId();
     void fetch("/api/voice/settle", {
       method: "POST",
@@ -1629,7 +1630,7 @@ export class VoiceSession {
         "x-lexi-user-id": userId,
         "ngrok-skip-browser-warning": "1",
       },
-      body: JSON.stringify({ voiceSessionId, userId }),
+      body: JSON.stringify({ voiceSessionId, sessionId, userId }),
       keepalive: true,
     }).catch(() => {
       // settle sweeper will catch orphans

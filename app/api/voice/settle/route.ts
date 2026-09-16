@@ -1,11 +1,12 @@
 import { requireAuthSessionUserId } from "@/lib/auth/session";
+import { summarizeSettledCall } from "@/lib/memory/call-summaries";
 import { settleVoiceSession, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 
-export const maxDuration = 15;
+export const maxDuration = 60;
 
-/** Hangup settle: used = min(elapsed, hold); refund unused hold. */
+/** Hangup settle: used = min(elapsed, hold); refund unused hold; then store a call summary. */
 export async function POST(request: Request) {
-  let body: { voiceSessionId?: unknown; userId?: unknown } = {};
+  let body: { voiceSessionId?: unknown; userId?: unknown; sessionId?: unknown } = {};
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -31,10 +32,22 @@ export async function POST(request: Request) {
   if (!settled) {
     return Response.json({ error: "Voice session not found." }, { status: 404 });
   }
+
+  const memorySessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+  let memory: { ok: boolean; reason?: string; summary?: string } = { ok: false, reason: "skipped" };
+  if (memorySessionId && !settled.alreadySettled) {
+    try {
+      memory = await summarizeSettledCall({ userId, sessionId: memorySessionId });
+    } catch {
+      memory = { ok: false, reason: "error" };
+    }
+  }
+
   return Response.json({
     ok: true,
     userId,
     voiceSessionId,
     ...settled,
+    memory,
   });
 }

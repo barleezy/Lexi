@@ -16,6 +16,7 @@
     "generate:check": "node --experimental-strip-types scripts/check-generate.mjs",
     "channels:check": "node --experimental-strip-types scripts/check-channels.mjs",
     "wallet:check": "node --experimental-strip-types scripts/check-wallet.mjs",
+    "memory:check-call-summaries": "node --experimental-strip-types scripts/check-call-memories.mjs",
     "apple-music:check": "node --experimental-strip-types scripts/check-apple-music.mjs",
     "music:check": "node --experimental-strip-types scripts/check-background-music.mjs",
     "watch:check-formats": "node --experimental-strip-types scripts/check-watch-formats.mjs",

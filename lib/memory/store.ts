@@ -608,6 +608,24 @@ export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): P
   return [...rows].reverse();
 }
 
+/** Turns for one memory session, chronological. Used for hangup summaries only. */
+export async function listTurnsForSession(userId: string, sessionId: string): Promise<ChatTurn[]> {
+  const db = await ensureTable();
+  if (!db) return [];
+  const id = normalizeUserId(userId);
+  const sid = parseSessionId(sessionId);
+  if (!id || !sid) return [];
+  const rows = (await db.query(
+    `SELECT id, user_text, assistant_text
+     FROM turns
+     WHERE lower(user_id) = lower($1) AND session_id = $2::uuid
+     ORDER BY created_at ASC
+     LIMIT 64`,
+    [id, sid],
+  )) as { id: string; user_text: string; assistant_text: string }[];
+  return rows;
+}
+
 export async function recallForUser(userId: string, at = new Date()): Promise<DecayLine[]> {
   const db = await ensureTable();
   if (!db) return [];
