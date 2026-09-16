@@ -75,7 +75,12 @@ export function optionalEmail(raw?: unknown) {
   return validateEmail(raw);
 }
 
-type AccountRow = { user_id?: string; password_hash?: string; email?: string | null };
+type AccountRow = {
+  user_id?: string;
+  password_hash?: string;
+  email?: string | null;
+  paid?: boolean | null;
+};
 
 function asRows<T>(result: unknown): T[] {
   if (Array.isArray(result)) return result as T[];
@@ -134,6 +139,9 @@ async function ensureAccountsTable() {
       );
       await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email text`);
       await db.query(
+        `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS paid boolean NOT NULL DEFAULT false`,
+      );
+      await db.query(
         `
         CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_lower_idx
         ON accounts (lower(email))
@@ -184,6 +192,25 @@ function pickAccount(rows: AccountRow[], userId: string) {
 export async function findAccountRow(userId: string) {
   const db = await ensureAccountsTable();
   return pickAccount(await listAccounts(db, userId), userId);
+}
+
+/** Mark the account with this email as paid (Stripe checkout.session.completed). */
+export async function markAccountPaidByEmail(rawEmail: string) {
+  const email = validateEmail(rawEmail);
+  const db = await ensureAccountsTable();
+  const rows = asRows<{ user_id?: string }>(
+    await db.query(
+      `
+      UPDATE accounts
+      SET paid = true, updated_at = now()
+      WHERE lower(email) = $1
+      RETURNING user_id
+    `,
+      [email],
+    ),
+  );
+  const userId = rows[0]?.user_id?.trim() || "";
+  return { ok: true as const, matched: Boolean(userId), userId: userId || null, email };
 }
 
 export async function ensureBootstrapAdmin() {
