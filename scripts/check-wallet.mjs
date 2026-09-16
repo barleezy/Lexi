@@ -74,12 +74,7 @@ assert.ok(packsSrc.includes("STRIPE_PRICE_PACK_10"), "whisper price env");
 assert.ok(packsSrc.includes('id: "whisper"'), "whisper pack");
 assert.ok(packsSrc.includes('id: "murmur"'), "murmur pack");
 assert.ok(packsSrc.includes('id: "echo"'), "echo pack");
-assert.ok(packsSrc.includes("/buy/whisper.jpg"), "whisper thumbnail");
-assert.ok(packsSrc.includes("/buy/murmur.jpg"), "murmur thumbnail");
-assert.ok(packsSrc.includes("/buy/echo.jpg"), "echo thumbnail");
-assert.equal(VOICE_PACKS[0].thumbnail, "/buy/whisper.jpg");
-assert.equal(VOICE_PACKS[1].thumbnail, "/buy/murmur.jpg");
-assert.equal(VOICE_PACKS[2].thumbnail, "/buy/echo.jpg");
+assert.ok(!packsSrc.includes("thumbnail"), "packs are CSS cards, not mockup thumbnails");
 
 const buyPage = readFileSync(new URL("../app/buy/page.tsx", import.meta.url), "utf8");
 assert.ok(buyPage.includes("redirect"), "buy requires sign-in");
@@ -88,11 +83,11 @@ assert.ok(buyPage.includes("/?next=/buy"), "buy redirects to sign-in");
 const buyClient = readFileSync(new URL("../app/buy/buy-client.tsx", import.meta.url), "utf8");
 assert.ok(buyClient.includes("Talk To Lexi"), "buy brand hero");
 assert.ok(buyClient.includes("Choose Your AI Companion Plan"), "buy subtitle");
-assert.ok(buyClient.includes("pack.thumbnail"), "buy cards render thumbnails");
+assert.ok(!buyClient.includes("pack.thumbnail"), "buy cards are neon glass, not mockup images");
 assert.ok(buyClient.includes("/api/checkout"), "buy posts checkout");
 assert.ok(buyClient.includes("priceId"), "buy sends priceId");
 assert.ok(buyClient.includes("/lexi.jpg"), "buy uses Lexi portrait");
-assert.ok(buyClient.includes(">Buy<") || buyClient.includes('"Buy"') || /Buy/.test(buyClient), "buy buttons");
+assert.ok(buyClient.includes("Buy"), "buy buttons");
 
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
 assert.ok(buySuccess.includes("Minutes added"), "success copy");

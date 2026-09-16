@@ -9,7 +9,6 @@ export type BuyPackCard = {
   label: string;
   minutes: number;
   priceLabel: string;
-  thumbnail: string;
   priceId: string;
   configured: boolean;
 };
@@ -57,7 +56,6 @@ export function BuyClient({ packs }: { packs: BuyPackCard[] }) {
           --buy-pink-muted: #e8a0c0;
           --buy-pink-glow: rgba(244, 114, 182, 0.55);
           --buy-card: rgba(12, 8, 14, 0.55);
-          --buy-ink: #f5f5f5;
           --buy-muted: #a3a3a3;
         }
         @keyframes buy-card-in {
@@ -120,46 +118,42 @@ export function BuyClient({ packs }: { packs: BuyPackCard[] }) {
           <h1 className="text-5xl font-semibold tracking-tight text-white sm:text-6xl md:text-7xl">
             Talk To Lexi
           </h1>
-          <p className="buy-subtitle text-base tracking-wide sm:text-lg" style={{ color: "var(--buy-pink-muted)" }}>
+          <p
+            className="buy-subtitle text-base tracking-wide sm:text-lg"
+            style={{ color: "var(--buy-pink-muted)" }}
+          >
             Choose Your AI Companion Plan
           </p>
         </header>
 
-        <ul className="mt-12 grid w-full max-w-5xl gap-5 sm:mt-16 sm:grid-cols-3 sm:gap-6">
+        <ul className="mt-12 grid w-full max-w-4xl gap-5 sm:mt-16 sm:grid-cols-3 sm:gap-6">
           {packs.map((pack) => (
-            <li key={pack.id} className="buy-card flex flex-col overflow-hidden rounded-[1.75rem]">
-              <div className="relative aspect-[16/10] w-full overflow-hidden">
-                <Image
-                  src={pack.thumbnail}
-                  alt={`${pack.label} — ${pack.minutes} minutes for ${pack.priceLabel}`}
-                  fill
-                  sizes="(max-width: 640px) 100vw, 33vw"
-                  className="object-cover object-center"
-                  priority={pack.id === "whisper"}
-                />
-              </div>
-              <div className="flex flex-col items-center px-5 py-5 text-center">
-                <p className="text-lg font-medium tracking-wide" style={{ color: "var(--buy-pink)" }}>
-                  {pack.label}
+            <li
+              key={pack.id}
+              className="buy-card flex flex-col items-center rounded-[1.75rem] px-6 py-8 text-center"
+            >
+              <p className="text-lg font-medium tracking-wide" style={{ color: "var(--buy-pink)" }}>
+                {pack.label}
+              </p>
+              <p className="mt-4 text-5xl font-semibold tracking-tight text-white sm:text-6xl">
+                {pack.priceLabel}
+              </p>
+              <p className="mt-3 text-sm" style={{ color: "var(--buy-muted)" }}>
+                {pack.minutes} minutes
+              </p>
+              <button
+                type="button"
+                disabled={pendingId != null || !pack.configured}
+                onClick={() => void buy(pack)}
+                className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
+              >
+                {pendingId === pack.id ? "Starting…" : "Buy"}
+              </button>
+              {!pack.configured ? (
+                <p className="mt-3 text-xs" style={{ color: "var(--buy-muted)" }}>
+                  Not configured yet.
                 </p>
-                <p className="mt-2 text-4xl font-semibold tracking-tight text-white">{pack.priceLabel}</p>
-                <p className="mt-1 text-sm" style={{ color: "var(--buy-muted)" }}>
-                  {pack.minutes} minutes
-                </p>
-                <button
-                  type="button"
-                  disabled={pendingId != null || !pack.configured}
-                  onClick={() => void buy(pack)}
-                  className="buy-buy-btn mt-5 w-full rounded-full px-5 py-3 text-sm font-semibold"
-                >
-                  {pendingId === pack.id ? "Starting…" : "Buy"}
-                </button>
-                {!pack.configured ? (
-                  <p className="mt-3 text-xs" style={{ color: "var(--buy-muted)" }}>
-                    Not configured yet.
-                  </p>
-                ) : null}
-              </div>
+              ) : null}
             </li>
           ))}
         </ul>
