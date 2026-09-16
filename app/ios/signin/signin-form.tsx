@@ -25,14 +25,13 @@ export function IosSignInForm({
   const [pending, setPending] = useState(false);
 
   const creating = mode === "signup";
-  const authReady =
-    callbackOk &&
-    userId.trim().length > 0 &&
-    password.length >= 8 &&
-    (!creating || (email.trim().length > 0 && password === confirm));
-  const forgotReady = userId.trim().length > 0 && email.trim().length > 0;
-  const resetReady = resetToken.trim().length > 0 && password.length >= 8 && password === confirm;
-  const ready = panel === "forgot" ? forgotReady : panel === "reset" ? resetReady : authReady;
+
+  function openAuth(next: "signin" | "signup") {
+    setMode(next);
+    setPanel("auth");
+    setError("");
+    setNotice("");
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -152,33 +151,38 @@ export function IosSignInForm({
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4">
-      {panel === "auth" ? (
-        <div className="flex rounded-full border border-neutral-300 p-1 text-sm dark:border-neutral-700">
-          <button
-            type="button"
-            onClick={() => setMode("signin")}
-            className={`flex-1 rounded-full px-3 py-2 ${
-              !creating ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900" : ""
-            }`}
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("signup")}
-            className={`flex-1 rounded-full px-3 py-2 ${
-              creating ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900" : ""
-            }`}
-          >
-            Create account
-          </button>
-        </div>
-      ) : (
+    <form noValidate onSubmit={submit} className="flex flex-col gap-4">
+      <div className="flex rounded-full border border-neutral-300 p-1 text-sm dark:border-neutral-700">
+        <button
+          type="button"
+          onClick={() => openAuth("signin")}
+          className={`flex-1 rounded-full px-3 py-2 ${
+            panel === "auth" && !creating ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900" : ""
+          }`}
+        >
+          Sign in
+        </button>
+        <button
+          type="button"
+          onClick={() => openAuth("signup")}
+          className={`flex-1 rounded-full px-3 py-2 ${
+            panel === "auth" && creating ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900" : ""
+          }`}
+        >
+          Create account
+        </button>
+      </div>
+      {panel !== "auth" ? (
         <p className="text-sm text-neutral-500">
           {panel === "forgot"
             ? "We send a one-time reset link. The current password cannot be emailed."
             : "Check your email and return with the reset code, then choose a new password."}
+        </p>
+      ) : (
+        <p className="text-sm text-neutral-500">
+          {creating
+            ? "Username, email, and a password of at least 8 characters."
+            : "Username and password. Email is optional on sign-in."}
         </p>
       )}
       {panel !== "reset" ? (
@@ -199,7 +203,10 @@ export function IosSignInForm({
           <span className="text-neutral-500">Email</span>
           <input
             name="email"
-            type="email"
+            type="text"
+            inputMode="email"
+            autoCapitalize="none"
+            autoCorrect="off"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="you@example.com"
@@ -258,7 +265,7 @@ export function IosSignInForm({
       {error ? <p className="text-sm text-red-500">{error}</p> : null}
       <button
         type="submit"
-        disabled={pending || (panel === "auth" ? !ready : panel === "forgot" ? !forgotReady : !resetReady)}
+        disabled={pending}
         className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
       >
         {pending
@@ -317,12 +324,7 @@ export function IosSignInForm({
       {panel !== "auth" ? (
         <button
           type="button"
-          onClick={() => {
-            setError("");
-            setNotice("");
-            setPanel("auth");
-            setMode("signin");
-          }}
+            onClick={() => openAuth("signin")}
           className="text-center text-sm text-neutral-500 underline-offset-4 hover:underline"
         >
           Back to sign in

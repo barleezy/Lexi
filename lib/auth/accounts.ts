@@ -265,11 +265,19 @@ export async function createAccount(rawUserId: string, password: string, rawEmai
   if (await emailTakenByOther(db, email)) {
     throw new AccountAuthError("That email is already in use.", 409);
   }
-  await db.query(`INSERT INTO accounts (user_id, password_hash, email) VALUES ($1, $2, $3)`, [
-    userId,
-    hashPassword(secret),
-    email,
-  ]);
+  try {
+    await db.query(`INSERT INTO accounts (user_id, password_hash, email) VALUES ($1, $2, $3)`, [
+      userId,
+      hashPassword(secret),
+      email,
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/unique|duplicate/i.test(message)) {
+      throw new AccountAuthError("That account or email is already in use.", 409);
+    }
+    throw error;
+  }
   return userId;
 }
 

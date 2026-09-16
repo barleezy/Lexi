@@ -316,6 +316,7 @@ export function VoiceHome() {
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
   const [accountPanel, setAccountPanel] = useState<"auth" | "forgot" | "reset">("auth");
   const [accountNotice, setAccountNotice] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const [accountPending, setAccountPending] = useState(false);
   const [rows, setRows] = useState<TranscriptRow[]>([]);
   const [caption, setCaption] = useState("");
@@ -1299,6 +1300,7 @@ export function VoiceHome() {
     setAccountEmail("");
     setAccountResetToken("");
     setAccountNotice(null);
+    setAccountError(null);
     setAccountPanel("auth");
     writeVoiceSessionStore({ userId: id });
     return id;
@@ -1308,6 +1310,14 @@ export function VoiceHome() {
     setAccountPassword("");
     setAccountConfirm("");
     setAccountResetToken("");
+  }
+
+  function openAccountAuth(mode: "signin" | "signup") {
+    setAccountMode(mode);
+    setAccountPanel("auth");
+    setAccountNotice(null);
+    setAccountError(null);
+    setError(null);
   }
 
   async function submitAccount(event: FormEvent) {
@@ -1322,22 +1332,23 @@ export function VoiceHome() {
     }
     const creating = accountMode === "signup";
     if (!accountDraft.trim()) {
-      setError("Enter an account.");
+      setAccountError("Enter a username.");
       return;
     }
     if (creating && !accountEmail.trim()) {
-      setError("Enter the email for this account.");
+      setAccountError("Enter the email for this account.");
       return;
     }
     if (accountPassword.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setAccountError("Password must be at least 8 characters.");
       return;
     }
     if (creating && accountPassword !== accountConfirm) {
-      setError("Passwords do not match.");
+      setAccountError("Passwords do not match.");
       return;
     }
     setError(null);
+    setAccountError(null);
     setAccountNotice(null);
     setAccountPending(true);
     try {
@@ -1357,7 +1368,7 @@ export function VoiceHome() {
       }
       applySignedIn(body.userId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not sign in.");
+      setAccountError(err instanceof Error ? err.message : creating ? "Could not create account." : "Could not sign in.");
     } finally {
       setAccountPending(false);
     }
@@ -1365,10 +1376,11 @@ export function VoiceHome() {
 
   async function submitForgot() {
     if (!accountDraft.trim() || !accountEmail.trim()) {
-      setError("Enter your username and email.");
+      setAccountError("Enter your username and email.");
       return;
     }
     setError(null);
+    setAccountError(null);
     setAccountNotice(null);
     setAccountPending(true);
     try {
@@ -1394,7 +1406,7 @@ export function VoiceHome() {
       setAccountPanel("reset");
       setAccountNotice("Check your email and return with the reset code.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send a reset email.");
+      setAccountError(err instanceof Error ? err.message : "Could not send a reset email.");
     } finally {
       setAccountPending(false);
     }
@@ -1402,18 +1414,19 @@ export function VoiceHome() {
 
   async function submitReset() {
     if (!accountResetToken.trim()) {
-      setError("Enter the reset code from your email.");
+      setAccountError("Enter the reset code from your email.");
       return;
     }
     if (accountPassword.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setAccountError("Password must be at least 8 characters.");
       return;
     }
     if (accountPassword !== accountConfirm) {
-      setError("Passwords do not match.");
+      setAccountError("Passwords do not match.");
       return;
     }
     setError(null);
+    setAccountError(null);
     setAccountNotice(null);
     setAccountPending(true);
     try {
@@ -1435,7 +1448,7 @@ export function VoiceHome() {
       setAccountMode("signin");
       setAccountNotice("Password updated. Sign in with your new password.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not reset password.");
+      setAccountError(err instanceof Error ? err.message : "Could not reset password.");
     } finally {
       setAccountPending(false);
     }
@@ -1701,6 +1714,7 @@ export function VoiceHome() {
         </p>
         {!accountId ? (
           <form
+            noValidate
             onSubmit={submitAccount}
             className="mt-6 w-full max-w-md rounded-3xl border-2 border-zinc-900 bg-background/95 p-5 shadow-xl dark:border-white dark:bg-zinc-950/95"
           >
@@ -1709,37 +1723,43 @@ export function VoiceHome() {
                 ? "Forgot password"
                 : accountPanel === "reset"
                   ? "Set a new password"
-                  : "Sign in to talk"}
+                  : accountMode === "signup"
+                    ? "Create an account"
+                    : "Sign in to talk"}
             </p>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
               {accountPanel === "forgot"
                 ? "We send a one-time reset link to the email on the account. The current password cannot be emailed."
                 : accountPanel === "reset"
                   ? "Check your email and return with the reset code, then choose a new password."
-                  : "Use your account, email, and password. New here? Create an account first."}
+                  : accountMode === "signup"
+                    ? "Username, email, and a password of at least 8 characters."
+                    : "Username and password. Email is optional on sign-in."}
             </p>
-            {accountPanel === "auth" ? (
-              <div className="mt-4 grid grid-cols-2 rounded-full bg-zinc-100 p-1 text-sm font-medium dark:bg-zinc-800">
-                <button
-                  type="button"
-                  onClick={() => setAccountMode("signin")}
-                  className={`rounded-full px-3 py-2 ${
-                    accountMode === "signin" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
-                  }`}
-                >
-                  Sign in
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAccountMode("signup")}
-                  className={`rounded-full px-3 py-2 ${
-                    accountMode === "signup" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 dark:text-zinc-300"
-                  }`}
-                >
-                  Create account
-                </button>
-              </div>
-            ) : null}
+            <div className="mt-4 grid grid-cols-2 rounded-full bg-zinc-100 p-1 text-sm font-medium dark:bg-zinc-800">
+              <button
+                type="button"
+                onClick={() => openAccountAuth("signin")}
+                className={`rounded-full px-3 py-2 ${
+                  accountPanel === "auth" && accountMode === "signin"
+                    ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                    : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => openAccountAuth("signup")}
+                className={`rounded-full px-3 py-2 ${
+                  accountPanel === "auth" && accountMode === "signup"
+                    ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                    : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
             {accountPanel !== "reset" ? (
               <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
                 Username
@@ -1754,9 +1774,12 @@ export function VoiceHome() {
             ) : null}
             {accountPanel !== "reset" ? (
               <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
-                Email
+                Email{accountMode === "signin" && accountPanel === "auth" ? " (optional)" : ""}
                 <input
-                  type="email"
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   value={accountEmail}
                   onChange={(event) => setAccountEmail(event.target.value)}
                   placeholder="you@example.com"
@@ -1792,7 +1815,7 @@ export function VoiceHome() {
                 />
               </label>
             ) : null}
-            {accountPanel === "reset" || accountMode === "signup" ? (
+            {accountPanel === "reset" || (accountPanel === "auth" && accountMode === "signup") ? (
               <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
                 Confirm password
                 <input
@@ -1808,6 +1831,7 @@ export function VoiceHome() {
             {accountNotice ? (
               <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">{accountNotice}</p>
             ) : null}
+            {accountError ? <p className="mt-3 text-sm text-red-500">{accountError}</p> : null}
             <button
               type="submit"
               disabled={accountPending}
@@ -1835,6 +1859,7 @@ export function VoiceHome() {
                   type="button"
                   onClick={() => {
                     setError(null);
+                    setAccountError(null);
                     setAccountNotice(null);
                     setAccountPanel("forgot");
                   }}
@@ -1846,6 +1871,7 @@ export function VoiceHome() {
                   type="button"
                   onClick={() => {
                     setError(null);
+                    setAccountError(null);
                     setAccountPanel("reset");
                   }}
                   className="w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
@@ -1859,6 +1885,7 @@ export function VoiceHome() {
                 type="button"
                 onClick={() => {
                   setError(null);
+                  setAccountError(null);
                   setAccountPanel("reset");
                 }}
                 className="mt-3 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
@@ -1869,12 +1896,7 @@ export function VoiceHome() {
             {accountPanel !== "auth" ? (
               <button
                 type="button"
-                onClick={() => {
-                  setError(null);
-                  setAccountNotice(null);
-                  setAccountPanel("auth");
-                  setAccountMode("signin");
-                }}
+                onClick={() => openAccountAuth("signin")}
                 className="mt-2 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
               >
                 Back to sign in
