@@ -48,7 +48,7 @@ try {
   console.log(JSON.stringify(publicResult(status), null, 2));
   if (status.needsReauth) {
     console.log(
-      "Epic token is missing scope=basic_profile friends_list presence. Paste a new EPIC_EXCHANGE_CODE (from the Android-client redirect that requests that scope) and re-run this script so device auth is reissued. Do not commit the code.",
+      "Epic token is missing scope=basic_profile friends_list presence. Paste a new EPIC_EXCHANGE_CODE (from the Android-client redirect that requests that scope) and re-run this script so device auth is reissued. Then start the fortnitepy sidecar with `npm run fortnite:sidecar`. Do not commit the code.",
     );
   }
   if (!status.ok) process.exit(1);

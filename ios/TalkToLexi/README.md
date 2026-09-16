@@ -28,7 +28,7 @@ Server secret: `IOS_SESSION_SECRET` in `.env.local` (falls back to `XAI_API_KEY`
 
 ## Homepage on the phone
 
-`VoiceHomeView` is the talktolexi.app home: Lexi portrait, captions/transcript, Connect/End, composer, Apple Music bar, location share, camera flip, watch-together player (hidden until a URL is pasted), generated media, and a toy-grant pill only while Lexi is asking.
+`VoiceHomeView` is the talktolexi.app home: Lexi portrait, captions/transcript, Connect/End, composer, Apple Music bar, location share, camera flip, watch-together player (hidden until a URL is pasted), generated media, a Settings gear (**Route through PS5 party chat.** plus PSN account **Barleezybaby**), and a toy-grant pill only while Lexi is asking.
 
 ## Realtime
 
@@ -38,7 +38,13 @@ The app opens `wss://api.x.ai/v1/realtime?model=grok-voice-latest` with `Authori
 
 ## Audio session
 
-`AVAudioSession` `.playAndRecord` (voiceChat, Bluetooth, speaker) is activated only after the user taps **Connect** and the Grok socket is starting. It is deactivated when they tap **End**, sign out, or the socket drops. Launch, idle, and signed-out states do not hold playAndRecord. Asking for mic permission does not activate the session.
+`AVAudioSession` `.playAndRecord` is activated only after the user taps **Connect** and the Grok socket is starting. It is deactivated when they tap **End**, sign out, or the socket drops. Launch, idle, and signed-out states do not hold playAndRecord. Asking for mic permission does not activate the session.
+
+Default routing (Settings toggle off) keeps mode `.default` with mix-with-others, Bluetooth A2DP, speaker, and Bluetooth HFP allowed — media-friendly / game-audio routing. PlayStation game audio is a separate channel; this app cannot mix into it (PS5 has no virtual audio cable).
+
+**Route through PS5 party chat.** switches the live session to mode `.voiceChat` and prefers the DualSense Bluetooth HFP chat port so Lexi rides party chat. Lexi's voice and party members share one chat channel. Mute Lexi or turn this off during calls so she does not talk over the party. PlayStation has no virtual audio cable — this only rides party chat through the controller. If the controller chat port is missing, voiceChat stays on and the app shows that the chat port is not connected. Changing the toggle mid-session reconfigures the route.
+
+The stored PSN identity is the backup account **Barleezybaby** (login `barleezyfbaby`). Sony’s Online ID on the session token is Barleezybaby. That is not a Sony password. Refresh tokens live in `.env.local`; never commit them. Get a new NPSSO from https://ca.account.sony.com/api/v1/ssocookie if the session dies, then `npm run psn:configure`.
 
 ## CarPlay
 
@@ -56,6 +62,7 @@ TalkToLexi/Features/Location
 TalkToLexi/Features/Generate
 TalkToLexi/Features/Toys
 TalkToLexi/Features/Auth
+TalkToLexi/Features/Settings
 TalkToLexi/Shared/API
 TalkToLexi/Shared/Theme
 ```

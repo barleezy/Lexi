@@ -22,10 +22,12 @@ protocol RealtimeSessionDelegate: AnyObject {
     func realtime(_ session: RealtimeSession, error: String)
     func realtime(_ session: RealtimeSession, handleTool name: String, callId: String, arguments: [String: Any]) async -> String
     func realtime(_ session: RealtimeSession, completedTurn user: String, assistant: String)
+    func realtime(_ session: RealtimeSession, chatPortStatus: String)
     func realtimeNeedsSessionRefresh(_ session: RealtimeSession)
 }
 
 extension RealtimeSessionDelegate {
+    func realtime(_ session: RealtimeSession, chatPortStatus: String) {}
     func realtimeNeedsSessionRefresh(_ session: RealtimeSession) {}
 }
 
@@ -72,6 +74,20 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         didSet { audio.setVoiceDucked(voiceDucked) }
     }
 
+    override init() {
+        super.init()
+        audio.onChatPortStatus = { [weak self] status in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.delegate?.realtime(self, chatPortStatus: status)
+            }
+        }
+    }
+
+    func applyAudioRouting() async {
+        await audio.applyRouting(routeThroughPS5PartyChat: AccountStore.shared.routeThroughPS5PartyChat)
+    }
+
     func start(token: String, realtimeURL: String, sessionUpdate: [String: Any]) {
         tearDown(notify: false, stopAudio: false)
         generation += 1
@@ -96,7 +112,9 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             await self.audio.stop()
             guard self.generation == gen, self.isLive else { return }
             do {
-                try await self.audio.start()
+                try await self.audio.start(
+                    routeThroughPS5PartyChat: AccountStore.shared.routeThroughPS5PartyChat
+                )
             } catch {
                 await MainActor.run {
                     self.delegate?.realtime(self, error: error.localizedDescription)

@@ -12,12 +12,18 @@ final class VoiceAudioEngine {
     private var pending = Data()
     private var running = false
     private var startGeneration = 0
+    private var partyChatRouting = false
+    private var routeObserver: NSObjectProtocol?
     var onPCM: ((Data) -> Void)?
+    var onChatPortStatus: ((String) -> Void)?
 
     /// Activates `AVAudioSession` `.playAndRecord` only while a voice session is running.
     /// Never call this at launch, while signed out, or while idle.
-    private var categoryOptions: AVAudioSession.CategoryOptions {
-        var options: AVAudioSession.CategoryOptions = [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
+    private func categoryOptions(partyChat: Bool) -> AVAudioSession.CategoryOptions {
+        var options: AVAudioSession.CategoryOptions = [.mixWithOthers, .defaultToSpeaker]
+        if !partyChat {
+            options.insert(.allowBluetoothA2DP)
+        }
         #if compiler(>=6.2)
         options.insert(.allowBluetoothHFP)
         #else
@@ -26,18 +32,98 @@ final class VoiceAudioEngine {
         return options
     }
 
-    private func activatePlayAndRecord() async throws {
-        let options = categoryOptions
+    private func activatePlayAndRecord(partyChat: Bool) async throws {
+        try await configureSession(partyChat: partyChat)
+        try await setSessionActive(true)
+        await applyPreferredRoute(partyChat: partyChat)
+        startRouteObserver()
+    }
+
+    private func configureSession(partyChat: Bool) async throws {
+        partyChatRouting = partyChat
+        let options = categoryOptions(partyChat: partyChat)
+        let mode: AVAudioSession.Mode = partyChat ? .voiceChat : .default
         try await Task.detached(priority: .userInitiated) {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            try session.setCategory(.playAndRecord, mode: mode, options: options)
             try session.setPreferredSampleRate(Double(Self.sampleRate))
             try session.setPreferredIOBufferDuration(0.04)
         }.value
-        try await setSessionActive(true)
+    }
+
+    /// Reconfigures category/mode/HFP while a session is live. Idle calls do not activate playAndRecord.
+    func applyRouting(routeThroughPS5PartyChat: Bool) async {
+        guard running else {
+            publishChatPortStatus("")
+            return
+        }
+        do {
+            try await configureSession(partyChat: routeThroughPS5PartyChat)
+            await applyPreferredRoute(partyChat: routeThroughPS5PartyChat)
+        } catch {
+            await applyPreferredRoute(partyChat: routeThroughPS5PartyChat)
+        }
+    }
+
+    private func applyPreferredRoute(partyChat: Bool) async {
+        let status = await Task.detached(priority: .userInitiated) { () -> String in
+            let session = AVAudioSession.sharedInstance()
+            if partyChat {
+                if let hfp = Self.bluetoothHFPInput(in: session) {
+                    try? session.setPreferredInput(hfp)
+                }
+                try? session.overrideOutputAudioPort(.none)
+                return Self.hasBluetoothHFP(session) ? "" : "Controller chat port is not connected."
+            }
+            try? session.setPreferredInput(nil)
+            try? session.overrideOutputAudioPort(.none)
+            return ""
+        }.value
+        publishChatPortStatus(status)
+    }
+
+    private static func bluetoothHFPInput(in session: AVAudioSession) -> AVAudioSessionPortDescription? {
+        session.availableInputs?.first { $0.portType == .bluetoothHFP }
+    }
+
+    private static func hasBluetoothHFP(_ session: AVAudioSession) -> Bool {
+        if bluetoothHFPInput(in: session) != nil { return true }
+        if session.currentRoute.outputs.contains(where: { $0.portType == .bluetoothHFP }) { return true }
+        return session.currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
+    }
+
+    private func publishChatPortStatus(_ text: String) {
+        if Thread.isMainThread {
+            onChatPortStatus?(text)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.onChatPortStatus?(text)
+            }
+        }
+    }
+
+    private func startRouteObserver() {
+        stopRouteObserver()
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.running else { return }
+            let partyChat = self.partyChatRouting
+            Task { await self.applyPreferredRoute(partyChat: partyChat) }
+        }
+    }
+
+    private func stopRouteObserver() {
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
     }
 
     private func deactivatePlayAndRecord() async {
+        stopRouteObserver()
         try? await setSessionActive(false)
     }
 
@@ -85,11 +171,12 @@ final class VoiceAudioEngine {
         }.value
     }
 
-    func start() async throws {
+    func start(routeThroughPS5PartyChat: Bool) async throws {
         if running { return }
         startGeneration += 1
         let gen = startGeneration
-        try await activatePlayAndRecord()
+        partyChatRouting = routeThroughPS5PartyChat
+        try await activatePlayAndRecord(partyChat: routeThroughPS5PartyChat)
         guard gen == startGeneration else { return }
         if player.engine == nil {
             engine.attach(player)
@@ -134,11 +221,14 @@ final class VoiceAudioEngine {
 
     func stop() async {
         startGeneration += 1
+        stopRouteObserver()
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
         pending.removeAll()
         running = false
+        partyChatRouting = false
+        publishChatPortStatus("")
         await deactivatePlayAndRecord()
     }
 

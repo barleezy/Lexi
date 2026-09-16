@@ -30,6 +30,7 @@
 		A20000000000000000000015 /* LexiTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000015 /* LexiTheme.swift */; };
 		A20000000000000000000016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000016 /* Assets.xcassets */; };
 		A20000000000000000000017 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000017 /* PrivacyInfo.xcprivacy */; };
+		A20000000000000000000018 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000001B /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +60,7 @@
 		B20000000000000000000018 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B20000000000000000000019 /* TalkToLexi.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TalkToLexi.entitlements; sourceTree = "<group>"; };
 		B2000000000000000000001A /* Lexi.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Lexi.xcconfig; sourceTree = "<group>"; };
+		B2000000000000000000001B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* TalkToLexi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TalkToLexi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -124,6 +126,7 @@
 				E2000000000000000000000C /* Location */,
 				E2000000000000000000000D /* Generate */,
 				E2000000000000000000000E /* Toys */,
+				E20000000000000000000015 /* Settings */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -208,6 +211,14 @@
 				B20000000000000000000013 /* ToyController.swift */,
 			);
 			path = Toys;
+			sourceTree = "<group>";
+		};
+		E20000000000000000000015 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				B2000000000000000000001B /* SettingsView.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		E2000000000000000000000F /* API */ = {
@@ -325,6 +336,7 @@
 				A20000000000000000000013 /* ToyController.swift in Sources */,
 				A20000000000000000000014 /* LexiAPIClient.swift in Sources */,
 				A20000000000000000000015 /* LexiTheme.swift in Sources */,
+				A20000000000000000000018 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

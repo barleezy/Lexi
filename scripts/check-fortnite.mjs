@@ -72,6 +72,12 @@ import {
   userSearchUrl,
 } from "../lib/voice/fortnite.ts";
 import { fortniteRealtimeTools, sanitizeFortniteToolResult } from "../lib/voice/fortnite-tools.ts";
+import {
+  DEFAULT_FORTNITEPY_SIDECAR_URL,
+  fortnitepyAutostartEnabled,
+  fortnitepySidecarUrl,
+  parseJoinChatCommand,
+} from "../lib/voice/fortnite-sidecar.ts";
 
 function expect(condition, label) {
   if (!condition) throw new Error(label);
@@ -450,5 +456,25 @@ expect(
 );
 expect(!personaSrc.includes("Server Epic token: valid"), "persona does not say token valid as signed in");
 expect(!personaSrc.includes("signedIn:"), "persona does not feed signedIn yes");
+expect(personaSrc.includes("fortnitepy"), "persona names fortnitepy join path");
+expect(personaSrc.includes("You are not in a match"), "persona does not claim a match");
+
+expect(DEFAULT_FORTNITEPY_SIDECAR_URL === "http://127.0.0.1:8765", "sidecar default bind");
+expect(fortnitepySidecarUrl() === DEFAULT_FORTNITEPY_SIDECAR_URL, "sidecar url env default");
+expect(fortnitepyAutostartEnabled(), "sidecar autostart defaults on");
+expect(parseJoinChatCommand("!join TTBarleezy")?.displayName === "TTBarleezy", "!join YourName");
+expect(parseJoinChatCommand("!join")?.action === "join_party", "!join defaults to join_party");
+expect(parseJoinChatCommand("!sit out")?.action === "sit_out", "!sit out");
+expect(parseJoinChatCommand("!leave")?.action === "leave_party", "!leave");
+expect(parseJoinChatCommand("hello") === null, "plain text is not a chat command");
+
+expect(setup.includes("fortnitepy"), "setup mentions fortnitepy sidecar");
+expect(setup.includes("!join"), "setup mentions !join");
+expect(joinParty.description.includes("fortnitepy"), "join_party tool names fortnitepy");
+expect(joinParty.description.includes("not a match"), "join_party tool is lobby-only");
+
+const fortniteSrc = readFileSync(new URL("../lib/voice/fortnite.ts", import.meta.url), "utf8");
+expect(fortniteSrc.includes("preferFortnitepySidecar"), "join prefers fortnitepy sidecar");
+expect(fortniteSrc.includes('partySource: "http"'), "HTTP join is fallback only");
 
 console.log("fortnite check ok");

@@ -12,13 +12,16 @@
     "memory:check-extract": "node --experimental-strip-types scripts/check-extract.mjs",
     "video:check-context": "node --experimental-strip-types scripts/check-video-context.mjs",
     "fortnite:check": "node --experimental-strip-types scripts/check-fortnite.mjs",
+    "fortnite:sidecar": "node scripts/start-fortnite-sidecar.mjs",
     "generate:check": "node --experimental-strip-types scripts/check-generate.mjs",
     "channels:check": "node --experimental-strip-types scripts/check-channels.mjs",
     "apple-music:check": "node --experimental-strip-types scripts/check-apple-music.mjs",
     "music:check": "node --experimental-strip-types scripts/check-background-music.mjs",
     "watch:check-formats": "node --experimental-strip-types scripts/check-watch-formats.mjs",
     "ios:check": "node --experimental-strip-types scripts/check-ios-auth.mjs",
-    "auth:check": "node --experimental-strip-types scripts/check-auth.mjs"
+    "auth:check": "node --experimental-strip-types scripts/check-auth.mjs",
+    "psn:check": "node --experimental-strip-types scripts/check-psn.mjs",
+    "psn:configure": "node --experimental-strip-types scripts/configure-psn.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

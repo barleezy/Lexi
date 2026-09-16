@@ -7,6 +7,9 @@ final class AccountStore {
         static let token = "lexi.ios.token"
         static let userId = "lexi.ios.userId"
         static let host = "lexi.ios.host"
+        static let routeThroughPS5PartyChat = "lexi.ios.routeThroughPS5PartyChat"
+        static let psnOnlineId = "lexi.ios.psnOnlineId"
+        static let psnLoginName = "lexi.ios.psnLoginName"
     }
 
     private let defaults = UserDefaults.standard
@@ -50,5 +53,37 @@ final class AccountStore {
 
     func setHost(_ raw: String) {
         defaults.set(raw, forKey: Key.host)
+    }
+
+    var routeThroughPS5PartyChat: Bool {
+        get { defaults.bool(forKey: Key.routeThroughPS5PartyChat) }
+        set { defaults.set(newValue, forKey: Key.routeThroughPS5PartyChat) }
+    }
+
+    var psnOnlineId: String {
+        get {
+            let stored = defaults.string(forKey: Key.psnOnlineId)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return stored.isEmpty ? "Barleezybaby" : stored
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed.isEmpty ? "Barleezybaby" : trimmed, forKey: Key.psnOnlineId)
+        }
+    }
+
+    var psnLoginName: String {
+        get {
+            let stored = defaults.string(forKey: Key.psnLoginName)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return stored.isEmpty ? "barleezyfbaby" : stored
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed.isEmpty ? "barleezyfbaby" : trimmed, forKey: Key.psnLoginName)
+        }
+    }
+
+    func useBackupPsnAccount() {
+        psnLoginName = "barleezyfbaby"
+        psnOnlineId = "Barleezybaby"
     }
 }

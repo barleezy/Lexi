@@ -25,6 +25,10 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     @Published private(set) var isSignedIn = false
     @Published private(set) var isConnecting = false
     @Published private(set) var channelNames: [String] = []
+    @Published private(set) var routeThroughPS5PartyChat = false
+    @Published private(set) var ps5ChatPortStatus = ""
+    @Published private(set) var psnOnlineId = "Barleezybaby"
+    @Published private(set) var psnLoginName = "barleezyfbaby"
 
     private var connectGeneration = 0
     private var refreshGeneration = 0
@@ -68,8 +72,18 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             guard let self, self.realtime.isLive else { return }
             self.realtime.notifyVision(source: "camera", active: active)
         }
+        routeThroughPS5PartyChat = account.routeThroughPS5PartyChat
+        account.useBackupPsnAccount()
+        psnOnlineId = account.psnOnlineId
+        psnLoginName = account.psnLoginName
         refreshStatus()
         Task { await refreshExtras() }
+    }
+
+    func setRouteThroughPS5PartyChat(_ on: Bool) {
+        routeThroughPS5PartyChat = on
+        account.routeThroughPS5PartyChat = on
+        Task { await realtime.applyAudioRouting() }
     }
 
     private func bindChildren() {
@@ -389,6 +403,12 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             if !session.isLive {
                 self.camera.stop(notify: false)
             }
+        }
+    }
+
+    nonisolated func realtime(_ session: RealtimeSession, chatPortStatus: String) {
+        Task { @MainActor in
+            self.ps5ChatPortStatus = chatPortStatus
         }
     }
 

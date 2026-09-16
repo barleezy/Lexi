@@ -17,13 +17,16 @@ Server-only. Copy empty placeholders from `.env.example` into `.env.local` — n
 
 ## Fortnite (Epic companion)
 
-Lexi cannot run Fortnite or play in-match (no Unreal client, no input, no bot). She can use an Epic account Ian provides: sign in, add **TTBarleezy**, join his party over Epic party HTTP, sit out so she is not matchmade, report last-online, and try a party invite. Comms stay on the Grok voice call — there is no Fortnite party-voice API.
+Lexi cannot run Fortnite or play in-match (no Unreal client, no input, no aimbots). She can use an Epic account Ian provides: sign in, add **TTBarleezy**, join his **Friends lobby party** via the fortnitepy sidecar (`friend.join_party()`), sit out so she is not matchmade, report last-online, and try a party invite. HTTP party helpers are fallback only. Comms stay on the Grok voice call — there is no Fortnite party-voice API.
 
 1. Create or use a **real** Epic account for Lexi. Do not invent an email here or register through this app.
 2. Copy empty placeholders from `.env.example` into `.env.local`. Never commit tokens.
 3. Paste **device auth** as `EPIC_DEVICE_AUTH` JSON: `{"accountId":"","deviceId":"","secret":""}` (fnbr-style). Or set `EPIC_EXCHANGE_CODE` / an authorization `code` from [Epic’s Android-client redirect](https://www.epicgames.com/id/api/redirect?clientId=3f69e56c7649492c8cc29f1af08a8a12&responseType=code&scope=basic_profile%20friends_list%20presence) after you sign in — one-shot; the server writes device auth to `.env.local` and clears the code. Token requests use `scope=basic_profile friends_list presence`. If an older device auth was minted without those scopes, paste a new exchange code once and re-run `node scripts/configure-fortnite.mjs`.
 4. Optional: `FORTNITE_FRIEND_DISPLAY_NAME` (default `TTBarleezy`).
 5. Restart. First successful login **automatically sends a friend request** to TTBarleezy. `GET`/`POST` `/api/fortnite` — 503 with setup steps if credentials are missing. Tokens stay on the server.
+6. Start the fortnitepy sidecar in another terminal: `npm run fortnite:sidecar` (creates `sidecars/fortnite/.venv`, installs `fortnitepy`, listens on `http://127.0.0.1:8765`). Leave it running. Voice `fortnite_join_party` and in-game `!join TTBarleezy` both call `friend.join_party()`.
+
+**In-game (Ian):** open Fortnite → Friends lobby (not a match) → stay in your party → accept **TalkToLexi** if a join request pops. Sitting out in that lobby party is success. She will not start or join a match.
 
 Voice tools: `fortnite_sign_in`, `fortnite_join_party`, `fortnite_sit_out`, `fortnite_leave_party`, plus `fortnite_add_friend`, `fortnite_status`, `fortnite_invite`. Ask her to sign in, join your party, sit out, or hop in lobby. If you are not in a lobby party she will say to open one and ask again. She stays sitting out and talks on this voice session.
 

@@ -58,7 +58,7 @@ export function fortniteRealtimeTools() {
       type: "function",
       name: "fortnite_join_party",
       description:
-        "Join Ian's (TTBarleezy) Fortnite party over Epic party HTTP, then sit out. Only report being in Fortnite if the tool says withFriend/inIanParty/visibleInFortnite is true. An Epic token or epicHttpReady alone is not in-game and does not make her appear online. Speak on this Grok voice call. If he has no open party, the tool says to open a party in lobby and ask again. If a join request is waiting, the tool says to accept TalkToLexi in Friends lobby and ask again.",
+        "Join Ian's (TTBarleezy) Fortnite Friends lobby party via the fortnitepy sidecar (friend.join_party / !join YourName), then sit out. She lands in the lobby party, not a match. Only report being in Fortnite if the tool says withFriend/inIanParty/visibleInFortnite is true. An Epic token or epicHttpReady alone is not in-game and does not make her appear online. Speak on this Grok voice call. If he has no open party, the tool says to open a party in lobby and ask again. If a join request is waiting, the tool says to accept TalkToLexi in Friends lobby and ask again.",
       parameters: {
         type: "object",
         properties: {

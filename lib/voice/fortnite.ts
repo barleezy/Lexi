@@ -1,12 +1,21 @@
 /**
- * Epic-backed Fortnite companion (HTTP only).
- * Device auth + friends/presence/party endpoints used by fnbr.js / fortnitepy.
+ * Epic-backed Fortnite companion.
+ * Party join prefers the fortnitepy sidecar (XMPP / friend.join_party).
+ * HTTP friends/presence/party helpers stay as fallback.
  * Lexi cannot run the Unreal client or play in-match.
  */
 
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  callFortnitepySidecar,
+  parseJoinChatCommand,
+  preferFortnitepySidecar,
+  sidecarIsAuthoritative,
+  sidecarJoinSucceeded,
+  type SidecarResult,
+} from "./fortnite-sidecar.ts";
 
 export const DEFAULT_FRIEND_DISPLAY_NAME = "TTBarleezy";
 
@@ -206,9 +215,10 @@ export function fortniteSetupSteps() {
     `Authorization code: sign in at Epic, then open ${authorizationRedirectUrl()} and copy \`code\`. Token requests use scope=${EPIC_OAUTH_SCOPE}.`,
     "Paste EPIC_DEVICE_AUTH='{\"accountId\":\"\",\"deviceId\":\"\",\"secret\":\"\"}' into .env.local (never commit it). Or set EPIC_EXCHANGE_CODE, or local EPIC_EMAIL + EPIC_PASSWORD (may hit captcha/2FA).",
     `If friends work but presence/party stays empty, the stored device auth was minted without \`${EPIC_OAUTH_SCOPE}\`. Paste a new EPIC_EXCHANGE_CODE once and re-run configure-fortnite so device auth is reissued.`,
+    "Party join uses the fortnitepy sidecar (XMPP). Install once with `npm run fortnite:sidecar` or `python3 -m pip install -r sidecars/fortnite/requirements.txt`, then keep `npm run fortnite:sidecar` running. In-game whisper `!join TTBarleezy` also calls friend.join_party().",
     `Restart the server. First successful login auto-sends a friend request to ${friendDisplayName()}.`,
     "On every launch the server verifies the access token at https://api.epicgames.dev/epic/oauth/v2/verify. A leftover token or device-auth file is not signed in. Transient verify failures keep last-known-good HTTP-ready for 30 seconds while a retry runs. If 401/expired persists after that, the cache is cleared and login is forced.",
-    "Lexi cannot load Fortnite or play in-match. An Epic HTTP token is not being online in the game. She only appears in Ian's lobby after a successful party join, then she can sit out. Voice stays on this Grok call.",
+    "Lexi cannot load Fortnite or play in-match. An Epic HTTP token is not being online in the game. She only appears in Ian's Friends lobby after a successful fortnitepy party join, then she can sit out. Voice stays on this Grok call.",
   ];
 }
 
@@ -755,7 +765,13 @@ export type FortniteCommandInput = {
   action?: unknown;
   displayName?: unknown;
   autoFriend?: unknown;
+  partyId?: unknown;
 };
+
+function parsePartyId(raw: unknown) {
+  if (typeof raw !== "string") return "";
+  return raw.trim();
+}
 
 export async function getFortniteStatus(options: { autoFriend?: boolean } = {}) {
   if (!isFortniteConfigured()) {
@@ -777,6 +793,31 @@ export async function getFortniteStatus(options: { autoFriend?: boolean } = {}) 
   try {
     session = await loginEpic({ forceVerify: true });
   } catch (error) {
+    const sidecar = await callFortnitepySidecar({
+      action: "status",
+      displayName: friendDisplayName(),
+    }).catch(() => null);
+    if (sidecar && sidecarIsAuthoritative(sidecar) && sidecar.party?.withFriend === true) {
+      return mergeSidecarParty(
+        {
+          ok: true as const,
+          status: 200,
+          configured: true,
+          canPlayInGame: false,
+          epicHttpReady: false,
+          inIanParty: true,
+          visibleInFortnite: true,
+          error: undefined,
+          needsReauth: true,
+          setup: fortniteSetupSteps(),
+          friendDisplayName: friendDisplayName(),
+          party: sidecar.party,
+          friend: sidecar.friend,
+          lexi: sidecar.lexi,
+        },
+        sidecar,
+      );
+    }
     return {
       ok: false as const,
       status: fortniteErrorStatus(error),
@@ -798,34 +839,44 @@ export async function getFortniteStatus(options: { autoFriend?: boolean } = {}) 
   const request = friendAttempt?.request ?? inferRequest(snapshot.relation);
   const party = partyStateFromSnapshot(snapshot);
   const tokenScope = session.scope || "";
-
-  return {
-    ok: true as const,
-    status: 200,
-    configured: true,
-    tokenScope,
-    needsReauth: !tokenHasRequiredScopes(tokenScope),
-    lexi: { displayName: session.displayName, accountId: session.accountId },
-    friend: {
-      displayName: snapshot.displayName,
-      accountId: snapshot.accountId,
-      relation: snapshot.relation,
-      request,
-      presence: snapshot.presence,
-      error: friendAttempt?.error,
+  const sidecar = await callFortnitepySidecar({
+    action: "status",
+    displayName: targetName,
+  }).catch(() => null);
+  const merged = mergeSidecarParty(
+    {
+      ok: true as const,
+      status: 200,
+      configured: true,
+      tokenScope,
+      needsReauth: !tokenHasRequiredScopes(tokenScope),
+      lexi: { displayName: session.displayName, accountId: session.accountId },
+      friend: {
+        displayName: snapshot.displayName,
+        accountId: snapshot.accountId,
+        relation: snapshot.relation,
+        request,
+        presence: snapshot.presence,
+        error: friendAttempt?.error,
+      },
+      party,
+      ...fortniteHttpReadyFields(party.withFriend),
+      visibleNote: party.withFriend
+        ? "TalkToLexi is in Ian's party."
+        : "TalkToLexi is not visible in Fortnite.",
+      autoFriend: Boolean(friendAttempt),
+      deviceAuthCreated: createdDeviceAuthOnce,
     },
-    party,
-    ...fortniteHttpReadyFields(party.withFriend),
-    visibleNote: party.withFriend
-      ? "TalkToLexi is in Ian's party."
-      : "TalkToLexi is not visible in Fortnite.",
-    autoFriend: Boolean(friendAttempt),
-    deviceAuthCreated: createdDeviceAuthOnce,
-  };
+    sidecar,
+  );
+
+  return merged;
 }
 
 export async function runFortniteCommand(input: FortniteCommandInput) {
-  const action = parseFortniteAction(input.action);
+  const chat =
+    parseJoinChatCommand(input.action) || parseJoinChatCommand(input.displayName);
+  const action = chat?.action ?? parseFortniteAction(input.action);
   if (!action) {
     return {
       ok: false as const,
@@ -860,6 +911,16 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       forceVerify: action === "sign_in",
     });
   } catch (error) {
+    if (action === "join_party" || action === "sit_out" || action === "leave_party") {
+      const sidecar = await preferFortnitepySidecar({
+        action,
+        displayName: parseFortniteDisplayName(chat?.displayName || input.displayName),
+        partyId: parsePartyId(input.partyId) || undefined,
+      });
+      if (sidecarIsAuthoritative(sidecar) || sidecarJoinSucceeded(sidecar)) {
+        return sidecarCommandResult(null, sidecar, { fallbackOk: sidecar.ok });
+      }
+    }
     return {
       ok: false as const,
       status: fortniteErrorStatus(error),
@@ -872,7 +933,8 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       needsReauth: true,
     };
   }
-  const displayName = parseFortniteDisplayName(input.displayName);
+  const displayName = parseFortniteDisplayName(chat?.displayName || input.displayName);
+  const partyId = parsePartyId(input.partyId);
   if (action === "sign_in") {
     const snapshot = await loadFriendSnapshot(session, displayName, null);
     const party = partyStateFromSnapshot(snapshot);
@@ -891,6 +953,14 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
     };
   }
   if (action === "join_party") {
+    const sidecar = await preferFortnitepySidecar({
+      action: "join_party",
+      displayName,
+      partyId: partyId || undefined,
+    });
+    if (sidecarIsAuthoritative(sidecar) || sidecarJoinSucceeded(sidecar)) {
+      return sidecarCommandResult(session, sidecar, { fallbackOk: false });
+    }
     const join = await joinFriendParty(session, displayName);
     return {
       ok: join.joined,
@@ -902,9 +972,14 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       ...fortniteHttpReadyFields(join.party.withFriend === true),
       error: join.error,
       say: "say" in join ? join.say : undefined,
+      partySource: "http",
     };
   }
   if (action === "sit_out") {
+    const sidecar = await preferFortnitepySidecar({ action: "sit_out", displayName });
+    if (sidecarIsAuthoritative(sidecar)) {
+      return sidecarCommandResult(session, sidecar, { fallbackOk: sidecar.ok });
+    }
     const sit = await sitOutOfParty(session, displayName);
     return {
       ok: sit.sittingOut,
@@ -915,9 +990,14 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       party: sit.party,
       ...fortniteHttpReadyFields(sit.party.withFriend === true),
       error: sit.error,
+      partySource: "http",
     };
   }
   if (action === "leave_party") {
+    const sidecar = await preferFortnitepySidecar({ action: "leave_party", displayName });
+    if (sidecarIsAuthoritative(sidecar)) {
+      return sidecarCommandResult(session, sidecar, { fallbackOk: sidecar.ok });
+    }
     const leave = await leaveCurrentParty(session, displayName);
     return {
       ok: leave.ok,
@@ -928,6 +1008,7 @@ export async function runFortniteCommand(input: FortniteCommandInput) {
       party: leave.party,
       ...fortniteHttpReadyFields(leave.party.withFriend === true),
       error: leave.error,
+      partySource: "http",
     };
   }
   if (action === "add_friend") {
@@ -1921,6 +2002,51 @@ export function fortniteHttpReadyFields(withFriend: boolean) {
     inIanParty: withFriend,
     visibleInFortnite: withFriend,
     canPlayInGame: false as const,
+  };
+}
+
+function sidecarCommandResult(
+  session: CachedToken | null,
+  sidecar: SidecarResult,
+  options: { fallbackOk: boolean },
+) {
+  const withFriend = sidecar.party?.withFriend === true;
+  return {
+    ok: sidecar.ok === true || (options.fallbackOk && withFriend),
+    status: sidecar.ok || withFriend ? 200 : sidecar.status || 409,
+    configured: true,
+    lexi: sidecar.lexi?.displayName
+      ? sidecar.lexi
+      : session
+        ? { displayName: session.displayName, accountId: session.accountId }
+        : undefined,
+    friend: sidecar.friend,
+    party: sidecar.party,
+    ...fortniteHttpReadyFields(withFriend),
+    epicHttpReady: Boolean(session) || sidecar.epicHttpReady === true,
+    error: sidecar.error,
+    say: sidecar.say,
+    message: sidecar.message,
+    partySource: "fortnitepy" as const,
+    needsReauth: sidecar.needsReauth,
+  };
+}
+
+function mergeSidecarParty<T extends Record<string, unknown>>(http: T, sidecar: SidecarResult | null): T {
+  if (!sidecar || !sidecarIsAuthoritative(sidecar) || !sidecar.party) return http;
+  const withFriend = sidecar.party.withFriend === true;
+  return {
+    ...http,
+    friend: sidecar.friend ?? http.friend,
+    lexi: sidecar.lexi?.displayName ? sidecar.lexi : http.lexi,
+    party: sidecar.party,
+    inIanParty: withFriend,
+    visibleInFortnite: withFriend,
+    visibleNote: withFriend
+      ? "TalkToLexi is in Ian's party."
+      : "TalkToLexi is not visible in Fortnite.",
+    partySource: "fortnitepy",
+    canPlayInGame: false,
   };
 }
 

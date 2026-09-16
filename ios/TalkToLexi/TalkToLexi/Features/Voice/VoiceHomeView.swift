@@ -3,6 +3,7 @@ import SwiftUI
 struct VoiceHomeView: View {
     @EnvironmentObject private var app: LexiAppController
     @FocusState private var composerFocused: Bool
+    @State private var showSettings = false
 
     var body: some View {
         ZStack {
@@ -22,6 +23,10 @@ struct VoiceHomeView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             dock
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .environmentObject(app)
+        }
     }
 
     private var header: some View {
@@ -31,6 +36,15 @@ struct VoiceHomeView: View {
                 .tracking(2.8)
                 .textCase(.uppercase)
             Spacer()
+            Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityLabel("Settings")
             Button(app.isSignedIn ? "Sign out" : "Sign in") {
                 app.toggleSignIn()
             }
@@ -81,6 +95,11 @@ struct VoiceHomeView: View {
                 .foregroundStyle(Color(red: 0.72, green: 0.72, blue: 0.75))
                 .frame(maxWidth: 360)
             TranscriptView(rows: app.rows)
+            if app.routeThroughPS5PartyChat, !app.ps5ChatPortStatus.isEmpty {
+                Text(app.ps5ChatPortStatus)
+                    .font(.system(size: 12))
+                    .foregroundStyle(LexiTheme.muted)
+            }
         }
     }
 
