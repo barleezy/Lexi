@@ -1,4 +1,9 @@
-import { captureDetailJpegDataUrl, captureJpegDataUrl } from "@/lib/voice/vision";
+import {
+  captureDetailJpegDataUrl,
+  captureJpegDataUrl,
+  LIVE_ANALYZE_INTERVAL_MS,
+  LIVE_LOOK_INTERVAL_MS,
+} from "@/lib/voice/vision";
 import { directVideoHref } from "@/lib/voice/watch-formats";
 
 export {
@@ -206,18 +211,19 @@ export function snapshotFromShareStream(
   buffer: VideoFrameBuffer,
   title = "Shared tab",
 ): VideoContextSnapshot {
+  const frames: VideoFrameShot[] = [];
   if (video) {
     const detail = captureDetailVideoShot(video);
-    if (detail) buffer.push(detail);
-    else {
-      const live = captureVideoShot(video);
-      if (live) buffer.push(live);
+    if (detail) {
+      detail.label = title;
+      buffer.push(detail);
+      frames.push(detail);
     }
   }
-  const frames = buffer.list().slice(-2).map((shot) => ({
-    ...shot,
-    label: shot.label || title,
-  }));
+  if (!frames.length) {
+    const last = buffer.list().at(-1);
+    if (last) frames.push({ ...last, label: last.label || title });
+  }
   return {
     loaded: true,
     playing: Boolean(video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA),
@@ -229,6 +235,38 @@ export function snapshotFromShareStream(
     frames,
     liveStream: title.toLowerCase().includes("camera") ? "camera" : "screen",
     captureError: frames.length ? undefined : `Could not capture ${title.toLowerCase()}.`,
+  };
+}
+
+export function startLiveDecipher(
+  video: HTMLVideoElement,
+  onLook: (shot: VideoFrameShot) => void,
+  onAnalyze: (shot: VideoFrameShot) => void,
+) {
+  let lastLook = 0;
+  let lastAnalyze = 0;
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) return;
+    const shot = captureDetailVideoShot(video);
+    if (!shot) return;
+    const now = Date.now();
+    if (now - lastLook >= LIVE_LOOK_INTERVAL_MS) {
+      lastLook = now;
+      onLook(shot);
+    }
+    if (now - lastAnalyze >= LIVE_ANALYZE_INTERVAL_MS) {
+      lastAnalyze = now;
+      onAnalyze(shot);
+    }
+  };
+  void video.play().catch(() => {});
+  const timer = setInterval(tick, 200);
+  tick();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
   };
 }
 

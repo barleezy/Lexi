@@ -1,7 +1,7 @@
 export const VIDEO_CONTEXT_MODEL = "grok-4.6";
 export const VIDEO_CONTEXT_ENDPOINT = "https://api.x.ai/v1/responses";
 export const VIDEO_CONTEXT_CHAT_ENDPOINT = "https://api.x.ai/v1/chat/completions";
-export const VIDEO_CONTEXT_CACHE_MS = 12_000;
+export const VIDEO_CONTEXT_CACHE_MS = 4_000;
 /** grok-4.6 cannot disable reasoning — "none" 400s the frame-analysis request. */
 export const VIDEO_CONTEXT_REASONING_EFFORT = "low";
 

@@ -311,7 +311,7 @@ const GET_VIDEO_CONTEXT_TOOL = {
   type: "function",
   name: "get_video_context",
   description:
-    "Look at the live camera and/or shared tab. Both can be on at once as separate 30fps video streams. Returns a description of each live stream. Call this when they ask what is on camera, on the shared tab, or on both.",
+    "Read the live camera and/or shared tab yourself. Never ask the user to describe what is on screen or on camera. Returns a description of each live stream. Call this when they ask what is on camera, on the tab, or on both.",
   parameters: {
     type: "object",
     properties: {
@@ -885,6 +885,7 @@ export class VoiceSession {
   private pendingAttachments: ReadyAttachment[] = [];
   private deferredLiveFrames: VisionFramePart[] = [];
   private pendingLiveFrames: VisionFramePart[] = [];
+  private lastLiveLooks: { camera: string; screen: string } = { camera: "", screen: "" };
   private lastDecayState = "";
   private videoContextProvider: VideoContextProvider | null = null;
   private captionPacer: CaptionPacer;
@@ -1122,7 +1123,7 @@ export class VoiceSession {
         ? part.dataUrl.slice(part.dataUrl.indexOf(",") + 1)
         : part.dataUrl;
       bytes += Math.round((payload.length * 3) / 4);
-      content.push({ type: "input_image", image_url: part.dataUrl });
+      content.push({ type: "input_image", image_url: part.dataUrl, detail: "high" });
       const time =
         typeof part.timeSec === "number" && Number.isFinite(part.timeSec)
           ? ` at ${formatTimecode(part.timeSec)}`
@@ -1172,6 +1173,32 @@ export class VoiceSession {
       true,
     );
     if (options?.respond) this.requestSpokenResponse();
+  }
+
+  sendLiveLook(source: "camera" | "screen", dataUrl: string, description: string, speak = false) {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!dataUrl.startsWith("data:image/")) return;
+    const label = source === "camera" ? "CAMERA" : "SHARED TAB";
+    if (description.trim()) this.lastLiveLooks[source] = description.trim();
+    const text = description.trim()
+      ? `${label} NOW (authoritative — you can see this; never ask the user to describe it):\n${description.trim()}`
+      : `${label} image attached. You can see this. Read the image yourself. Never ask the user what is on the ${source === "camera" ? "camera" : "shared tab"}.`;
+    this.logger.log("vision.look", { source, hasDescription: Boolean(description.trim()), speak });
+    this.send(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", image_url: dataUrl, detail: "high" },
+            { type: "input_text", text },
+          ],
+        },
+      },
+      true,
+    );
+    if (speak) this.requestSpokenResponse();
   }
 
   setVideoContextProvider(provider: VideoContextProvider | null) {
@@ -1333,8 +1360,8 @@ export class VoiceSession {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const text = active
       ? source === "camera"
-        ? "The user started the camera. You are receiving a live 30fps video stream of exactly what the camera sees — not stills. Comment only when relevant."
-        : "The user started sharing a browser tab or screen. You are receiving a live video stream of exactly what they are viewing, plus the shared tab soundtrack when they enabled Share tab audio. That soundtrack and on-screen voices are not the user. The microphone is still the user. Comment only when relevant."
+        ? "The user started the camera. You can see the live camera. Never ask them to describe what the camera shows. Call get_video_context if you need a fresh read. Comment only when relevant."
+        : "The user started sharing a browser tab or screen. You can see that live share. Never ask them to describe what is on screen. Call get_video_context if you need a fresh read. Shared-tab soundtrack is not the user. Comment only when relevant."
       : source === "camera"
         ? "The user stopped the camera. You can no longer see the live camera video."
         : "The user stopped screen sharing. You can no longer see or hear the shared tab.";
@@ -1364,7 +1391,7 @@ export class VoiceSession {
           content: [
             {
               type: "input_text",
-              text: "Camera and shared tab are both live at 30fps. You are receiving both video streams at once. Analyze both. Do not drop one for the other.",
+              text: "Camera and shared tab are both live. You can see both. Analyze each yourself. Never ask the user to describe either stream.",
             },
           ],
         },
@@ -1383,6 +1410,7 @@ export class VoiceSession {
     this.pendingAttachments = [];
     this.deferredLiveFrames = [];
     this.pendingLiveFrames = [];
+    this.lastLiveLooks = { camera: "", screen: "" };
     this.videoContextProvider = null;
     this.by = by;
     this.logger.log("stop", { by, phase: this.phase });
@@ -2981,20 +3009,6 @@ export class VoiceSession {
     if (!snapshot.loaded) {
       return { error: "No video is loaded." };
     }
-    if (!snapshot.frames.length && (snapshot.liveStream || /\+/.test(snapshot.title))) {
-      return {
-        ok: true,
-        live: true,
-        source: snapshot.title || snapshot.liveStream,
-        title: snapshot.title,
-        playing: true,
-        description: snapshot.title.includes("+")
-          ? "Camera and shared tab are already live 30fps video streams in this session. Describe what you see on EACH stream from the live video you are receiving."
-          : snapshot.liveStream === "camera"
-            ? "The camera is already a live 30fps video stream in this session. Describe what you see from that live camera video."
-            : "The shared tab is already a live 30fps video stream in this session. Describe what you see from that live feed.",
-      };
-    }
     if (snapshot.captureError && !snapshot.frames.length) {
       return {
         error: snapshot.captureError,
@@ -3083,7 +3097,9 @@ export class VoiceSession {
           duration: snapshot.duration,
           playing: snapshot.playing,
           description:
-            "High-detail shared-tab frames were just attached. Answer from those images — read visible text and describe what is on screen.",
+            this.lastLiveLooks.screen ||
+            this.lastLiveLooks.camera ||
+            "High-detail frames were just attached. Read them yourself. Never ask the user to describe the camera or shared tab.",
         };
       }
       return {

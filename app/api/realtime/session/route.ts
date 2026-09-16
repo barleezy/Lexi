@@ -112,7 +112,14 @@ export async function POST(request: Request) {
 
   const token = readToken(data);
   if (!upstream.ok || !token) {
-    return Response.json({ error: "Could not start a voice session." }, { status: 502 });
+    const raw =
+      data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string"
+        ? (data as { error: string }).error
+        : "";
+    const error = /credit|spending limit|permission-denied|does not have permission/i.test(raw)
+      ? "xAI is out of credits or at its monthly spend limit. Add credits at console.x.ai, then start voice again."
+      : "Could not start a voice session.";
+    return Response.json({ error }, { status: 502 });
   }
 
   const userId = ensureRequestUserId(request, requestedUserId);

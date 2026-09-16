@@ -23,8 +23,11 @@ export const VISION_BATCH_FLUSH_MS = 800;
 const MAX_EDGE = 640;
 const JPEG_QUALITY = 0.6;
 /** High-detail stills for get_video_context — live 30fps thumbs are too small to read. */
-export const DETAIL_MAX_EDGE = 1280;
-export const DETAIL_JPEG_QUALITY = 0.85;
+export const DETAIL_MAX_EDGE = 1600;
+export const DETAIL_JPEG_QUALITY = 0.9;
+/** Sharp looks for the voice model — 30fps thumbs are received but not readable. */
+export const LIVE_LOOK_INTERVAL_MS = 250;
+export const LIVE_ANALYZE_INTERVAL_MS = 1000;
 
 let captureCanvas: HTMLCanvasElement | null = null;
 let captureCtx: CanvasRenderingContext2D | null = null;

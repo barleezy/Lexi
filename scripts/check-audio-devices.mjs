@@ -15,6 +15,8 @@ import {
   CAMERA_VISION_INTERVAL_MS,
   DETAIL_JPEG_QUALITY,
   DETAIL_MAX_EDGE,
+  LIVE_ANALYZE_INTERVAL_MS,
+  LIVE_LOOK_INTERVAL_MS,
   DualLiveVisionMux,
   mergeLiveVisionParts,
   nextCameraFacing,
@@ -82,6 +84,8 @@ expect(SCREEN_VISION_FPS === 30, "shared tab capture is 30 fps");
 expect(SCREEN_VISION_INTERVAL_MS === CAMERA_VISION_INTERVAL_MS, "camera matches shared-tab cadence");
 expect(DETAIL_MAX_EDGE >= 1152, "analysis stills are high-detail");
 expect(DETAIL_JPEG_QUALITY >= 0.8, "analysis jpeg is sharp enough to read text");
+expect(LIVE_LOOK_INTERVAL_MS <= 250, "readable looks go to the voice session");
+expect(LIVE_ANALYZE_INTERVAL_MS <= 1000, "shared tab and camera get periodic reads");
 expect(VISION_INTERVAL_MS <= 250, "default vision cadence is live");
 
 const merged = mergeLiveVisionParts(

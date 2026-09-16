@@ -36,6 +36,7 @@ import {
   snapshotFromFrames,
   snapshotFromShareStream,
   snapshotFromVideo,
+  startLiveDecipher,
   startVideoFrameLoop,
   titleFromVideoUrl,
   VIDEO_ACCEPT,
@@ -350,6 +351,8 @@ export function VoiceHome() {
   const screenFrames = useRef(new VideoFrameBuffer());
   const cameraFrames = useRef(new VideoFrameBuffer());
   const liveMux = useRef(new DualLiveVisionMux());
+  const cameraDecipherStop = useRef<(() => void) | null>(null);
+  const screenDecipherStop = useRef<(() => void) | null>(null);
   const stopVideoLoop = useRef<(() => void) | null>(null);
   const videoMeta = useRef<{ title: string; source: VideoSourceKind | null }>({
     title: "",
@@ -557,6 +560,10 @@ export function VoiceHome() {
       window.removeEventListener("focus", onFocus);
       cameraSlot.current.stopLoop?.();
       screenSlot.current.stopLoop?.();
+      cameraDecipherStop.current?.();
+      screenDecipherStop.current?.();
+      cameraDecipherStop.current = null;
+      screenDecipherStop.current = null;
       stopMediaStream(cameraSlot.current.stream);
       stopMediaStream(screenSlot.current.stream);
       cameraSlot.current = emptyVisionSlot();
@@ -607,7 +614,38 @@ export function VoiceHome() {
 
   function sendCameraFrame(dataUrl: string) {
     cameraFrames.current.push({ dataUrl, timeSec: Date.now() / 1000, label: "Live camera" });
-    liveMux.current.push({ source: "camera", dataUrl });
+  }
+
+  async function analyzeLiveShot(source: "camera" | "screen", shot: { dataUrl: string; timeSec: number; label?: string }) {
+    const label = source === "camera" ? "Live camera" : "Shared tab";
+    try {
+      const response = await fetch("/api/video/context", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "1",
+        },
+        body: JSON.stringify({
+          frames: [{ dataUrl: shot.dataUrl, timeSec: shot.timeSec, label }],
+          question:
+            source === "camera"
+              ? "Describe the camera view. Name the person, setting, clothing, and any visible text."
+              : "Read all visible text on this shared tab. Describe exactly what is on screen: site, people, objects, UI, and action.",
+          title: label,
+          playing: true,
+        }),
+      });
+      let description = "";
+      try {
+        const body = (await response.json()) as { description?: unknown };
+        if (typeof body.description === "string") description = body.description;
+      } catch {
+        description = "";
+      }
+      sessionRef.current?.sendLiveLook(source, shot.dataUrl, description);
+    } catch {
+      sessionRef.current?.sendLiveLook(source, shot.dataUrl, "");
+    }
   }
 
   function bindCameraTrack(stream: MediaStream) {
@@ -626,9 +664,24 @@ export function VoiceHome() {
     void video.play().catch(() => {});
     cameraSlot.current.stopLoop?.();
     cameraSlot.current.stopLoop = startLiveVisionCapture(video, sendCameraFrame, CAMERA_VISION_INTERVAL_MS);
+    cameraDecipherStop.current?.();
+    cameraDecipherStop.current = startLiveDecipher(
+      video,
+      (shot) => {
+        shot.label = "Live camera";
+        cameraFrames.current.push(shot);
+        liveMux.current.push({ source: "camera", dataUrl: shot.dataUrl, timeSec: shot.timeSec });
+      },
+      (shot) => {
+        shot.label = "Live camera";
+        void analyzeLiveShot("camera", shot);
+      },
+    );
     return () => {
       cameraSlot.current.stopLoop?.();
       cameraSlot.current.stopLoop = null;
+      cameraDecipherStop.current?.();
+      cameraDecipherStop.current = null;
       if (video.srcObject === stream) video.srcObject = null;
     };
   }, [cameraOn]);
@@ -643,11 +696,25 @@ export function VoiceHome() {
     screenSlot.current.stopLoop?.();
     screenSlot.current.stopLoop = startLiveVisionCapture(video, (dataUrl) => {
       screenFrames.current.push({ dataUrl, timeSec: Date.now() / 1000, label: "Shared tab" });
-      liveMux.current.push({ source: "screen", dataUrl });
     }, SCREEN_VISION_INTERVAL_MS);
+    screenDecipherStop.current?.();
+    screenDecipherStop.current = startLiveDecipher(
+      video,
+      (shot) => {
+        shot.label = "Shared tab";
+        screenFrames.current.push(shot);
+        liveMux.current.push({ source: "screen", dataUrl: shot.dataUrl, timeSec: shot.timeSec });
+      },
+      (shot) => {
+        shot.label = "Shared tab";
+        void analyzeLiveShot("screen", shot);
+      },
+    );
     return () => {
       screenSlot.current.stopLoop?.();
       screenSlot.current.stopLoop = null;
+      screenDecipherStop.current?.();
+      screenDecipherStop.current = null;
       video.srcObject = null;
     };
   }, [screenOn]);
@@ -663,6 +730,8 @@ export function VoiceHome() {
       visionBatcher.current.clear("camera");
       liveMux.current.setActive("camera", false);
       liveMux.current.clear("camera");
+      cameraDecipherStop.current?.();
+      cameraDecipherStop.current = null;
       cameraFrames.current.clear();
     }
     if (!source || source === "screen") {
@@ -676,6 +745,8 @@ export function VoiceHome() {
       visionBatcher.current.clear("screen");
       liveMux.current.setActive("screen", false);
       liveMux.current.clear("screen");
+      screenDecipherStop.current?.();
+      screenDecipherStop.current = null;
       screenFrames.current.clear();
     }
   }
