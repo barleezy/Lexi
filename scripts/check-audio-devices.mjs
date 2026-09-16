@@ -10,7 +10,12 @@ import {
   pickPreferredAudioInput,
   scoreAudioInputLabel,
 } from "../lib/voice/audio-devices.ts";
-import { CAMERA_VISION_INTERVAL_MS, nextCameraFacing, VISION_INTERVAL_MS } from "../lib/voice/vision.ts";
+import {
+  CAMERA_VISION_INTERVAL_MS,
+  nextCameraFacing,
+  SCREEN_VISION_INTERVAL_MS,
+  VISION_INTERVAL_MS,
+} from "../lib/voice/vision.ts";
 
 function expect(condition, label) {
   if (!condition) throw new Error(label);
@@ -66,6 +71,7 @@ expect(CAR_MIC_MUTE_RECLAIM_MS < MIC_MUTE_RECLAIM_MS, "car does not sit on the 4
 expect(nextCameraFacing("user") === "environment", "front to rear");
 expect(nextCameraFacing("environment") === "user", "rear to front");
 expect(CAMERA_VISION_INTERVAL_MS === 250, "camera feed is 4 fps");
-expect(CAMERA_VISION_INTERVAL_MS < VISION_INTERVAL_MS, "camera is faster than screen stills");
+expect(SCREEN_VISION_INTERVAL_MS <= 250, "shared tab is a live stream, not 1s stills");
+expect(VISION_INTERVAL_MS <= 250, "default vision cadence is live");
 
 console.log("audio-devices ok");

@@ -11,9 +11,10 @@ export type SendVisionFramesOptions = {
   prompt?: string;
 };
 
-export const VISION_INTERVAL_MS = 1000;
-/** Grok realtime has no video track — camera uses high-cadence `input_image` (~4 fps). */
+/** Grok realtime has no video-track item — live camera/tab use high-cadence `input_image`. */
+export const VISION_INTERVAL_MS = 200;
 export const CAMERA_VISION_INTERVAL_MS = 250;
+export const SCREEN_VISION_INTERVAL_MS = 200;
 export const VISION_BATCH_SIZE = 4;
 export const VISION_BATCH_GAP_MS = 600;
 export const VISION_BATCH_FLUSH_MS = 800;
@@ -85,8 +86,22 @@ export async function startCameraStream(facing: CameraFacing = "user") {
 export async function startScreenStream() {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     audio: false,
-    video: { frameRate: { ideal: 1, max: 5 } },
-  });
+    video: {
+      frameRate: { ideal: 24, max: 30 },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      displaySurface: "browser",
+    },
+    preferCurrentTab: false,
+    selfBrowserSurface: "include",
+    surfaceSwitching: "include",
+    systemAudio: "exclude",
+    monitorTypeSurfaces: "include",
+  } as DisplayMediaStreamOptions);
+  const videoTrack = stream.getVideoTracks()[0];
+  if (videoTrack && "contentHint" in videoTrack) {
+    videoTrack.contentHint = "motion";
+  }
   // Display / tab audio must never reach the realtime user-speech buffer.
   for (const track of stream.getAudioTracks()) {
     track.stop();
@@ -220,6 +235,58 @@ export class VisionFrameBatcher {
   }
 }
 
+function jpegFromVideoFrame(frame: VideoFrame) {
+  const width = frame.displayWidth || frame.codedWidth;
+  const height = frame.displayHeight || frame.codedHeight;
+  return jpegDataUrlFromImage(frame, width, height, MAX_EDGE, JPEG_QUALITY);
+}
+
+type TrackProcessorCtor = new (init: { track: MediaStreamTrack }) => {
+  readable: ReadableStream<VideoFrame>;
+};
+
+function startTrackFramePump(
+  track: MediaStreamTrack,
+  onFrame: (dataUrl: string) => void,
+  intervalMs: number,
+) {
+  const Ctor = (globalThis as unknown as { MediaStreamTrackProcessor?: TrackProcessorCtor })
+    .MediaStreamTrackProcessor;
+  if (!Ctor) return null;
+  const processor = new Ctor({ track });
+  const reader = processor.readable.getReader();
+  let stopped = false;
+  let last = 0;
+  void (async () => {
+    try {
+      while (!stopped) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        const now = Date.now();
+        if (now - last >= intervalMs) {
+          try {
+            const dataUrl = jpegFromVideoFrame(value);
+            if (dataUrl) {
+              last = now;
+              onFrame(dataUrl);
+            }
+          } finally {
+            value.close();
+          }
+        } else {
+          value.close();
+        }
+      }
+    } catch {
+      // Track ended or the browser closed the processor.
+    }
+  })();
+  return () => {
+    stopped = true;
+    void reader.cancel().catch(() => {});
+  };
+}
+
 export function startVisionLoop(
   video: HTMLVideoElement,
   onFrame: (dataUrl: string) => void,
@@ -227,23 +294,73 @@ export function startVisionLoop(
 ) {
   let timer: ReturnType<typeof setInterval> | null = null;
   let busy = false;
+  let stopped = false;
+  let lastUrl = "";
+  let rvfcHandle = 0;
+  const canRvfc = typeof video.requestVideoFrameCallback === "function";
+
+  const emit = (dataUrl: string | null) => {
+    if (!dataUrl || dataUrl === lastUrl) return;
+    lastUrl = dataUrl;
+    onFrame(dataUrl);
+  };
 
   const tick = () => {
-    if (busy || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    if (stopped || busy || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
     if (!video.videoWidth || !video.videoHeight) return;
     busy = true;
     try {
-      const dataUrl = captureJpegDataUrl(video);
-      if (dataUrl) onFrame(dataUrl);
+      emit(captureJpegDataUrl(video));
     } finally {
       busy = false;
     }
   };
 
+  const onVideoFrame = () => {
+    tick();
+    if (!stopped && canRvfc) {
+      rvfcHandle = video.requestVideoFrameCallback(onVideoFrame);
+    }
+  };
+
+  void video.play().catch(() => {});
+  if (canRvfc) rvfcHandle = video.requestVideoFrameCallback(onVideoFrame);
   timer = setInterval(tick, intervalMs);
   tick();
   return () => {
+    stopped = true;
     if (timer) clearInterval(timer);
     timer = null;
+    if (canRvfc && rvfcHandle) {
+      video.cancelVideoFrameCallback?.(rvfcHandle);
+    }
+  };
+}
+
+/** Live tab/screen capture: pull from the MediaStream track, not a hidden 1px sink. */
+export function startLiveVisionCapture(
+  video: HTMLVideoElement,
+  onFrame: (dataUrl: string) => void,
+  intervalMs = SCREEN_VISION_INTERVAL_MS,
+) {
+  const stream = video.srcObject instanceof MediaStream ? video.srcObject : null;
+  const sourceTrack = stream?.getVideoTracks()[0];
+  const processTrack = sourceTrack?.clone() ?? null;
+  if (processTrack && "contentHint" in processTrack) {
+    processTrack.contentHint = sourceTrack?.contentHint || "motion";
+  }
+  let lastUrl = "";
+  const emit = (dataUrl: string) => {
+    if (!dataUrl || dataUrl === lastUrl) return;
+    lastUrl = dataUrl;
+    onFrame(dataUrl);
+  };
+  const stopPump = processTrack ? startTrackFramePump(processTrack, emit, intervalMs) : null;
+  const stopLoop = startVisionLoop(video, emit, intervalMs);
+  void video.play().catch(() => {});
+  return () => {
+    stopPump?.();
+    processTrack?.stop();
+    stopLoop();
   };
 }

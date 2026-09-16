@@ -168,6 +168,29 @@ export function snapshotFromFrames(
   };
 }
 
+export function snapshotFromShareStream(
+  video: HTMLVideoElement | null,
+  buffer: VideoFrameBuffer,
+  title = "Shared tab",
+): VideoContextSnapshot {
+  if (video) {
+    const live = captureVideoShot(video);
+    if (live) buffer.push(live);
+  }
+  const frames = buffer.list();
+  return {
+    loaded: true,
+    playing: Boolean(video && !video.paused && !video.ended),
+    paused: Boolean(!video || video.paused || video.ended),
+    currentTime: frames.at(-1)?.timeSec ?? 0,
+    duration: 0,
+    title,
+    source: "url",
+    frames,
+    captureError: frames.length ? undefined : "Could not capture the shared tab.",
+  };
+}
+
 export function snapshotFromVideo(
   video: HTMLVideoElement | null,
   buffer: VideoFrameBuffer,

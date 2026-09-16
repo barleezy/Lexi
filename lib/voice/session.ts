@@ -306,7 +306,7 @@ const GET_VIDEO_CONTEXT_TOOL = {
   type: "function",
   name: "get_video_context",
   description:
-    "Look at the video the user is watching with you right now. Call this when they ask what is happening, what is on screen, or any question that needs the current picture. Returns a short scene description from several recent stills. Do not call this if no video is loaded.",
+    "Look at the live shared tab, screen, or watch-together video the user is viewing with you right now. Call this when they ask what is happening, what is on screen, or any question that needs the current picture. Returns a short scene description from the live stream. Do not call this if nothing is being shared.",
   parameters: {
     type: "object",
     properties: {
@@ -874,6 +874,7 @@ export class VoiceSession {
   }> = [];
   private pendingAttachments: ReadyAttachment[] = [];
   private deferredLiveFrames: VisionFramePart[] = [];
+  private pendingLiveFrames: VisionFramePart[] = [];
   private lastDecayState = "";
   private videoContextProvider: VideoContextProvider | null = null;
   private captionPacer: CaptionPacer;
@@ -1090,7 +1091,11 @@ export class VoiceSession {
   }
 
   sendVisionFrames(parts: VisionFramePart[], options?: SendVisionFramesOptions) {
-    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN || !parts.length) return;
+    if (this.stopped || !parts.length) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.pendingLiveFrames = parts;
+      return;
+    }
     if (shouldDeferLiveVision(this.phase, Boolean(options?.respond), parts.map((part) => part.source))) {
       this.deferredLiveFrames = parts;
       return;
@@ -1121,7 +1126,7 @@ export class VoiceSession {
       } else if (part.source === "camera") {
         labels.push("Camera viewfinder frame (user allowed).");
       } else {
-        labels.push("Shared screen frame (user allowed).");
+        labels.push("Live shared-tab video (exactly what the user is viewing).");
       }
     }
     this.logger.log("vision.frame", {
@@ -1261,6 +1266,9 @@ export class VoiceSession {
   private flushPendingVision() {
     const queued = this.pendingVisionNotices.splice(0);
     for (const item of queued) this.emitVisionNotice(item.source, item.active);
+    const frames = this.pendingLiveFrames;
+    this.pendingLiveFrames = [];
+    if (frames.length) this.sendVisionFrames(frames);
   }
 
   private flushDeferredLiveFrames() {
@@ -1305,7 +1313,7 @@ export class VoiceSession {
     const text = active
       ? source === "camera"
         ? "The user allowed camera viewfinder frames. You can see what the camera shows when a frame is attached. Comment only when relevant."
-        : "The user started sharing their screen. You can see the shared screen when a frame is attached. Voices or audio from the shared screen, TV, or other media are not the user. Comment only when relevant."
+        : "The user started sharing a browser tab or screen. You are receiving a live video stream of exactly what they are viewing — not a poster or one still. Voices or audio from the shared tab, TV, or other media are not the user. Comment only when relevant."
       : source === "camera"
         ? "The user stopped the camera. You can no longer see the viewfinder."
         : "The user stopped screen sharing. You can no longer see the screen.";
@@ -1332,6 +1340,7 @@ export class VoiceSession {
     this.pendingVideoNotices = [];
     this.pendingAttachments = [];
     this.deferredLiveFrames = [];
+    this.pendingLiveFrames = [];
     this.videoContextProvider = null;
     this.by = by;
     this.logger.log("stop", { by, phase: this.phase });

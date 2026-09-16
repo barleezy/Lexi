@@ -33,6 +33,7 @@ import {
   directVideoHref,
   playableVideoSrc,
   snapshotFromFrames,
+  snapshotFromShareStream,
   snapshotFromVideo,
   startVideoFrameLoop,
   titleFromVideoUrl,
@@ -45,10 +46,12 @@ import { isAdultPageUrl, isDirectWatchMediaUrl, isWatchHlsUrl, shouldProxyWatchM
 import { watchSizeError } from "@/lib/voice/watch-formats";
 import {
   CAMERA_VISION_INTERVAL_MS,
+  SCREEN_VISION_INTERVAL_MS,
   canShareScreen,
   nextCameraFacing,
   preferWatchTab,
   startCameraStream,
+  startLiveVisionCapture,
   startScreenStream,
   sameVideoDevice,
   startVisionLoop,
@@ -342,6 +345,7 @@ export function VoiceHome() {
   const watchVideoRef = useRef<HTMLVideoElement>(null);
   const videoObjectUrl = useRef<string | null>(null);
   const videoFrames = useRef(new VideoFrameBuffer());
+  const screenFrames = useRef(new VideoFrameBuffer());
   const stopVideoLoop = useRef<(() => void) | null>(null);
   const videoMeta = useRef<{ title: string; source: VideoSourceKind | null }>({
     title: "",
@@ -633,13 +637,14 @@ export function VoiceHome() {
     video.srcObject = stream;
     void video.play().catch(() => {});
     screenSlot.current.stopLoop?.();
-    screenSlot.current.stopLoop = startVisionLoop(video, (dataUrl) => {
+    screenSlot.current.stopLoop = startLiveVisionCapture(video, (dataUrl) => {
+      screenFrames.current.push({ dataUrl, timeSec: Date.now() / 1000 });
       if (watchTabActiveRef.current || videoMeta.current.source) {
         visionBatcher.current.push({ source: "screen", dataUrl });
         return;
       }
       sessionRef.current?.sendVisionFrame("screen", dataUrl);
-    });
+    }, SCREEN_VISION_INTERVAL_MS);
     return () => {
       screenSlot.current.stopLoop?.();
       screenSlot.current.stopLoop = null;
@@ -665,6 +670,7 @@ export function VoiceHome() {
       setScreenOn(false);
       if (wasOn && notify) sessionRef.current?.notifyVision("screen", false);
       visionBatcher.current.clear("screen");
+      screenFrames.current.clear();
     }
   }
 
@@ -878,6 +884,12 @@ export function VoiceHome() {
           currentTime: watchTimeRef.current,
           duration: watchDurationRef.current,
         });
+      }
+      if (videoMeta.current.source) {
+        return snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current);
+      }
+      if (screenSlot.current.stream) {
+        return snapshotFromShareStream(screenVideoRef.current, screenFrames.current);
       }
       return snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current);
     });
@@ -1559,7 +1571,14 @@ export function VoiceHome() {
     }
     await session.start();
     if (cameraSlot.current.stream) session.notifyVision("camera", true);
-    if (screenSlot.current.stream) session.notifyVision("screen", true);
+    if (screenSlot.current.stream) {
+      session.notifyVision("screen", true);
+      const shot = screenVideoRef.current ? captureVideoShot(screenVideoRef.current) : null;
+      if (shot) {
+        screenFrames.current.push(shot);
+        session.sendVisionFrame("screen", shot.dataUrl);
+      }
+    }
     const nowPlaying = readAppleMusicNowPlaying();
     if (nowPlaying.playing) {
       applyApplePlayback(nowPlaying);
@@ -2051,29 +2070,43 @@ export function VoiceHome() {
             <p className="px-1 text-xs text-zinc-500">{videoHint}</p>
           ) : null}
           <div className="flex items-end justify-between gap-3">
-            {cameraOn ? (
-              <div className="relative h-[4.5rem] w-24 shrink-0">
-                <video
-                  ref={cameraVideoRef}
-                  muted
-                  playsInline
-                  autoPlay
-                  className={`h-[4.5rem] w-24 rounded-xl border border-zinc-400 object-cover shadow-md dark:border-zinc-500 ${cameraFacing === "user" ? "-scale-x-100" : ""}`}
-                  aria-label={
-                    cameraFacing === "user" ? "Front camera viewfinder" : "Rear camera viewfinder"
-                  }
-                />
-                <button
-                  type="button"
-                  aria-label={
-                    cameraFacing === "user" ? "Switch to rear camera" : "Switch to front camera"
-                  }
-                  title={cameraFacing === "user" ? "Rear camera" : "Front camera"}
-                  onClick={() => void flipCamera()}
-                  className="absolute right-1 bottom-1 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-400 bg-background/90 text-foreground dark:border-zinc-500"
-                >
-                  <FlipCameraIcon />
-                </button>
+            {cameraOn || screenOn ? (
+              <div className="flex items-end gap-2">
+                {screenOn ? (
+                  <video
+                    ref={screenVideoRef}
+                    muted
+                    playsInline
+                    autoPlay
+                    className="h-[4.5rem] w-32 rounded-xl border border-zinc-400 bg-black object-cover shadow-md dark:border-zinc-500"
+                    aria-label="Shared tab or screen"
+                  />
+                ) : null}
+                {cameraOn ? (
+                  <div className="relative h-[4.5rem] w-24 shrink-0">
+                    <video
+                      ref={cameraVideoRef}
+                      muted
+                      playsInline
+                      autoPlay
+                      className={`h-[4.5rem] w-24 rounded-xl border border-zinc-400 object-cover shadow-md dark:border-zinc-500 ${cameraFacing === "user" ? "-scale-x-100" : ""}`}
+                      aria-label={
+                        cameraFacing === "user" ? "Front camera viewfinder" : "Rear camera viewfinder"
+                      }
+                    />
+                    <button
+                      type="button"
+                      aria-label={
+                        cameraFacing === "user" ? "Switch to rear camera" : "Switch to front camera"
+                      }
+                      title={cameraFacing === "user" ? "Rear camera" : "Front camera"}
+                      onClick={() => void flipCamera()}
+                      className="absolute right-1 bottom-1 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-400 bg-background/90 text-foreground dark:border-zinc-500"
+                    >
+                      <FlipCameraIcon />
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <span />
@@ -2088,7 +2121,8 @@ export function VoiceHome() {
                 <button
                   type="button"
                   aria-pressed={screenOn}
-                  aria-label={screenOn ? "Stop sharing screen" : "Share screen"}
+                  aria-label={screenOn ? "Stop sharing tab" : "Share a tab or screen"}
+                  title={screenOn ? "Stop sharing" : "Share a tab or screen"}
                   onClick={() => toggleVision("screen")}
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-zinc-400 bg-background text-foreground transition-colors hover:bg-zinc-100 dark:border-zinc-500 dark:hover:bg-zinc-800 ${screenOn ? "bg-zinc-100 dark:bg-zinc-800" : ""}`}
                 >
@@ -2113,14 +2147,9 @@ export function VoiceHome() {
             <p className="text-right text-xs text-zinc-500">Connect so Lexi can see this camera.</p>
           ) : null}
           {screenOn ? (
-            <video
-              ref={screenVideoRef}
-              muted
-              playsInline
-              autoPlay
-              className="pointer-events-none absolute h-px w-px overflow-hidden opacity-0"
-              aria-hidden
-            />
+            <p className="text-right text-xs text-zinc-500">
+              Lexi is watching this live share.
+            </p>
           ) : null}
           {chips.length ? (
             <ul className="flex flex-wrap gap-2">
