@@ -1739,11 +1739,11 @@ export function VoiceHome() {
             ) : null}
             {accountPanel !== "reset" ? (
               <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
-                Account
+                Username
                 <input
                   value={accountDraft}
                   onChange={(event) => setAccountDraft(event.target.value)}
-                  placeholder="Barleezy"
+                  placeholder="username"
                   autoComplete="username"
                   className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
                 />

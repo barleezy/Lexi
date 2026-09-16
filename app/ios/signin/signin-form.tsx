@@ -181,12 +181,12 @@ export function IosSignInForm({
       )}
       {panel !== "reset" ? (
         <label className="flex flex-col gap-2 text-sm">
-          <span className="text-neutral-500">Account</span>
+          <span className="text-neutral-500">Username</span>
           <input
             name="userId"
             value={userId}
             onChange={(event) => setUserId(event.target.value)}
-            placeholder="Barleezy"
+            placeholder="username"
             autoComplete="username"
             className="rounded-xl border border-neutral-300 bg-transparent px-4 py-3 text-base outline-none focus:border-neutral-900 dark:border-neutral-700 dark:focus:border-white"
           />
