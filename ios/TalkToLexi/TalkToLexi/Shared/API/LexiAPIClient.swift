@@ -85,7 +85,7 @@ final class LexiAPIClient {
         musicSource: String
     ) async throws -> IosSessionResponse {
         var body: [String: Any] = [
-            "userId": account.userId,
+            "userId": account.sessionUserId,
             "clientTimeZone": timeZone,
             "musicPlaying": musicPlaying,
             "musicTitle": musicTitle,
@@ -126,14 +126,14 @@ final class LexiAPIClient {
     func memoryTool(name: String, args: [String: Any], sessionId: String?) async throws -> [String: Any] {
         var body = args
         body["tool"] = name
-        body["userId"] = account.userId
+        body["userId"] = account.sessionUserId
         if let sessionId { body["sessionId"] = sessionId }
         return try await postJSON("/api/memory", body: body)
     }
 
     func recordTurn(userText: String, assistantText: String, sessionId: String?) async {
         var body: [String: Any] = [
-            "userId": account.userId,
+            "userId": account.sessionUserId,
             "userText": userText,
             "assistantText": assistantText,
         ]
@@ -144,7 +144,7 @@ final class LexiAPIClient {
     func endMemorySession(sessionId: String?) async {
         guard let sessionId, !sessionId.isEmpty else { return }
         _ = try? await postJSON("/api/memory", body: [
-            "userId": account.userId,
+            "userId": account.sessionUserId,
             "sessionId": sessionId,
             "endSession": true,
         ])
@@ -219,7 +219,7 @@ final class LexiAPIClient {
     func fortnite(action: String, displayName: String?) async throws -> [String: Any] {
         var body: [String: Any] = [
             "action": action,
-            "userId": account.userId,
+            "userId": account.sessionUserId,
         ]
         if let displayName, !displayName.isEmpty { body["displayName"] = displayName }
         return try await postJSON("/api/fortnite", body: body)
@@ -261,7 +261,7 @@ final class LexiAPIClient {
         request.httpMethod = method
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(account.userId, forHTTPHeaderField: "x-lexi-user-id")
+        request.setValue(account.sessionUserId, forHTTPHeaderField: "x-lexi-user-id")
         if !account.token.isEmpty {
             request.setValue("Bearer \(account.token)", forHTTPHeaderField: "Authorization")
             request.setValue(account.token, forHTTPHeaderField: "x-lexi-ios-session")

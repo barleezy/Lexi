@@ -179,7 +179,7 @@ struct VoiceHomeView: View {
                 app.toggleCall()
             }
             .buttonStyle(LexiFilledButtonStyle())
-            .disabled(!app.isSignedIn || app.isConnecting)
+            .disabled(app.isConnecting)
             ComposerBar(
                 draft: $app.draft,
                 live: app.isLive,

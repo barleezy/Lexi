@@ -110,7 +110,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         phase = realtime.phase
         caption = realtime.caption
         rows = realtime.rows
-        statusLine = account.isSignedIn ? "Signed in as \(account.userId)" : "Sign in on talktolexi.app"
+        statusLine = account.isSignedIn ? "Signed in as \(account.userId)" : "Ready to talk"
     }
 
     func refreshExtras() async {
@@ -219,11 +219,6 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     }
 
     func connectCall() {
-        guard account.isSignedIn else {
-            lastError = "Sign in first."
-            refreshStatus()
-            return
-        }
         lastError = ""
         connectGeneration += 1
         authRefreshCount = 0
@@ -301,13 +296,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     }
 
     private func refreshVoiceSession() {
-        guard account.isSignedIn else {
-            lastError = "Sign-in expired. Sign in again."
-            refreshStatus()
-            return
-        }
         if authRefreshCount >= 1 {
-            lastError = "Voice auth failed. Sign in again."
+            lastError = "Voice auth failed. Try Connect again."
             refreshStatus()
             return
         }

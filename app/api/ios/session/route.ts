@@ -1,6 +1,6 @@
 import { buildIosSession, IOS_REALTIME_URL, IOS_TARGET_RATE, mintXaiClientSecret } from "@/lib/ios/session";
 import { readIosSession } from "@/lib/ios/auth";
-import { requireSignedInUserId } from "@/lib/memory/user";
+import { ensureRequestUserId } from "@/lib/memory/user";
 import type { DeviceLocationState } from "@/lib/voice/location";
 import type { MusicSessionState } from "@/lib/voice/persona";
 
@@ -51,10 +51,7 @@ export async function POST(request: Request) {
   const iosAuth = readIosSession(request);
   const requestedUserId =
     iosAuth?.userId ?? (typeof body.userId === "string" ? body.userId : null);
-  const userId = requireSignedInUserId(request, requestedUserId);
-  if (!userId) {
-    return Response.json({ error: "Sign in first." }, { status: 401 });
-  }
+  const userId = ensureRequestUserId(request, requestedUserId);
 
   const minted = await mintXaiClientSecret(key);
   if (!minted.ok || !minted.token) {

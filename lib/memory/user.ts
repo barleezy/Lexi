@@ -53,6 +53,20 @@ export function resolveUserId(request: Request, queryUserId?: string | null) {
   return readUserId(request, queryUserId) ?? "";
 }
 
+export function isGuestUserId(raw?: string | null) {
+  return normalizeUserId(raw).toLowerCase().startsWith("guest_");
+}
+
+export function newGuestUserId() {
+  const hex = Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  return `guest_${hex}`;
+}
+
+/** Voice can run without a password account. Guests get a stable cookie id. */
+export function ensureRequestUserId(request: Request, queryUserId?: string | null) {
+  return resolveUserId(request, queryUserId) || newGuestUserId();
+}
+
 export function requireSignedInUserId(request: Request, queryUserId?: string | null) {
   const userId = resolveUserId(request, queryUserId);
   return userId || null;
@@ -80,4 +94,10 @@ export function writeBrowserUserId(raw: string) {
   }
   document.cookie = `${LEXI_USER_COOKIE}=${encodeURIComponent(userId)}; path=/; max-age=${LEXI_USER_COOKIE_MAX_AGE}; samesite=lax${secure}`;
   return userId;
+}
+
+export function ensureBrowserUserId() {
+  const existing = readBrowserUserId();
+  if (existing) return existing;
+  return writeBrowserUserId(newGuestUserId());
 }

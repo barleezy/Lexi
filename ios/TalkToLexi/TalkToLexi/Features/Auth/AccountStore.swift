@@ -6,6 +6,7 @@ final class AccountStore {
     private enum Key {
         static let token = "lexi.ios.token"
         static let userId = "lexi.ios.userId"
+        static let guestUserId = "lexi.ios.guestUserId"
         static let host = "lexi.ios.host"
         static let routeThroughPS5PartyChat = "lexi.ios.routeThroughPS5PartyChat"
         static let psnOnlineId = "lexi.ios.psnOnlineId"
@@ -39,6 +40,19 @@ final class AccountStore {
 
     var isSignedIn: Bool {
         !token.isEmpty && !userId.isEmpty
+    }
+
+    /// Signed-in account, or a stable guest id so Connect works without login.
+    var sessionUserId: String {
+        if !userId.isEmpty { return userId }
+        if let guest = defaults.string(forKey: Key.guestUserId)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !guest.isEmpty {
+            return guest
+        }
+        let hex = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
+        let next = "guest_\(hex)"
+        defaults.set(next, forKey: Key.guestUserId)
+        return next
     }
 
     func apply(token: String, userId: String) {

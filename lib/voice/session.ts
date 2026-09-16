@@ -43,7 +43,7 @@ import {
   turnsToTranscripts,
   type ChatTurn,
 } from "@/lib/memory/turns";
-import { isAdminUserId, readBrowserUserId } from "@/lib/memory/user";
+import { isAdminUserId, ensureBrowserUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
 import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
 import type { ReadyAttachment } from "@/lib/voice/attachments";
@@ -161,7 +161,7 @@ function readFriendPresence(raw: unknown): FortniteSessionState["friendPresence"
 
 function clientUserId() {
   if (typeof document === "undefined") return "";
-  return readBrowserUserId();
+  return ensureBrowserUserId();
 }
 
 async function fetchFortniteStatus(): Promise<FortniteSessionState> {
@@ -1368,9 +1368,6 @@ export class VoiceSession {
   private async fetchSessionToken(resume: boolean) {
     const tokenStarted = Date.now();
     const userId = clientUserId();
-    if (!userId) {
-      throw new Error("Sign in first.");
-    }
     if (!resume) {
       const previousSessionId = readVoiceSessionStore().sessionId;
       this.setMemorySessionId(newMemorySessionId(), userId);
