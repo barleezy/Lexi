@@ -20,6 +20,7 @@ function expectEqual(actual, expected, label) {
 }
 
 expectEqual(VOICE_STORAGE_KEYS.sessionId, "lexi.sessionId", "sessionId key");
+expectEqual(VOICE_STORAGE_KEYS.previousSessionId, "lexi.previousSessionId", "previousSessionId key");
 expectEqual(VOICE_STORAGE_KEYS.started, "lexi.started", "started key");
 expectEqual(VOICE_STORAGE_KEYS.userId, "lexi.userId", "userId key");
 expectEqual(VOICE_STORAGE_KEYS.caption, "lexi.caption", "caption key");
@@ -47,6 +48,7 @@ expectEqual(
 );
 
 const memory = {};
+const local = {};
 globalThis.sessionStorage = {
   getItem(key) {
     return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : null;
@@ -58,9 +60,21 @@ globalThis.sessionStorage = {
     delete memory[key];
   },
 };
+globalThis.localStorage = {
+  getItem(key) {
+    return Object.prototype.hasOwnProperty.call(local, key) ? local[key] : null;
+  },
+  setItem(key, value) {
+    local[key] = String(value);
+  },
+  removeItem(key) {
+    delete local[key];
+  },
+};
 
 writeVoiceSessionStore({
   sessionId: uuid,
+  previousSessionId: uuid,
   started: true,
   userId: "Ian",
   caption: "hello",
@@ -70,6 +84,8 @@ expectEqual(
   readVoiceSessionStore(),
   {
     sessionId: uuid,
+    previousSessionId: uuid,
+    voiceSessionId: null,
     started: true,
     userId: "Ian",
     caption: "hello",
@@ -78,8 +94,10 @@ expectEqual(
   "roundtrip store",
 );
 expectEqual(memory["lexi.started"], "1", "started flag");
+expectEqual(local["lexi.previousSessionId"], uuid, "previousSessionId in localStorage");
 clearVoiceSessionStore();
 expectEqual(readVoiceSessionStore().sessionId, null, "cleared session");
+expectEqual(readVoiceSessionStore().previousSessionId, null, "cleared previousSessionId");
 expectEqual(readVoiceSessionStore().started, false, "cleared started");
 expectEqual(readVoiceSessionStore().userId, "", "cleared user is not Ian");
 
@@ -91,8 +109,8 @@ const turns = parseChatTurns([
 expectEqual(turns.length, 2, "parse two turns");
 expectEqual(
   formatPriorChat(turns),
-  "PRIOR CHAT\n\nUser: hi\nAssistant: hello\nUser: later\nAssistant: ok",
-  "prior chat block",
+  "PRIOR CHAT\n\nUser: hi\nAssistant: hello\nAssistant: ok",
+  "prior chat block drops latest user line",
 );
 expectEqual(formatPriorChat([]), "", "empty prior chat");
 expectEqual(

@@ -39,13 +39,17 @@ import { scoreSalience } from "@/lib/memory/decay";
 import { FACT_KEY_LIST, FACT_KEYS, isPinnedKey, PINNED_AFFECT } from "@/lib/memory/extract";
 import { newMemorySessionId, parseSessionId } from "@/lib/memory/session-id";
 import {
-  parseChatTurns,
   turnsToTranscripts,
   type ChatTurn,
 } from "@/lib/memory/turns";
 import { isAdminUserId, ensureBrowserUserId } from "@/lib/memory/user";
 import { createVoiceLogger, type VoiceLogger } from "@/lib/voice/logger";
-import { readVoiceSessionStore, writeVoiceSessionStore } from "@/lib/voice/persist";
+import {
+  clearCallContinuityStore,
+  readVoiceSessionStore,
+  writePreviousSessionId,
+  writeVoiceSessionStore,
+} from "@/lib/voice/persist";
 import type { ReadyAttachment } from "@/lib/voice/attachments";
 import { CaptionPacer, readWordStartsMs } from "@/lib/voice/caption-pace";
 import { stampRealtimeRequest } from "@/lib/voice/realtime-stamp";
@@ -870,6 +874,10 @@ export class VoiceSession {
   private priorChat = "";
   private priorTurns: ChatTurn[] = [];
   private memorySessionId: string | null = null;
+  private voiceSessionId: string | null = null;
+  private capAtMs: number | null = null;
+  private capTimer: ReturnType<typeof setTimeout> | null = null;
+  private settlePosted = false;
   private inflightTools = new Set<string>();
   private handledTools = new Set<string>();
   private toolsThisResponse = false;
@@ -1405,6 +1413,19 @@ export class VoiceSession {
     this.stopped = true;
     this.emitToyControlPending(false);
     this.stopClockRefresh();
+    if (this.capTimer) {
+      clearTimeout(this.capTimer);
+      this.capTimer = null;
+    }
+    this.postVoiceSettle();
+    writePreviousSessionId(null);
+    writeVoiceSessionStore({
+      previousSessionId: null,
+      voiceSessionId: null,
+      started: false,
+      rows: [],
+      caption: "",
+    });
     this.pendingVisionNotices = [];
     this.pendingVideoNotices = [];
     this.pendingAttachments = [];
@@ -1456,15 +1477,27 @@ export class VoiceSession {
     const tokenStarted = Date.now();
     const userId = clientUserId();
     if (!resume) {
-      const previousSessionId = readVoiceSessionStore().sessionId;
+      // Fresh Call after hangup: never chain previousSessionId or prior transcript.
+      clearCallContinuityStore();
+      this.priorChat = "";
+      this.priorTurns = [];
+      this.rows = [];
+      this.voiceSessionId = null;
+      this.capAtMs = null;
+      this.settlePosted = false;
       this.setMemorySessionId(newMemorySessionId(), userId);
       const response = await this.postRealtimeSession({
         sessionId: this.memorySessionId,
         logSessionId: this.id,
         userId,
-        previousSessionId,
+        previousSessionId: null,
       });
       const body = await this.readSessionBody(response);
+      if (response.status === 402 || body.code === "out_of_minutes") {
+        const err = new Error("Out of minutes.");
+        this.logger.error("token", err, { ms: Date.now() - tokenStarted, status: 402 });
+        throw err;
+      }
       if (!response.ok || !body.token) {
         this.logger.error("token", new Error(body.error || "token"), { ms: Date.now() - tokenStarted });
         throw new Error(body.error || "Could not start a voice session.");
@@ -1474,23 +1507,31 @@ export class VoiceSession {
       if (typeof body.decayState === "string" && body.decayState.trim()) {
         this.lastDecayState = body.decayState;
       }
-      this.priorChat = typeof body.priorChat === "string" ? body.priorChat : "";
-      this.priorTurns = parseChatTurns(body.priorTurns);
+      this.priorChat = "";
+      this.priorTurns = [];
       this.seedPriorTranscripts();
       this.setMemorySessionId(body.sessionId ?? this.memorySessionId, userId);
+      this.voiceSessionId =
+        typeof body.voiceSessionId === "string" && body.voiceSessionId ? body.voiceSessionId : null;
+      this.capAtMs = typeof body.capAtMs === "number" && Number.isFinite(body.capAtMs) ? body.capAtMs : null;
+      this.armCapHangup();
       writeVoiceSessionStore({
         sessionId: this.memorySessionId,
+        previousSessionId: null,
+        voiceSessionId: this.voiceSessionId,
         started: true,
         userId,
-        rows: this.rows,
-        caption: [...this.rows].reverse().find((row) => row.text.trim())?.text ?? "",
+        rows: [],
+        caption: "",
       });
       this.logger.log("token.ok", {
         ms: Date.now() - tokenStarted,
         decay: typeof body.decayState === "string" ? body.decayState : undefined,
         memories: this.memoryInstructions ? this.memoryInstructions.length : 0,
-        prior_turns: this.priorTurns.length,
+        prior_turns: 0,
         memory_session: this.memorySessionId ?? undefined,
+        voice_session: this.voiceSessionId ?? undefined,
+        hold_seconds: body.holdSeconds,
       });
       return body.token;
     }
@@ -1499,8 +1540,14 @@ export class VoiceSession {
       sessionId: this.memorySessionId,
       logSessionId: this.id,
       userId,
+      previousSessionId: null,
+      voiceSessionId: this.voiceSessionId,
+      resume: true,
     });
     const body = await this.readSessionBody(response);
+    if (response.status === 402 || body.code === "out_of_minutes") {
+      throw new Error("Out of minutes.");
+    }
     if (!response.ok || !body.token) {
       this.logger.error("token.resume", new Error(body.error || "token"), {
         ms: Date.now() - tokenStarted,
@@ -1510,12 +1557,19 @@ export class VoiceSession {
     if (typeof body.memoryInstructions === "string") {
       this.memoryInstructions = body.memoryInstructions;
     }
-    if (typeof body.priorChat === "string") this.priorChat = body.priorChat;
-    if (body.priorTurns !== undefined) this.priorTurns = parseChatTurns(body.priorTurns);
+    if (typeof body.voiceSessionId === "string" && body.voiceSessionId) {
+      this.voiceSessionId = body.voiceSessionId;
+    }
+    if (typeof body.capAtMs === "number" && Number.isFinite(body.capAtMs)) {
+      this.capAtMs = body.capAtMs;
+      this.armCapHangup();
+    }
+    // Keep in-call prior on reconnect; hangup already cleared it for the next Call.
     this.setMemorySessionId(body.sessionId ?? this.memorySessionId, userId);
     this.logger.log("token.resume", {
       ms: Date.now() - tokenStarted,
       memory_session: this.memorySessionId ?? undefined,
+      voice_session: this.voiceSessionId ?? undefined,
     });
     return body.token;
   }
@@ -1536,12 +1590,50 @@ export class VoiceSession {
     return (await response.json()) as {
       token?: string;
       error?: string;
+      code?: string;
       decayState?: string;
       memoryInstructions?: string;
       priorChat?: string;
       priorTurns?: unknown;
       sessionId?: string | null;
+      voiceSessionId?: string | null;
+      holdSeconds?: number;
+      voiceSeconds?: number;
+      capAtMs?: number;
     };
+  }
+
+  private armCapHangup() {
+    if (this.capTimer) {
+      clearTimeout(this.capTimer);
+      this.capTimer = null;
+    }
+    if (!this.capAtMs) return;
+    const wait = Math.max(0, this.capAtMs - Date.now());
+    this.capTimer = setTimeout(() => {
+      this.logger.log("voice.cap", { capAtMs: this.capAtMs });
+      this.handlers.onError?.("Out of minutes.");
+      this.stop("client");
+    }, wait);
+  }
+
+  private postVoiceSettle() {
+    if (this.settlePosted || !this.voiceSessionId) return;
+    this.settlePosted = true;
+    const voiceSessionId = this.voiceSessionId;
+    const userId = clientUserId();
+    void fetch("/api/voice/settle", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-lexi-user-id": userId,
+        "ngrok-skip-browser-warning": "1",
+      },
+      body: JSON.stringify({ voiceSessionId, userId }),
+      keepalive: true,
+    }).catch(() => {
+      // settle sweeper will catch orphans
+    });
   }
 
   private openWebSocket(token: string, resume: boolean) {
@@ -3341,17 +3433,15 @@ export class VoiceSession {
   }
 
   private seedPriorTranscripts() {
+    // Fresh Calls start with empty prior. Do not revive hangup-cleared transcripts.
     const seeded = turnsToTranscripts(this.priorTurns);
-    if (seeded.length) {
-      this.rows = seeded.map((row) => ({ ...row }));
-    } else {
-      const persisted = readVoiceSessionStore().rows;
-      this.rows = persisted.map((row) => ({ ...row }));
-    }
+    this.rows = seeded.map((row) => ({ ...row }));
+    this.handlers.onTranscripts(this.rows.map((row) => ({ ...row })));
     if (this.rows.length) {
-      this.handlers.onTranscripts(this.rows.map((row) => ({ ...row })));
       const latest = [...this.rows].reverse().find((row) => row.text.trim());
       if (latest) this.handlers.onCaption?.(latest.text);
+    } else {
+      this.handlers.onCaption?.("");
     }
   }
 

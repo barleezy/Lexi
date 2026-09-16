@@ -32,14 +32,15 @@ const PHONE_NOTE = `IOS PHONE
 
 This turn is the native iPhone app, not the website tab. Hold the voice call here. There is no CarPlay scene. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not the user. Adults only: porn 18+, voice roleplay 21+, refuse minors.`;
 
-export async function mintXaiClientSecret(apiKey: string) {
+export async function mintXaiClientSecret(apiKey: string, ttlSeconds = 3600) {
+  const ttl = Math.max(30, Math.min(3600, Math.floor(ttlSeconds)));
   const upstream = await fetch(UPSTREAM, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ expires_after: { seconds: 3600 } }),
+    body: JSON.stringify({ expires_after: { seconds: ttl } }),
   });
   let data: Parameters<typeof readXaiClientSecret>[0] = {};
   try {
@@ -48,7 +49,7 @@ export async function mintXaiClientSecret(apiKey: string) {
     data = {};
   }
   const token = readXaiClientSecret(data);
-  return { ok: upstream.ok && Boolean(token), token, status: upstream.status };
+  return { ok: upstream.ok && Boolean(token), token, status: upstream.status, ttl };
 }
 
 export function iosRealtimeTools(includeFortnite = false) {
@@ -276,9 +277,11 @@ export async function buildIosSession(input: {
   const userId = resolveUserId(input.request, input.requestedUserId);
   let sessionId = parseSessionId(input.sessionId) ?? "";
   const previousSessionId = parseSessionId(input.previousSessionId);
+  // Fresh Call (previousSessionId null): keep recalled facts, drop transcript prior.
+  const includePrior = Boolean(previousSessionId);
   const [recalled, turns, session] = await Promise.all([
     recallForUser(userId).catch(() => []),
-    listRecentTurns(userId).catch(() => []),
+    includePrior ? listRecentTurns(userId).catch(() => []) : Promise.resolve([]),
     (async () => {
       if (previousSessionId && previousSessionId !== sessionId) {
         await endSession(userId, previousSessionId);
@@ -288,7 +291,7 @@ export async function buildIosSession(input: {
   ]);
   const memoryInstructions = formatMemoryInstructions(recalled);
   const decayState = formatDecayState(recalled);
-  const priorChat = formatPriorChat(turns);
+  const priorChat = includePrior ? formatPriorChat(turns) : "";
   const memorySessionId = session?.id ?? parseSessionId(sessionId);
   const sessionLine = formatSessionIdLine(memorySessionId);
   const withSession = sessionLine && !memoryInstructions.includes(sessionLine)

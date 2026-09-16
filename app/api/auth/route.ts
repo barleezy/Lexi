@@ -1,13 +1,18 @@
 import { cookies } from "next/headers";
 import { AccountAuthError } from "@/lib/auth/accounts";
 import {
-  LEXI_USER_COOKIE,
-  lexiUserCookieOptions,
   loginAccount,
   parseAuthAction,
   publicAppUrl,
   runPasswordFlow,
 } from "@/lib/auth/login";
+import {
+  LEXI_SESSION_COOKIE,
+  LEXI_USER_COOKIE,
+  lexiSessionCookieOptions,
+  lexiUserDisplayCookieOptions,
+  signAuthSession,
+} from "@/lib/auth/session";
 import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
 
 export const maxDuration = 15;
@@ -43,7 +48,12 @@ export async function POST(request: Request) {
     const action = parseAuthAction(body.action);
     const userId = await loginAccount(action, body.userId, body.password, body.email);
     const jar = await cookies();
-    jar.set(LEXI_USER_COOKIE, userId, lexiUserCookieOptions());
+    const session = signAuthSession(userId);
+    if (!session) {
+      return Response.json({ error: "Could not create a signed session." }, { status: 500 });
+    }
+    jar.set(LEXI_SESSION_COOKIE, session, lexiSessionCookieOptions());
+    jar.set(LEXI_USER_COOKIE, userId, lexiUserDisplayCookieOptions());
     return Response.json({ ok: true, userId, isAdmin: isAdminUserId(userId) });
   } catch (error) {
     if (error instanceof AccountAuthError) {
@@ -55,6 +65,7 @@ export async function POST(request: Request) {
 
 export async function DELETE() {
   const jar = await cookies();
-  jar.set(LEXI_USER_COOKIE, "", { ...lexiUserCookieOptions(), maxAge: 0 });
+  jar.set(LEXI_SESSION_COOKIE, "", { ...lexiSessionCookieOptions(), maxAge: 0 });
+  jar.set(LEXI_USER_COOKIE, "", { ...lexiUserDisplayCookieOptions(), maxAge: 0 });
   return Response.json({ ok: true, userId: "" });
 }

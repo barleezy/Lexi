@@ -48,6 +48,8 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     private(set) var isLive = false
     private(set) var isReady = false
     var memorySessionId: String?
+    var voiceSessionId: String?
+    private var capWorkItem: DispatchWorkItem?
     private(set) var caption = ""
     private(set) var rows: [TranscriptRow] = []
     private(set) var lastUserUtterance = ""
@@ -159,9 +161,19 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         tearDown(notify: notify, stopAudio: true)
     }
 
+    func armVoiceCap(capAtMs: Double, onCap: @escaping () -> Void) {
+        capWorkItem?.cancel()
+        let wait = max(0, (capAtMs / 1000.0) - Date().timeIntervalSince1970)
+        let work = DispatchWorkItem(block: onCap)
+        capWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+
     private func tearDown(notify: Bool, stopAudio: Bool) {
         generation += 1
         clearWatchdogs()
+        capWorkItem?.cancel()
+        capWorkItem = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         urlSession?.invalidateAndCancel()

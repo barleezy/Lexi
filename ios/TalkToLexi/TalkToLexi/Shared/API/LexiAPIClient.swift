@@ -8,6 +8,9 @@ struct IosSessionResponse {
     var voice: String?
     var userId: String?
     var sessionId: String?
+    var voiceSessionId: String?
+    var holdSeconds: Int?
+    var capAtMs: Double?
     var decayState: String?
     var memoryInstructions: String?
     var priorChat: String?
@@ -96,6 +99,10 @@ final class LexiAPIClient {
         if let location { body["location"] = location }
         let raw = try await postJSON("/api/ios/session", body: body)
         guard let token = raw["token"] as? String, !token.isEmpty else {
+            let code = raw["code"] as? String
+            if code == "out_of_minutes" {
+                throw NSError(domain: "LexiAPI", code: 402, userInfo: [NSLocalizedDescriptionKey: "Out of minutes."])
+            }
             throw NSError(domain: "LexiAPI", code: 502, userInfo: [NSLocalizedDescriptionKey: (raw["error"] as? String) ?? "Could not start a voice session."])
         }
         return IosSessionResponse(
@@ -105,6 +112,9 @@ final class LexiAPIClient {
             voice: raw["voice"] as? String,
             userId: raw["userId"] as? String,
             sessionId: raw["sessionId"] as? String,
+            voiceSessionId: raw["voiceSessionId"] as? String,
+            holdSeconds: raw["holdSeconds"] as? Int,
+            capAtMs: raw["capAtMs"] as? Double,
             decayState: raw["decayState"] as? String,
             memoryInstructions: raw["memoryInstructions"] as? String,
             priorChat: raw["priorChat"] as? String,
@@ -147,6 +157,14 @@ final class LexiAPIClient {
             "userId": account.sessionUserId,
             "sessionId": sessionId,
             "endSession": true,
+        ])
+    }
+
+    func settleVoiceSession(voiceSessionId: String?) async {
+        guard let voiceSessionId, !voiceSessionId.isEmpty else { return }
+        _ = try? await postJSON("/api/voice/settle", body: [
+            "userId": account.sessionUserId,
+            "voiceSessionId": voiceSessionId,
         ])
     }
 
@@ -302,9 +320,12 @@ final class LexiAPIClient {
     private func throwIfNeeded(_ http: HTTPURLResponse, data: Data) throws {
         if (200...299).contains(http.statusCode) { return }
         let body = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let code = body["code"] as? String
         let server = (body["error"] as? String) ?? "HTTP \(http.statusCode)"
         let message: String
-        if http.statusCode == 401 || http.statusCode == 403 {
+        if http.statusCode == 402 || code == "out_of_minutes" {
+            message = "Out of minutes."
+        } else if http.statusCode == 401 || http.statusCode == 403 {
             message = "Sign-in expired. Sign in again. (\(http.statusCode))"
         } else {
             message = server

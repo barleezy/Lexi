@@ -1,9 +1,10 @@
-export const VIDEO_CONTEXT_MODEL = "grok-4.6";
+export const VIDEO_CONTEXT_MODEL = "grok-4-1-fast-reasoning";
 export const VIDEO_CONTEXT_ENDPOINT = "https://api.x.ai/v1/responses";
 export const VIDEO_CONTEXT_CHAT_ENDPOINT = "https://api.x.ai/v1/chat/completions";
 export const VIDEO_CONTEXT_CACHE_MS = 4_000;
-/** grok-4.6 cannot disable reasoning — "none" 400s the frame-analysis request. */
+/** Fast text model — keep reasoning low and tokens capped. */
 export const VIDEO_CONTEXT_REASONING_EFFORT = "low";
+export const VIDEO_CONTEXT_MAX_TOKENS = 800;
 
 type CachedVideoContext = {
   key: string;
@@ -140,7 +141,7 @@ export function buildVideoContextRequest(frames: VideoContextFrame[], question: 
     model: VIDEO_CONTEXT_MODEL,
     store: false,
     reasoning: { effort: VIDEO_CONTEXT_REASONING_EFFORT },
-    max_output_tokens: 800,
+    max_output_tokens: VIDEO_CONTEXT_MAX_TOKENS,
     input: buildVideoContextInput(frames, question),
   };
 }
@@ -160,7 +161,7 @@ export function buildVideoContextChatRequest(frames: VideoContextFrame[], questi
   content.push({ type: "text", text });
   return {
     model: VIDEO_CONTEXT_MODEL,
-    max_tokens: 800,
+    max_tokens: VIDEO_CONTEXT_MAX_TOKENS,
     messages: [{ role: "user", content }],
   };
 }

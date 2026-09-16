@@ -17,8 +17,8 @@ import { isBlockedVideoHost, parseVideoSourceUrl } from "../lib/voice/video-prox
 if (VIDEO_CONTEXT_ENDPOINT !== "https://api.x.ai/v1/responses") {
   throw new Error("video context must use the documented xAI responses API");
 }
-if (VIDEO_CONTEXT_MODEL !== "grok-4.6") {
-  throw new Error("video context must use documented grok-4.6 image understanding");
+if (VIDEO_CONTEXT_MODEL !== "grok-4-1-fast-reasoning") {
+  throw new Error("video context must use grok-4-1-fast-reasoning (text only)");
 }
 
 const text = readResponsesText({
@@ -39,13 +39,13 @@ const request = buildVideoContextRequest(
   [{ dataUrl: "data:image/jpeg;base64,abc", timeSec: 12.4 }],
   "What's happening?",
 );
-if (request.model !== "grok-4.6") throw new Error("request model");
+if (request.model !== "grok-4-1-fast-reasoning") throw new Error("request model");
 if (request.store !== false) throw new Error("must not store image history");
 if (request.reasoning?.effort !== VIDEO_CONTEXT_REASONING_EFFORT) {
-  throw new Error("grok-4.6 frame analysis must use a valid reasoning effort");
+  throw new Error("frame analysis must use a valid reasoning effort");
 }
 if (VIDEO_CONTEXT_REASONING_EFFORT === "none") {
-  throw new Error("reasoning none 400s grok-4.6 image understanding");
+  throw new Error("reasoning none may 400 some models; keep low");
 }
 if (request.search_parameters) throw new Error("frame analysis must not web-search");
 if (VIDEO_CONTEXT_CHAT_ENDPOINT !== "https://api.x.ai/v1/chat/completions") {

@@ -9,6 +9,7 @@ import {
   type VoicePhase,
 } from "@/lib/voice/session";
 import {
+  clearCallContinuityStore,
   readVoiceSessionStore,
   writeVoiceSessionStore,
 } from "@/lib/voice/persist";
@@ -320,6 +321,12 @@ export function VoiceHome() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accountId, setAccountId] = useState("");
+  const [voiceSeconds, setVoiceSeconds] = useState<number | null>(null);
+  const [voiceLabel, setVoiceLabel] = useState("");
+  const [billingPacks, setBillingPacks] = useState<
+    Array<{ id: string; label: string; seconds: number; configured: boolean }>
+  >([]);
+  const [stripeConfigured, setStripeConfigured] = useState(false);
   const [accountDraft, setAccountDraft] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
@@ -451,6 +458,7 @@ export function VoiceHome() {
         );
       })
       .catch(() => {});
+    void refreshVoiceBalance();
     void fetch("/api/apple-music", { headers: { "ngrok-skip-browser-warning": "1" } })
       .then((response) => response.json())
       .then(async (body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
@@ -1176,9 +1184,56 @@ export function VoiceHome() {
     sessionRef.current = null;
     setPhase("idle");
     setSessionId(null);
+    setRows([]);
+    setCaption("");
     setToyControl(false);
     setToyGrantPending(false);
     setMicResume(false);
+  }
+
+  async function refreshVoiceBalance() {
+    try {
+      const response = await fetch("/api/billing/balance", {
+        headers: { "ngrok-skip-browser-warning": "1" },
+      });
+      if (response.status === 401) {
+        setVoiceSeconds(null);
+        setVoiceLabel("");
+        setBillingPacks([]);
+        return;
+      }
+      const body = (await response.json()) as {
+        voiceSeconds?: number;
+        label?: string;
+        packs?: Array<{ id: string; label: string; seconds: number; configured: boolean }>;
+        stripeConfigured?: boolean;
+      };
+      if (!response.ok) return;
+      setVoiceSeconds(typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0);
+      setVoiceLabel(typeof body.label === "string" ? body.label : "");
+      setBillingPacks(Array.isArray(body.packs) ? body.packs : []);
+      setStripeConfigured(body.stripeConfigured === true);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function buyMinutes(packId: string) {
+    setError(null);
+    try {
+      const response = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
+        body: JSON.stringify({ packId }),
+      });
+      const body = (await response.json()) as { url?: string; error?: string };
+      if (!response.ok || !body.url) {
+        throw new Error(body.error || "Could not start Checkout.");
+      }
+      window.location.href = body.url;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Checkout.");
+    }
   }
 
   function stopLocationWatch() {
@@ -1424,6 +1479,7 @@ export function VoiceHome() {
     setAccountError(null);
     setAccountPanel("auth");
     writeVoiceSessionStore({ userId: id });
+    void refreshVoiceBalance();
     return id;
   }
 
@@ -1724,7 +1780,9 @@ export function VoiceHome() {
     backgroundAudio.current.stop();
     sessionRef.current?.stop();
     clearSession();
-    writeVoiceSessionStore({ sessionId: null, started: false });
+    // Hang up: drop previousSessionId + transcript. Keep userId for recalled facts.
+    clearCallContinuityStore();
+    void refreshVoiceBalance();
     if (persisted.sessionId && (persisted.userId || accountId)) {
       void fetch("/api/memory", {
         method: "POST",
@@ -1826,11 +1884,26 @@ export function VoiceHome() {
       <header className="relative z-10 flex items-center justify-between gap-4 px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
         {accountId ? (
-          <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+          <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-zinc-600 dark:text-zinc-300">
             <span>
               Signed in as <strong className="font-medium text-foreground">{accountId}</strong>
               {isAdminUserId(accountId) ? " · admin" : ""}
+              {voiceSeconds != null ? ` · ${voiceLabel || `${voiceSeconds}s`}` : ""}
             </span>
+            {stripeConfigured
+              ? billingPacks
+                  .filter((pack) => pack.configured)
+                  .map((pack) => (
+                    <button
+                      key={pack.id}
+                      type="button"
+                      onClick={() => void buyMinutes(pack.id)}
+                      className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+                    >
+                      Buy {pack.label}
+                    </button>
+                  ))
+              : null}
             <button
               type="button"
               onClick={signOutAccount}
