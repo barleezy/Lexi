@@ -322,9 +322,6 @@ export function VoiceHome() {
   const [accountId, setAccountId] = useState("");
   const [voiceSeconds, setVoiceSeconds] = useState<number | null>(null);
   const [voiceLabel, setVoiceLabel] = useState("");
-  const [billingPacks, setBillingPacks] = useState<
-    Array<{ id: string; label: string; seconds: number; configured: boolean }>
-  >([]);
   const [stripeConfigured, setStripeConfigured] = useState(false);
   const [accountDraft, setAccountDraft] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
@@ -1198,40 +1195,19 @@ export function VoiceHome() {
       if (response.status === 401) {
         setVoiceSeconds(null);
         setVoiceLabel("");
-        setBillingPacks([]);
         return;
       }
       const body = (await response.json()) as {
         voiceSeconds?: number;
         label?: string;
-        packs?: Array<{ id: string; label: string; seconds: number; configured: boolean }>;
         stripeConfigured?: boolean;
       };
       if (!response.ok) return;
       setVoiceSeconds(typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0);
       setVoiceLabel(typeof body.label === "string" ? body.label : "");
-      setBillingPacks(Array.isArray(body.packs) ? body.packs : []);
       setStripeConfigured(body.stripeConfigured === true);
     } catch {
       // ignore
-    }
-  }
-
-  async function buyMinutes(packId: string) {
-    setError(null);
-    try {
-      const response = await fetch("/api/billing/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
-        body: JSON.stringify({ packId }),
-      });
-      const body = (await response.json()) as { url?: string; error?: string };
-      if (!response.ok || !body.url) {
-        throw new Error(body.error || "Could not start Checkout.");
-      }
-      window.location.href = body.url;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start Checkout.");
     }
   }
 
