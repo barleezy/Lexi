@@ -16,7 +16,6 @@ import {
 import {
   isAdminUserId,
   isGuestUserId,
-  ensureBrowserUserId,
   readBrowserUserId,
   writeBrowserUserId,
 } from "@/lib/memory/user";
@@ -1651,7 +1650,8 @@ export function VoiceHome() {
 
   async function startSession() {
     if (!accountId || isGuestUserId(accountId)) {
-      ensureBrowserUserId();
+      setError("Sign in first.");
+      return null;
     }
     const session = new VoiceSession({
       onPhase: setPhase,
