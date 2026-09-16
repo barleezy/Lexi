@@ -1365,7 +1365,7 @@ export function VoiceHome() {
 
   async function submitForgot() {
     if (!accountDraft.trim() || !accountEmail.trim()) {
-      setError("Enter your account and email.");
+      setError("Enter your username and email.");
       return;
     }
     setError(null);

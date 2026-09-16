@@ -6,8 +6,23 @@ import { clipOutboundText } from "./safety";
 
 export { RESEND_API, parseEmailInbound, sameEmail } from "./parse";
 
+export const RESEND_ONBOARDING_FROM = "Lexi <beth.t@example.com>";
+
 export function emailFrom(env: NodeJS.ProcessEnv = process.env) {
   return readEnv("EMAIL_FROM", env);
+}
+
+export function resendFromCandidates(env: NodeJS.ProcessEnv = process.env) {
+  const configured = emailFrom(env);
+  const fallback = readEnv("RESEND_FROM", env) || RESEND_ONBOARDING_FROM;
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const value of [configured, fallback]) {
+    if (!value || seen.has(value.toLowerCase())) continue;
+    seen.add(value.toLowerCase());
+    list.push(value);
+  }
+  return list;
 }
 
 export function emailTo(env: NodeJS.ProcessEnv = process.env) {
@@ -48,36 +63,41 @@ async function sendViaResend(
   env: NodeJS.ProcessEnv,
 ) {
   const key = readEnv("RESEND_API_KEY", env);
-  const from = emailFrom(env);
-  if (!key || !from || !to) return { ok: false as const, status: 503, error: "Email is not configured." };
+  const froms = resendFromCandidates(env);
+  if (!key || !froms.length || !to) return { ok: false as const, status: 503, error: "Email is not configured." };
   const content = clipOutboundText(text, 8000);
   if (!content) return { ok: false as const, status: 400, error: "Message is empty." };
 
-  const response = await fetch(RESEND_API, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: [to],
-      subject,
-      text: content,
-    }),
-  });
-  let data: unknown = {};
-  try {
-    data = await response.json();
-  } catch {
-    data = {};
-  }
-  if (!response.ok) {
-    const message =
+  let lastError = "Resend send failed.";
+  let lastStatus = 502;
+  for (const from of froms) {
+    const response = await fetch(RESEND_API, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: [to],
+        subject,
+        text: content,
+      }),
+    });
+    let data: unknown = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+    if (response.ok) {
+      return { ok: true as const, status: 200, platform: "email" as const, via: "resend" as const };
+    }
+    lastError =
       typeof asRecord(data)?.message === "string" ? (asRecord(data)?.message as string) : "Resend send failed.";
-    return { ok: false as const, status: response.status >= 400 ? response.status : 502, error: message };
+    lastStatus = response.status >= 400 ? response.status : 502;
   }
-  return { ok: true as const, status: 200, platform: "email" as const, via: "resend" as const };
+  return { ok: false as const, status: lastStatus, error: lastError };
 }
 
 function smtpWrite(socket: Socket, line: string) {

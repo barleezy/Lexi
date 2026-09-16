@@ -102,7 +102,10 @@ async function dispatchResetEmail(to: string, userId: string, token: string, res
     if (process.env.NODE_ENV !== "production") {
       console.info("[auth] password reset link (not emailed):", resetUrl);
     }
-    return;
+    throw new AccountAuthError(
+      "Could not send the reset email. Verify talktolexi.app in Resend, or wait for the onboarding-from fallback.",
+      502,
+    );
   }
   console.info("[auth] password reset email sent");
 }

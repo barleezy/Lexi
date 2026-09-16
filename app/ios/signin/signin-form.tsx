@@ -82,7 +82,7 @@ export function IosSignInForm({
 
   async function submitForgot() {
     if (!userId.trim() || !email.trim()) {
-      setError("Enter your account and email.");
+      setError("Enter your username and email.");
       return;
     }
     setError("");
