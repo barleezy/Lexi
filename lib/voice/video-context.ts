@@ -5,6 +5,8 @@ export const VIDEO_CONTEXT_CACHE_MS = 4_000;
 /** Fast text model — keep reasoning low and tokens capped. */
 export const VIDEO_CONTEXT_REASONING_EFFORT = "low";
 export const VIDEO_CONTEXT_MAX_TOKENS = 800;
+/** Built-in text tools — never on the realtime voice socket. */
+export const VIDEO_CONTEXT_TOOLS = [{ type: "web_search" }] as const;
 
 type CachedVideoContext = {
   key: string;
@@ -142,6 +144,7 @@ export function buildVideoContextRequest(frames: VideoContextFrame[], question: 
     store: false,
     reasoning: { effort: VIDEO_CONTEXT_REASONING_EFFORT },
     max_output_tokens: VIDEO_CONTEXT_MAX_TOKENS,
+    tools: [...VIDEO_CONTEXT_TOOLS],
     input: buildVideoContextInput(frames, question),
   };
 }
@@ -162,6 +165,7 @@ export function buildVideoContextChatRequest(frames: VideoContextFrame[], questi
   return {
     model: VIDEO_CONTEXT_MODEL,
     max_tokens: VIDEO_CONTEXT_MAX_TOKENS,
+    tools: [...VIDEO_CONTEXT_TOOLS],
     messages: [{ role: "user", content }],
   };
 }

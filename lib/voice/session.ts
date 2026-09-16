@@ -772,9 +772,8 @@ function buildSessionUpdate(
       ),
       reasoning: { effort: "none" },
       turn_detection: buildTurnDetection(),
-      // web_search is server-side; client tools include memory, video context, generate, toys, Fortnite, and channels.
+      // Client tools only — built-in web_search stays on the text path (channels / video-context), not voice.
       tools: [
-        { type: "web_search" },
         UPSERT_FACT_TOOL,
         SET_AFFECT_TOOL,
         GENERATE_IMAGE_TOOL,
