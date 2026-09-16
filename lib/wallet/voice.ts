@@ -12,7 +12,7 @@ export const VOICE_HOLD_SECONDS = 90;
 export const VOICE_SWEEP_GRACE_SECONDS = 30;
 
 export const OUT_OF_MINUTES_CODE = "out_of_minutes";
-export const OUT_OF_MINUTES_MESSAGE = "out of minutes";
+export const OUT_OF_MINUTES_MESSAGE = "Out of minutes.";
 
 function databaseUrl() {
   return process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || "";

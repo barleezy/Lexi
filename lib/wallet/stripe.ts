@@ -77,14 +77,16 @@ export async function handleStripeWebhook(input: {
     (typeof session.metadata?.userId === "string" && session.metadata.userId) ||
     (typeof session.client_reference_id === "string" && session.client_reference_id) ||
     "";
-  const seconds = Number(session.metadata?.seconds);
-  if (!userId || !Number.isFinite(seconds) || seconds <= 0) {
-    return { ok: false as const, status: 400, error: "Checkout metadata missing user/seconds." };
+  // Seconds always from server pack map — never trust a client-invented amount.
+  const pack = voicePackById(session.metadata?.packId);
+  const seconds = pack?.seconds ?? 0;
+  if (!userId || seconds <= 0) {
+    return { ok: false as const, status: 400, error: "Checkout metadata missing user/pack." };
   }
 
   const credited = await creditVoiceSeconds({
     userId,
-    seconds: Math.floor(seconds),
+    seconds,
     source: "stripe",
     stripeEventId: event.id,
     stripeSessionId: session.id,

@@ -3501,7 +3501,12 @@ export class VoiceSession {
 
   private fail(error: unknown) {
     const message = error instanceof Error ? error.message : "Voice session failed.";
-    this.handlers.onError(`${message} (voice session ${this.id})`);
+    // Keep the 402 copy exact for the Call UI.
+    if (/^out of minutes\.?$/i.test(message.trim())) {
+      this.handlers.onError("Out of minutes.");
+    } else {
+      this.handlers.onError(`${message} (voice session ${this.id})`);
+    }
     this.stop("error");
   }
 }

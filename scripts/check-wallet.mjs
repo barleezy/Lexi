@@ -65,12 +65,30 @@ assert.ok(voiceSrc.includes("stripe_event_id"), "idempotent stripe event");
 const realtimeSrc = readFileSync(new URL("../app/api/realtime/session/route.ts", import.meta.url), "utf8");
 assert.ok(realtimeSrc.includes("requireAuthSessionUserId"), "mint uses signed session");
 assert.ok(realtimeSrc.includes("placeVoiceHold"), "mint holds");
-assert.ok(realtimeSrc.includes("rehearsal"), "rehearsal skips mint");
+assert.ok(realtimeSrc.includes('rehearsal === true') || realtimeSrc.includes("rehearsal === true"), "rehearsal skips mint");
 assert.ok(realtimeSrc.includes("402"), "402 out of minutes");
+assert.ok(realtimeSrc.includes("requireAuthSessionUserId"), "mint uses signed session");
 assert.ok(!/model=grok-4-1-fast/.test(realtimeSrc), "no text model on mint route");
 
-const webhookSrc = readFileSync(new URL("../app/api/billing/webhook/route.ts", import.meta.url), "utf8");
-assert.ok(webhookSrc.includes("handleStripeWebhook"), "stripe webhook");
+const sessionClient = readFileSync(new URL("../lib/voice/session.ts", import.meta.url), "utf8");
+assert.ok(sessionClient.includes('handlers.onError("Out of minutes.")'), "web surfaces Out of minutes.");
+assert.ok(sessionClient.includes("/^out of minutes"), "402 copy not wrapped in session id");
+
+const iosClient = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Shared/API/LexiAPIClient.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(iosClient.includes('"Out of minutes."'), "iOS surfaces Out of minutes.");
+
+const stripeSrc = readFileSync(new URL("../lib/wallet/stripe.ts", import.meta.url), "utf8");
+assert.ok(stripeSrc.includes("constructEvent"), "webhook verifies signature");
+assert.ok(stripeSrc.includes("voicePackById"), "webhook remaps pack → seconds on server");
+assert.ok(stripeSrc.includes("stripeEventId: event.id"), "idempotent on event id");
+assert.ok(!/Number\(session\.metadata\?\.seconds\)/.test(stripeSrc), "webhook does not trust metadata seconds alone");
+
+const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
+assert.ok(checkoutRoute.includes("packId"), "checkout takes packId");
+assert.ok(!checkoutRoute.includes("body.seconds"), "checkout ignores client seconds");
 
 // Tiny HMAC session check mirrored from lib/auth/session.ts
 function sign(userId, nowMs, secret) {
