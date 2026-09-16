@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { TEXT_FAST_MODEL, TEXT_FAST_MAX_TOKENS, textFastModelFromEnv } from "../lib/wallet/models.ts";
-import { VOICE_PACKS, publicPacks, voicePackById } from "../lib/wallet/packs.ts";
+import { VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
 import { DEFAULT_CHAT_MODEL, chatModelFromEnv } from "../lib/channels/parse.ts";
 import { VIDEO_CONTEXT_MODEL, VIDEO_CONTEXT_MAX_TOKENS } from "../lib/voice/video-context.ts";
 import { IOS_REALTIME_URL } from "../lib/ios/config.ts";
@@ -48,6 +48,25 @@ assert.equal(VOICE_PACKS[0].seconds, 600);
 assert.equal(voicePackById("pack_30")?.seconds, 1800);
 assert.equal(voicePackById("nope"), null);
 assert.ok(publicPacks({}).every((p) => typeof p.seconds === "number"));
+assert.equal(
+  STRIPE_WEBHOOK_URL,
+  "https://www.talktolexi.app/api/billing/webhook",
+  "Stripe webhook must be www with no trailing slash",
+);
+assert.ok(!STRIPE_WEBHOOK_URL.includes("://talktolexi.app/"), "never apex host");
+assert.ok(!STRIPE_WEBHOOK_URL.endsWith("/"), "no trailing slash");
+
+const resetSrc = readFileSync(new URL("../lib/auth/reset.ts", import.meta.url), "utf8");
+assert.ok(resetSrc.includes('hostname === "talktolexi.app"'), "publicAppUrl remaps apex → www");
+assert.ok(resetSrc.includes("www.talktolexi.app"), "publicAppUrl prefers www");
+
+const nextConfigSrc = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
+assert.ok(/trailingSlash:\s*false/.test(nextConfigSrc), "trailingSlash false avoids webhook 308");
+
+const webhookRoute = readFileSync(new URL("../app/api/billing/webhook/route.ts", import.meta.url), "utf8");
+assert.ok(webhookRoute.includes("export async function POST"), "webhook POST handler");
+assert.ok(webhookRoute.includes("export async function GET"), "webhook GET probe");
+assert.ok(webhookRoute.includes("www.talktolexi.app"), "webhook docs www URL");
 
 const sessionSrc = readFileSync(new URL("../lib/auth/session.ts", import.meta.url), "utf8");
 assert.ok(sessionSrc.includes('export const LEXI_SESSION_COOKIE = "lexi_session"'), "session cookie");

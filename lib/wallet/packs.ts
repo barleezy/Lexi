@@ -1,3 +1,10 @@
+/** Canonical production origin. Apex talktolexi.app 307s to www — Stripe will not follow. */
+export const CANONICAL_APP_ORIGIN = "https://www.talktolexi.app";
+
+/** Stripe Dashboard endpoint — www, no trailing slash. */
+export const STRIPE_WEBHOOK_PATH = "/api/billing/webhook";
+export const STRIPE_WEBHOOK_URL = `${CANONICAL_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}`;
+
 /** Minute packs. Seconds live only in server config — never trust the client. */
 export const VOICE_PACKS = [
   { id: "pack_10", label: "10 minutes", seconds: 600, envPrice: "STRIPE_PRICE_PACK_10" },
