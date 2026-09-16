@@ -10,29 +10,8 @@ type AppleMusicBarProps = {
   onNext: () => void;
 };
 
-function PlayIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
-      <path d="M8 5.5v13l11-6.5-11-6.5Z" />
-    </svg>
-  );
-}
-
-function PauseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
-      <path d="M7 5h3.5v14H7V5Zm6.5 0H17v14h-3.5V5Z" />
-    </svg>
-  );
-}
-
-function NextIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
-      <path d="M6 5.5v13l8.5-6.5L6 5.5Zm10 0h2v13h-2V5.5Z" />
-    </svg>
-  );
-}
+const musicControlClassName =
+  "shrink-0 rounded-full px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800";
 
 export function AppleMusicBar({
   connected,
@@ -64,22 +43,22 @@ export function AppleMusicBar({
         <button
           type="button"
           disabled={busy}
-          aria-label={playing ? "Pause Apple Music" : "Play Apple Music"}
-          title={playing ? "Pause" : "Play"}
+          aria-label="Play Song"
+          title="Play Song"
           onClick={onPlayPause}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
+          className={musicControlClassName}
         >
-          {playing ? <PauseIcon /> : <PlayIcon />}
+          Play Song
         </button>
         <button
           type="button"
           disabled={busy}
-          aria-label="Next song"
-          title="Next"
+          aria-label="Skip"
+          title="Skip"
           onClick={onNext}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
+          className={musicControlClassName}
         >
-          <NextIcon />
+          Skip
         </button>
       </div>
       {playing || title ? (
