@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     body = {};
   }
 
-  const userId = requireAuthSessionUserId(
+  const userId = await requireAuthSessionUserId(
     request,
     typeof body.userId === "string" ? body.userId : null,
   );

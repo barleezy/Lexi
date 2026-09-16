@@ -85,6 +85,7 @@ const buyPage = readFileSync(new URL("../app/buy/page.tsx", import.meta.url), "u
 assert.ok(!buyPage.includes("redirect"), "buy catalog is public");
 assert.ok(buyPage.includes("buyPagePacks"), "buy always loads packs");
 assert.ok(buyPage.includes("BuyClient"), "buy renders pack client");
+assert.ok(buyPage.includes("readIncomingAuthSession"), "buy HTML uses shared session helper");
 
 const buyClient = readFileSync(new URL("../app/buy/buy-client.tsx", import.meta.url), "utf8");
 assert.ok(buyClient.includes("Talk To Lexi"), "buy brand hero");
@@ -102,6 +103,7 @@ assert.ok(!buyClient.includes("@/lib/wallet/packs"), "buy client uses server-com
 const buyPacks = readFileSync(new URL("../components/buy-packs.tsx", import.meta.url), "utf8");
 assert.ok(buyPacks.includes("pack.thumbnail"), "buy cards render thumbnails when present");
 assert.ok(buyPacks.includes("/api/checkout"), "buy posts checkout");
+assert.ok(buyPacks.includes('credentials: "include"'), "buy checkout sends session cookie");
 assert.ok(buyPacks.includes("priceId"), "buy sends priceId");
 assert.ok(buyPacks.includes("Buy"), "buy buttons");
 assert.ok(buyPacks.includes("Sign in to buy"), "unsigned buy asks to sign in");
@@ -121,9 +123,7 @@ assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs"
 
 const balanceSrc = readFileSync(new URL("../app/api/billing/balance/route.ts", import.meta.url), "utf8");
 assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
-assert.ok(balanceSrc.includes('from "next/headers"'), "balance reads Next cookies like /buy");
-assert.ok(balanceSrc.includes("LEXI_SESSION_COOKIE"), "balance uses lexi_session");
-assert.ok(balanceSrc.includes("verifyAuthSession"), "balance verifies the same session token");
+assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared session helper");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
@@ -133,6 +133,7 @@ assert.ok(buySuccess.includes('href="/"'), "success links to Call");
 const checkoutApi = readFileSync(new URL("../app/api/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutApi.includes("priceId"), "checkout takes priceId");
 assert.ok(checkoutApi.includes("createCheckoutByPriceId"), "checkout by price");
+assert.ok(checkoutApi.includes("await requireAuthSessionUserId"), "checkout uses shared session helper");
 assert.ok(!checkoutApi.includes("body.seconds"), "checkout ignores client seconds");
 
 const resetSrc = readFileSync(new URL("../lib/auth/reset.ts", import.meta.url), "utf8");
@@ -150,6 +151,8 @@ assert.ok(webhookRoute.includes("www.talktolexi.app"), "webhook docs www URL");
 const sessionSrc = readFileSync(new URL("../lib/auth/session.ts", import.meta.url), "utf8");
 assert.ok(sessionSrc.includes('export const LEXI_SESSION_COOKIE = "lexi_session"'), "session cookie");
 assert.ok(sessionSrc.includes("requireAuthSessionUserId"), "auth helper");
+assert.ok(sessionSrc.includes('from "next/headers"'), "auth helper reads Next cookies like /buy");
+assert.ok(sessionSrc.includes("readIncomingAuthSession"), "pages share cookies()+verifyAuthSession");
 assert.ok(sessionSrc.includes("x-lexi-user-id is not auth") || sessionSrc.includes("not auth"), "docs");
 
 const voiceSrc = readFileSync(new URL("../lib/wallet/voice.ts", import.meta.url), "utf8");
@@ -204,14 +207,17 @@ assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
 assert.ok(subscribePage.includes("SubscribeClient"), "subscribe page renders client");
 assert.ok(subscribePage.includes("SUBSCRIPTION_PLAN"), "subscribe shows monthly plan");
+assert.ok(subscribePage.includes("readIncomingAuthSession"), "subscribe HTML uses shared session helper");
 
 const subscribeClient = readFileSync(new URL("../app/subscribe/subscribe-client.tsx", import.meta.url), "utf8");
 assert.ok(subscribeClient.includes("/api/checkout/subscribe"), "subscribe posts subscription checkout");
+assert.ok(subscribeClient.includes('credentials: "include"'), "subscribe checkout sends session cookie");
 assert.ok(subscribeClient.includes("Subscribe"), "subscribe button");
 assert.ok(subscribeClient.includes("/?next=/subscribe"), "unsigned subscribe asks to sign in");
 
 const subscribeApi = readFileSync(new URL("../app/api/checkout/subscribe/route.ts", import.meta.url), "utf8");
 assert.ok(subscribeApi.includes("createSubscriptionCheckout"), "subscribe route creates subscription");
+assert.ok(subscribeApi.includes("await requireAuthSessionUserId"), "subscribe uses shared session helper");
 
 assert.ok(packsSrc.includes("STRIPE_PRICE_SUBSCRIPTION"), "subscription price env");
 assert.ok(homeSrc.includes('href="/subscribe"'), "home nav links to /subscribe");

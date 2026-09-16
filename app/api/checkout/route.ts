@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     body = {};
   }
 
-  const userId = requireAuthSessionUserId(request);
+  const userId = await requireAuthSessionUserId(request);
   if (!userId) {
     return Response.json({ error: "Sign in first." }, { status: 401 });
   }

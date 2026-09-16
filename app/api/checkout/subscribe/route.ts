@@ -4,7 +4,7 @@ import { createSubscriptionCheckout } from "@/lib/wallet/stripe";
 export const maxDuration = 30;
 
 export async function POST(request: Request) {
-  const userId = requireAuthSessionUserId(request);
+  const userId = await requireAuthSessionUserId(request);
   if (!userId) {
     return Response.json({ error: "Sign in first." }, { status: 401 });
   }

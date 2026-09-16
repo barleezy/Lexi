@@ -60,7 +60,7 @@ export async function POST(request: Request) {
   const claimed =
     iosAuth?.userId ?? (typeof body.userId === "string" ? body.userId : null);
   // Signed iOS bearer (or web session). Do not trust x-lexi-user-id alone.
-  const userId = requireAuthSessionUserId(request, claimed);
+  const userId = await requireAuthSessionUserId(request, claimed);
   if (!userId) {
     return Response.json({ error: "Sign in first." }, { status: 401 });
   }

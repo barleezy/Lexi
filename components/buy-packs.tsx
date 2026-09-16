@@ -39,6 +39,7 @@ export function BuyPacks({
     try {
       const response = await fetch("/api/checkout", {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           "ngrok-skip-browser-warning": "1",

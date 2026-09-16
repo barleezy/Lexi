@@ -1,5 +1,4 @@
-import { cookies } from "next/headers";
-import { LEXI_SESSION_COOKIE, verifyAuthSession } from "@/lib/auth/session";
+import { readIncomingAuthSession } from "@/lib/auth/session";
 import { isSubscriptionConfigured, SUBSCRIPTION_PLAN } from "@/lib/wallet/packs";
 import { SubscribeClient } from "./subscribe-client";
 
@@ -9,9 +8,7 @@ export const metadata = {
 };
 
 export default async function SubscribePage() {
-  const jar = await cookies();
-  const token = jar.get(LEXI_SESSION_COOKIE)?.value ?? "";
-  const session = token ? verifyAuthSession(token) : null;
+  const session = await readIncomingAuthSession();
 
   return (
     <main className="flex min-h-dvh flex-1 flex-col font-sans text-zinc-100">

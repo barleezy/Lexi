@@ -105,7 +105,7 @@ export async function POST(request: Request) {
   }
 
   // Auth: signed web cookie or iOS bearer. x-lexi-user-id alone is not enough.
-  const userId = requireAuthSessionUserId(request, claimedUserId);
+  const userId = await requireAuthSessionUserId(request, claimedUserId);
   if (!userId) {
     return Response.json({ error: "Sign in first." }, { status: 401 });
   }

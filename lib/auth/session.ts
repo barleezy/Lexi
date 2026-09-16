@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { cookies } from "next/headers";
 import { readIosSession } from "../ios/auth";
 import { iosSigningSecret } from "../ios/config";
 import {
@@ -86,6 +87,37 @@ export function readCookieValue(cookieHeader: string, name: string) {
   }
 }
 
+function userIdFromSessionToken(
+  token: string | undefined | null,
+  nowMs = Date.now(),
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const raw = token?.trim() ?? "";
+  if (!raw) return "";
+  return verifyAuthSession(raw, nowMs, env)?.userId ?? "";
+}
+
+function tokenFromNextRequestCookies(request: Request) {
+  const jar = (
+    request as Request & {
+      cookies?: { get?: (name: string) => { value?: string } | string | undefined };
+    }
+  ).cookies;
+  const got = jar?.get?.(LEXI_SESSION_COOKIE);
+  if (!got) return "";
+  return (typeof got === "string" ? got : got.value) ?? "";
+}
+
+/** Same cookie read as /buy and /subscribe server HTML. */
+export async function readIncomingAuthSession(
+  nowMs = Date.now(),
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const jar = await cookies();
+  const token = jar.get(LEXI_SESSION_COOKIE)?.value ?? "";
+  return token ? verifyAuthSession(token, nowMs, env) : null;
+}
+
 /** iOS signed bearer / x-lexi-ios-session, or web httpOnly lexi_session cookie. */
 export function readAuthSessionUserId(
   request: Request,
@@ -95,24 +127,37 @@ export function readAuthSessionUserId(
   const ios = readIosSession(request, env);
   if (ios?.userId && !isGuestUserId(ios.userId)) return ios.userId;
 
+  const fromNextCookies = userIdFromSessionToken(tokenFromNextRequestCookies(request), nowMs, env);
+  if (fromNextCookies) return fromNextCookies;
+
   const cookie = request.headers.get("cookie") ?? "";
-  const raw = readCookieValue(cookie, LEXI_SESSION_COOKIE);
-  if (!raw) return "";
-  const verified = verifyAuthSession(raw, nowMs, env);
-  return verified?.userId ?? "";
+  return userIdFromSessionToken(readCookieValue(cookie, LEXI_SESSION_COOKIE), nowMs, env);
 }
 
 /**
- * Authenticate for wallet / mint. Does not trust x-lexi-user-id alone.
- * If the client also sends a userId, it must match the signed session.
+ * Authenticate for wallet / checkout / mint.
+ * Prefers Next.js cookies() + verifyAuthSession (same as /buy HTML), then iOS bearer,
+ * then the request cookie store / Cookie header. Does not trust ?userId or
+ * x-lexi-user-id alone. If the client also sends a userId, it must match.
  */
-export function requireAuthSessionUserId(
+export async function requireAuthSessionUserId(
   request: Request,
   claimedUserId?: string | null,
   nowMs = Date.now(),
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const sessionUserId = readAuthSessionUserId(request, nowMs, env);
+  const ios = readIosSession(request, env);
+  const jar = await cookies();
+  const rawCookie = jar.get(LEXI_SESSION_COOKIE)?.value ?? "";
+  const fromCookies = rawCookie ? verifyAuthSession(rawCookie, nowMs, env) : null;
+  console.info("[auth] requireAuthSessionUserId", {
+    rawCookie,
+    verifyAuthSession: fromCookies,
+  });
+  const sessionUserId =
+    (ios?.userId && !isGuestUserId(ios.userId) ? ios.userId : "") ||
+    fromCookies?.userId ||
+    readAuthSessionUserId(request, nowMs, env);
   if (!sessionUserId) return null;
   const claimed = normalizeUserId(claimedUserId);
   if (claimed && claimed.toLowerCase() !== sessionUserId.toLowerCase()) return null;
