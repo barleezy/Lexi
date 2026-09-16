@@ -113,7 +113,7 @@ Discord is ${channels.discord ? "configured" : "not configured"}. Telegram is ${
 }
 
 export function buildTextChannelNote(platform: string) {
-  return `This turn is a text message on ${platform}, not the voice tab. Reply in short plain text — no stage directions, no audio tags, no reading SESSION ID or PRIOR CHAT aloud. Same you as voice. Do not call tools. Do not ping them again on this same channel unless they asked you to message another app. If this channel could be seen or heard by anyone besides the user, use public banter (playful, funny, suggestive innuendo; no graphic sex, nothing obscene) unless they said sexual talk is OK here.`;
+  return `This turn is a text message on ${platform}, not the voice tab. Reply in short plain text — no stage directions, no audio tags, no reading SESSION ID or PRIOR CHAT aloud. Same you as voice. You may use web_search for current facts; do not call other tools. Do not ping them again on this same channel unless they asked you to message another app. If this channel could be seen or heard by anyone besides the user, use public banter (playful, funny, suggestive innuendo; no graphic sex, nothing obscene) unless they said sexual talk is OK here.`;
 }
 
 export function buildMusicInstructions(music: MusicSessionState = DEFAULT_MUSIC_STATE) {

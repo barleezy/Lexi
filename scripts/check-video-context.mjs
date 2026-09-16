@@ -47,7 +47,10 @@ if (request.reasoning?.effort !== VIDEO_CONTEXT_REASONING_EFFORT) {
 if (VIDEO_CONTEXT_REASONING_EFFORT === "none") {
   throw new Error("reasoning none may 400 some models; keep low");
 }
-if (request.search_parameters) throw new Error("frame analysis must not web-search");
+if (request.search_parameters) throw new Error("frame analysis must not use search_parameters");
+if (!Array.isArray(request.tools) || request.tools[0]?.type !== "web_search") {
+  throw new Error("text model requests must include web_search tool");
+}
 if (VIDEO_CONTEXT_CHAT_ENDPOINT !== "https://api.x.ai/v1/chat/completions") {
   throw new Error("chat fallback endpoint");
 }
@@ -56,6 +59,9 @@ const chat = buildVideoContextChatRequest(
   "What's happening?",
 );
 if (chat.messages[0].content[0].type !== "image_url") throw new Error("chat image_url missing");
+if (!Array.isArray(chat.tools) || chat.tools[0]?.type !== "web_search") {
+  throw new Error("chat fallback must include web_search tool");
+}
 if (readChatCompletionsText({ choices: [{ message: { content: "A red car turns left." } }] }) !== "A red car turns left.") {
   throw new Error("readChatCompletionsText failed");
 }

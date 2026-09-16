@@ -17,7 +17,7 @@ export {
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export function buildTextChannelNote(platform: string) {
-  return `This turn is a text message on ${platform}, not the voice tab. Reply in short plain text — no stage directions, no audio tags, no reading SESSION ID or PRIOR CHAT aloud. Same you as voice. Do not call tools. Do not ping him again on this same channel unless he asked you to message another app.`;
+  return `This turn is a text message on ${platform}, not the voice tab. Reply in short plain text — no stage directions, no audio tags, no reading SESSION ID or PRIOR CHAT aloud. Same you as voice. You may use web_search for current facts; do not call other tools. Do not ping him again on this same channel unless he asked you to message another app.`;
 }
 
 export function buildChannelMessages(input: {

@@ -26,6 +26,7 @@ import {
 import type { ChannelId } from "./config";
 import { channelStatus } from "./config";
 import { refuseUnder21Message } from "./safety";
+import { TEXT_FAST_MAX_TOKENS, TEXT_FAST_TOOLS } from "../wallet/models";
 
 export {
   CHAT_COMPLETIONS_URL,
@@ -94,7 +95,8 @@ export async function replyOnChannel(input: {
         instructions: withDecay,
         prior,
       }),
-      max_tokens: 800,
+      tools: [...TEXT_FAST_TOOLS],
+      max_tokens: TEXT_FAST_MAX_TOKENS,
       temperature: 0.8,
     }),
   });

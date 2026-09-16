@@ -5,6 +5,9 @@
 export const TEXT_FAST_MODEL = "grok-4-1-fast-reasoning";
 export const TEXT_FAST_MAX_TOKENS = 800;
 
+/** Built-in xAI tools for text chat/completions + responses — never on the voice socket. */
+export const TEXT_FAST_TOOLS = [{ type: "web_search" }] as const;
+
 export function textFastModelFromEnv(env: NodeJS.ProcessEnv = process.env) {
   const override = env.XAI_CHAT_MODEL?.trim();
   if (override && /grok-voice|realtime/i.test(override)) {

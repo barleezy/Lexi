@@ -166,6 +166,14 @@ expect(
 expect(readChatText({ choices: [{ message: { content: "  hey " } }] }) === "hey", "chat text");
 expect(readChatError({ error: { message: "nope" } }) === "nope", "chat error");
 
+const replySrc = readFileSync(new URL("../lib/channels/reply.ts", import.meta.url), "utf8");
+expect(replySrc.includes("TEXT_FAST_TOOLS"), "channel replies pass text tools");
+expect(replySrc.includes("web_search") || replySrc.includes("TEXT_FAST_TOOLS"), "channel replies enable web_search");
+
+const chatSrc = readFileSync(new URL("../lib/channels/chat.ts", import.meta.url), "utf8");
+expect(chatSrc.includes("web_search"), "channel note allows web_search");
+expect(!chatSrc.includes("Do not call tools."), "channel note no longer bans all tools");
+
 const persona = readFileSync(new URL("../lib/voice/persona.ts", import.meta.url), "utf8");
 expect(
   !persona.includes("refrain from interacting with the user on any platform other than this"),

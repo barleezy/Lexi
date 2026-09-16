@@ -54,7 +54,6 @@ export async function mintXaiClientSecret(apiKey: string, ttlSeconds = 3600) {
 
 export function iosRealtimeTools(includeFortnite = false) {
   return [
-    { type: "web_search" },
     {
       type: "function",
       name: "upsert_fact",

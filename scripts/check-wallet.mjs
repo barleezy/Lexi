@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { TEXT_FAST_MODEL, TEXT_FAST_MAX_TOKENS, textFastModelFromEnv } from "../lib/wallet/models.ts";
+import { TEXT_FAST_MODEL, TEXT_FAST_MAX_TOKENS, TEXT_FAST_TOOLS, textFastModelFromEnv } from "../lib/wallet/models.ts";
 import { VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
 import { DEFAULT_CHAT_MODEL, chatModelFromEnv } from "../lib/channels/parse.ts";
 import { VIDEO_CONTEXT_MODEL, VIDEO_CONTEXT_MAX_TOKENS } from "../lib/voice/video-context.ts";
@@ -37,6 +37,8 @@ assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=g
 
 assert.equal(TEXT_FAST_MODEL, "grok-4-1-fast-reasoning");
 assert.equal(TEXT_FAST_MAX_TOKENS, 800);
+assert.equal(TEXT_FAST_TOOLS[0]?.type, "web_search");
+assert.equal(TEXT_FAST_TOOLS.length, 1);
 assert.equal(DEFAULT_CHAT_MODEL, "grok-4-1-fast-reasoning");
 assert.equal(VIDEO_CONTEXT_MODEL, "grok-4-1-fast-reasoning");
 assert.equal(VIDEO_CONTEXT_MAX_TOKENS, 800);
@@ -92,6 +94,18 @@ assert.ok(!/model=grok-4-1-fast/.test(realtimeSrc), "no text model on mint route
 const sessionClient = readFileSync(new URL("../lib/voice/session.ts", import.meta.url), "utf8");
 assert.ok(sessionClient.includes('handlers.onError("Out of minutes.")'), "web surfaces Out of minutes.");
 assert.ok(sessionClient.includes("/^out of minutes"), "402 copy not wrapped in session id");
+assert.ok(!sessionClient.includes('{ type: "web_search" }'), "voice socket must not register web_search");
+
+const iosSessionSrc = readFileSync(new URL("../lib/ios/session.ts", import.meta.url), "utf8");
+assert.ok(!iosSessionSrc.includes('{ type: "web_search" }'), "iOS voice tools must not include web_search");
+
+const replySrc = readFileSync(new URL("../lib/channels/reply.ts", import.meta.url), "utf8");
+assert.ok(replySrc.includes("TEXT_FAST_TOOLS"), "channel text replies include web_search tools");
+assert.ok(replySrc.includes("tools:"), "channel reply body has tools");
+
+const videoCtxSrc = readFileSync(new URL("../lib/voice/video-context.ts", import.meta.url), "utf8");
+assert.ok(videoCtxSrc.includes("web_search"), "video context text path includes web_search");
+assert.ok(videoCtxSrc.includes("VIDEO_CONTEXT_TOOLS"), "video context declares text tools");
 
 const iosClient = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Shared/API/LexiAPIClient.swift", import.meta.url),
