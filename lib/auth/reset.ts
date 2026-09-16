@@ -102,14 +102,12 @@ async function dispatchResetEmail(to: string, userId: string, token: string, res
     text: resetEmailBody(userId, token, resetUrl),
   });
   if (!result.ok) {
-    console.info("[auth] password reset email failed:", result.error);
+    const detail = result.error?.trim() || "Resend send failed.";
+    console.info("[auth] password reset email failed:", detail);
     if (process.env.NODE_ENV !== "production") {
       console.info("[auth] password reset link (not emailed):", resetUrl);
     }
-    throw new AccountAuthError(
-      result.error || "Could not send the reset email. Check RESEND_API_KEY and EMAIL_FROM.",
-      502,
-    );
+    throw new AccountAuthError(detail, result.status === 503 ? 503 : 502);
   }
   console.info("[auth] password reset email sent");
 }

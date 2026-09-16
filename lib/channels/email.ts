@@ -6,10 +6,11 @@ import { clipOutboundText } from "./safety";
 
 export { RESEND_API, parseEmailInbound, sameEmail } from "./parse";
 
+export const DEFAULT_EMAIL_FROM = "Lexi <noreply@talktolexi.app>";
 export const RESEND_ONBOARDING_FROM = "Lexi <beth.t@example.com>";
 
 export function emailFrom(env: NodeJS.ProcessEnv = process.env) {
-  return readEnv("EMAIL_FROM", env);
+  return readEnv("EMAIL_FROM", env) || DEFAULT_EMAIL_FROM;
 }
 
 export function resendFromCandidates(env: NodeJS.ProcessEnv = process.env) {
@@ -49,7 +50,9 @@ export function smtpConfig(env: NodeJS.ProcessEnv = process.env) {
 }
 
 export function isOutboundEmailConfigured(env: NodeJS.ProcessEnv = process.env) {
-  return Boolean(emailFrom(env) && (readEnv("RESEND_API_KEY", env) || smtpConfig(env)));
+  return Boolean(
+    resendFromCandidates(env).length && (readEnv("RESEND_API_KEY", env) || smtpConfig(env)),
+  );
 }
 
 function headerSafe(value: string) {
@@ -93,8 +96,10 @@ async function sendViaResend(
     if (response.ok) {
       return { ok: true as const, status: 200, platform: "email" as const, via: "resend" as const };
     }
-    lastError =
-      typeof asRecord(data)?.message === "string" ? (asRecord(data)?.message as string) : "Resend send failed.";
+    const payload = asRecord(data);
+    const message = typeof payload?.message === "string" ? payload.message.trim() : "";
+    const name = typeof payload?.name === "string" ? payload.name.trim() : "";
+    lastError = [name, message].filter(Boolean).join(": ") || `Resend send failed (${response.status}).`;
     lastStatus = response.status >= 400 ? response.status : 502;
   }
   return { ok: false as const, status: lastStatus, error: lastError };
