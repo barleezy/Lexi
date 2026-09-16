@@ -1,9 +1,17 @@
 import { neon } from "@neondatabase/serverless";
 import { bandFromStart, bumpAffect, clampAffect, daysElapsed, decaySalience, rateForBand } from "@/lib/memory/decay";
-import { extractNameFromBlob, FACT_KEYS, isIdentityKey, type FactKey } from "@/lib/memory/extract";
+import {
+  extractNameFromBlob,
+  FACT_KEYS,
+  isIdentityKey,
+  isPinnedKey,
+  OUR_SONG_VALUE,
+  PINNED_AFFECT,
+  type FactKey,
+} from "@/lib/memory/extract";
 import { parseSessionId } from "@/lib/memory/session-id";
 import { PRIOR_TURN_CAP, type ChatTurn } from "@/lib/memory/turns";
-import { defaultUserId, normalizeUserId } from "@/lib/memory/user";
+import { defaultUserId, isIanUserId, normalizeUserId } from "@/lib/memory/user";
 
 export type FactRow = {
   id: string;
@@ -47,7 +55,7 @@ export type MigrateResult =
       legacyRows: number;
     };
 
-export const MEMORY_INSTRUCTION_CAP = 10;
+export const MEMORY_INSTRUCTION_CAP = 20;
 
 const FACT_KEY_SET = new Set<string>(FACT_KEYS);
 
@@ -161,9 +169,9 @@ async function migrateTable() {
       END
       WHERE band IS NULL OR band NOT IN ('low', 'medium', 'high');
       UPDATE memories SET rate = CASE band
-        WHEN 'low' THEN 0.08
-        WHEN 'medium' THEN 0.02
-        ELSE 0.005
+        WHEN 'low' THEN 0.04
+        WHEN 'medium' THEN 0.01
+        ELSE 0.0025
       END
       WHERE rate IS NULL;
       UPDATE memories SET t0 = COALESCE(created_at, now()) WHERE t0 IS NULL;
@@ -235,6 +243,7 @@ async function migrateTable() {
 
   const renamedUserIds = await renameDefaultUserIds(db);
   const nameFactsBackfilled = await backfillNameFacts(db);
+  await ensurePinnedFacts(db, defaultUserId());
   const legacyCount = (await db.query(`SELECT COUNT(*)::int AS n FROM memories`)) as { n: number }[];
   lastMigrate = {
     ok: true,
@@ -317,10 +326,37 @@ async function backfillNameFacts(db: NonNullable<ReturnType<typeof sql>>) {
   return inserted;
 }
 
+async function ensurePinnedFacts(db: NonNullable<ReturnType<typeof sql>>, userId: string) {
+  const id = normalizeUserId(userId);
+  if (!isIanUserId(id)) return;
+  await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+     VALUES ($1, 'our_song', $2, $3, now())
+     ON CONFLICT (user_id, memory_key) DO UPDATE SET
+       affect = $3,
+       updated_at = now()
+     WHERE facts.affect IS DISTINCT FROM $3`,
+    [id, OUR_SONG_VALUE, PINNED_AFFECT],
+  );
+  await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+     VALUES ($1, 'name', 'Ian', 10, now())
+     ON CONFLICT (user_id, memory_key) DO NOTHING`,
+    [id],
+  );
+  await db.query(
+    `INSERT INTO facts (user_id, memory_key, value, affect, t_zero)
+     VALUES ($1, 'nicknames', 'daddy, barleezy, menace, barleezus, leezy', 10, now())
+     ON CONFLICT (user_id, memory_key) DO NOTHING`,
+    [id],
+  );
+}
+
 export async function createOrResumeSession(userId: string, sessionId?: string | null) {
   const db = await ensureTable();
   if (!db) return null;
   const id = normalizeUserId(userId);
+  if (!id) return null;
   const existing = parseSessionId(sessionId);
   if (existing) {
     const rows = (await db.query(
@@ -345,9 +381,26 @@ export async function createOrResumeSession(userId: string, sessionId?: string |
   return created[0] ?? null;
 }
 
+export async function latestOpenSession(userId: string) {
+  const db = await ensureTable();
+  if (!db) return null;
+  const id = normalizeUserId(userId);
+  if (!id) return null;
+  const rows = (await db.query(
+    `SELECT id, user_id, started_at, ended_at FROM sessions
+     WHERE lower(user_id) = lower($1) AND ended_at IS NULL
+     ORDER BY started_at DESC
+     LIMIT 1`,
+    [id],
+  )) as SessionRow[];
+  return rows[0] ?? null;
+}
+
 export async function endSession(userId: string, sessionId: string) {
   const db = await ensureTable();
   if (!db) return null;
+  const id = normalizeUserId(userId);
+  if (!id) return null;
   const existing = parseSessionId(sessionId);
   if (!existing) return null;
   const rows = (await db.query(
@@ -355,7 +408,7 @@ export async function endSession(userId: string, sessionId: string) {
      SET ended_at = now()
      WHERE id = $1 AND lower(user_id) = lower($2) AND ended_at IS NULL
      RETURNING id, user_id, started_at, ended_at`,
-    [existing, normalizeUserId(userId)],
+    [existing, id],
   )) as SessionRow[];
   return rows[0] ?? null;
 }
@@ -369,6 +422,7 @@ export async function insertTurn(input: {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  if (!userId) return null;
   let sessionId = parseSessionId(input.sessionId);
   if (sessionId) {
     const existing = (await db.query(
@@ -405,19 +459,22 @@ export async function upsertFact(input: {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  if (!userId) return null;
   const sessionId = parseSessionId(input.sessionId);
   const incoming = Math.min(10, Math.max(1, input.affect));
   const existing = (await db.query(
     `SELECT id, affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
     [userId, input.memoryKey],
   )) as { id: string; affect: number }[];
-  const affect = input.explicitAffect
-    ? incoming
-    : isIdentityKey(input.memoryKey)
-      ? 10
-      : existing[0]
-        ? bumpAffect(existing[0].affect, incoming)
-        : incoming;
+  const affect = isPinnedKey(input.memoryKey)
+    ? PINNED_AFFECT
+    : input.explicitAffect
+      ? incoming
+      : isIdentityKey(input.memoryKey)
+        ? 10
+        : existing[0]
+          ? bumpAffect(existing[0].affect, incoming)
+          : incoming;
   if (existing[0]) {
     const rows = (await db.query(
       `UPDATE facts
@@ -461,8 +518,9 @@ export async function writeFactFromTool(input: {
     `SELECT affect FROM facts WHERE lower(user_id) = lower($1) AND memory_key = $2`,
     [userId, input.memoryKey],
   )) as { affect: number }[];
-  const affect =
-    input.affect !== undefined
+  const affect = isPinnedKey(input.memoryKey)
+    ? PINNED_AFFECT
+    : input.affect !== undefined
       ? clampAffect(input.affect)
       : isIdentityKey(input.memoryKey)
         ? 10
@@ -488,8 +546,9 @@ export async function setFactAffect(input: {
   const db = await ensureTable();
   if (!db) return null;
   const userId = normalizeUserId(input.userId);
+  if (!userId) return null;
   const sessionId = parseSessionId(input.sessionId);
-  const affect = clampAffect(input.affect);
+  const affect = isPinnedKey(input.memoryKey) ? PINNED_AFFECT : clampAffect(input.affect);
   const rows = (await db.query(
     `UPDATE facts
      SET affect = $1,
@@ -516,31 +575,35 @@ export async function recordExchange(input: {
     assistantText: input.assistantText,
     sessionId: input.sessionId,
   });
-  const rows: FactRow[] = [];
-  for (const fact of input.facts) {
-    const row = await upsertFact({
-      userId: input.userId,
-      memoryKey: fact.memoryKey,
-      value: fact.value,
-      affect: input.affect,
-      sessionId: input.sessionId,
-    });
-    if (row) rows.push(row);
-  }
+  const rows = (
+    await Promise.all(
+      input.facts.map((fact) =>
+        upsertFact({
+          userId: input.userId,
+          memoryKey: fact.memoryKey,
+          value: fact.value,
+          affect: input.affect,
+          sessionId: input.sessionId,
+        }),
+      ),
+    )
+  ).filter((row): row is FactRow => Boolean(row));
   return { turn, facts: rows };
 }
 
 export async function listRecentTurns(userId: string, limit = PRIOR_TURN_CAP): Promise<ChatTurn[]> {
   const db = await ensureTable();
   if (!db) return [];
-  const cap = Math.min(20, Math.max(1, Math.floor(limit)));
+  const id = normalizeUserId(userId);
+  if (!id) return [];
+  const cap = Math.min(32, Math.max(1, Math.floor(limit)));
   const rows = (await db.query(
     `SELECT id, user_text, assistant_text
      FROM turns
      WHERE lower(user_id) = lower($1)
      ORDER BY created_at DESC
      LIMIT $2`,
-    [normalizeUserId(userId), cap],
+    [id, cap],
   )) as { id: string; user_text: string; assistant_text: string }[];
   return [...rows].reverse();
 }
@@ -549,6 +612,8 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   const db = await ensureTable();
   if (!db) return [];
   const id = normalizeUserId(userId);
+  if (!id) return [];
+  await ensurePinnedFacts(db, id);
   const rows = (await db.query(
     `SELECT * FROM facts
      WHERE lower(user_id) = lower($1)
@@ -557,20 +622,33 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
   )) as FactRow[];
   const lines: DecayLine[] = [];
   const seen = new Set<string>();
+  const touched: string[] = [];
   for (const row of rows) {
     if (row.memory_key === "transexual") continue;
     if (!FACT_KEY_SET.has(row.memory_key) || !row.value.trim()) continue;
     if (seen.has(row.memory_key)) continue;
     seen.add(row.memory_key);
     const clock = new Date(row.t_zero);
+    const days = daysElapsed(at, clock);
+    if (isPinnedKey(row.memory_key)) {
+      touched.push(row.id);
+      lines.push({
+        memoryKey: row.memory_key,
+        value: row.value,
+        startSalience: PINNED_AFFECT,
+        salience: PINNED_AFFECT,
+        band: "pinned",
+        rate: 0,
+        days,
+        t0: row.t_zero,
+        kind: "fact",
+      });
+      continue;
+    }
     const band = bandFromStart(row.affect);
     const rate = rateForBand(band);
-    const days = daysElapsed(at, clock);
     const salience = decaySalience(row.affect, rate, days);
-    await db.query(`UPDATE facts SET last_decay = $1, updated_at = $1 WHERE id = $2`, [
-      at.toISOString(),
-      row.id,
-    ]);
+    touched.push(row.id);
     lines.push({
       memoryKey: row.memory_key,
       value: row.value,
@@ -582,6 +660,13 @@ export async function recallForUser(userId: string, at = new Date()): Promise<De
       t0: row.t_zero,
       kind: "fact",
     });
+  }
+  if (touched.length) {
+    const stamps = touched.map((_, index) => `$${index + 2}`).join(", ");
+    await db.query(
+      `UPDATE facts SET last_decay = $1, updated_at = $1 WHERE id IN (${stamps})`,
+      [at.toISOString(), ...touched],
+    );
   }
   return lines;
 }
@@ -600,6 +685,9 @@ export function formatFactLine(line: DecayLine) {
   const from = Math.round(line.startSalience);
   if (line.kind === "legacy") {
     return `legacy: ${line.value} (affect ${current}/10, decayed from ${from})`;
+  }
+  if (isPinnedKey(line.memoryKey)) {
+    return `${line.memoryKey}: ${line.value} (affect ${PINNED_AFFECT}/10, pinned)`;
   }
   return `${line.memoryKey}: ${line.value} (affect ${current}/10, decayed from ${from})`;
 }
