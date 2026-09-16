@@ -294,8 +294,13 @@ export async function authenticateAccount(rawUserId: string, password: string, r
   if (!match?.user_id) {
     throw new AccountAuthError("Account, email, or password is wrong.", 401);
   }
-  const bound = typeof match.email === "string" ? match.email.trim().toLowerCase() : "";
-  // Username + password is enough. A provided email binds only when none is stored.
+  const picked = pickAccount(rows, match.user_id) ?? match;
+  const bound = typeof picked.email === "string" ? picked.email.trim().toLowerCase() : "";
+  // Username + password is enough. A typed email must match if one is stored;
+  // the first successful login binds email when none is stored.
+  if (email && bound && email !== bound) {
+    throw new AccountAuthError("Account, email, or password is wrong.", 401);
+  }
   if (email && !bound && !(await emailTakenByOther(db, email, match.user_id))) {
     await db.query(`UPDATE accounts SET email = $1, updated_at = now() WHERE user_id = $2`, [
       email,

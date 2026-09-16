@@ -16,6 +16,8 @@ expect(
 );
 expect(accounts.includes('normalizeUserId("Barleezy")'), "bootstrap uses Barleezy alias");
 expect(accounts.includes("SET email = EXCLUDED.email") || accounts.includes("SET email = $1"), "bootstrap writes email");
+expect(accounts.includes("email !== bound"), "stored email must match when typed");
+expect(accounts.includes("email && !bound"), "first password login binds missing email");
 
 const hashed = createHash("sha256").update("AB23CD45EF67").digest("base64url");
 expect(hashed.length > 20, "reset token hash");

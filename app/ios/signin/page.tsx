@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { LEXI_USER_COOKIE, parseCallbackURI } from "@/lib/ios/auth";
-import { normalizeUserId } from "@/lib/memory/user";
+import { isGuestUserId, normalizeUserId } from "@/lib/memory/user";
 import { IosSignInForm } from "./signin-form";
 
 export const metadata = {
@@ -25,7 +25,8 @@ export default async function IosSignInPage({
   const state = firstString(params.state);
   const jar = await cookies();
   const fromCookie = jar.get(LEXI_USER_COOKIE)?.value;
-  const userId = normalizeUserId(firstString(params.userId) || fromCookie);
+  const rawUserId = normalizeUserId(firstString(params.userId) || fromCookie);
+  const userId = rawUserId && !isGuestUserId(rawUserId) ? rawUserId : "";
   const callbackOk = Boolean(parseCallbackURI(redirectURI));
 
   return (

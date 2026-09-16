@@ -12,7 +12,13 @@ import {
   readVoiceSessionStore,
   writeVoiceSessionStore,
 } from "@/lib/voice/persist";
-import { isAdminUserId, isGuestUserId, ensureBrowserUserId, writeBrowserUserId } from "@/lib/memory/user";
+import {
+  isAdminUserId,
+  isGuestUserId,
+  ensureBrowserUserId,
+  readBrowserUserId,
+  writeBrowserUserId,
+} from "@/lib/memory/user";
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
@@ -412,9 +418,14 @@ export function VoiceHome() {
 
   useEffect(() => {
     const persisted = readVoiceSessionStore();
-    const userId = ensureBrowserUserId();
-    setAccountId(userId);
-    writeVoiceSessionStore({ userId });
+    const signedIn = readBrowserUserId();
+    if (signedIn && !isGuestUserId(signedIn)) {
+      setAccountId(signedIn);
+      setAccountDraft(signedIn);
+      writeVoiceSessionStore({ userId: signedIn });
+    } else if (persisted.userId && !isGuestUserId(persisted.userId)) {
+      writeVoiceSessionStore({ userId: "" });
+    }
     if (persisted.sessionId) setSessionId(persisted.sessionId);
     if (persisted.rows.length || persisted.caption) {
       setRows(persisted.rows);
@@ -1451,10 +1462,15 @@ export function VoiceHome() {
 
   async function signOutAccount() {
     writeBrowserUserId("");
+    setAccountId("");
+    setAccountDraft("");
+    setAccountEmail("");
+    setAccountPassword("");
+    setAccountConfirm("");
+    setAccountResetToken("");
+    setAccountNotice(null);
+    setAccountPanel("auth");
     writeVoiceSessionStore({ userId: "" });
-    const guest = ensureBrowserUserId();
-    setAccountId(guest);
-    writeVoiceSessionStore({ userId: guest });
     try {
       await fetch("/api/auth", { method: "DELETE" });
     } catch {
@@ -1463,7 +1479,9 @@ export function VoiceHome() {
   }
 
   async function startSession() {
-    ensureBrowserUserId();
+    if (!accountId || isGuestUserId(accountId)) {
+      ensureBrowserUserId();
+    }
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: commitRows,
@@ -1665,7 +1683,7 @@ export function VoiceHome() {
       </div>
       <header className="relative z-10 flex items-center justify-between gap-4 px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
-        {accountId && !isGuestUserId(accountId) ? (
+        {accountId ? (
           <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
             <span>
               Signed in as <strong className="font-medium text-foreground">{accountId}</strong>
@@ -1679,7 +1697,9 @@ export function VoiceHome() {
               Sign out
             </button>
           </div>
-        ) : null}
+        ) : (
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
+        )}
       </header>
       <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
@@ -1695,8 +1715,200 @@ export function VoiceHome() {
           data-stream-tick={streamTick}
           className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
         >
-          {error ?? (latestText || "A voice-first companion.")}
+          {error ?? (latestText || (accountId ? "A voice-first companion." : "Sign in to talk."))}
         </p>
+        {!accountId ? (
+          <form
+            noValidate
+            onSubmit={submitAccount}
+            className="mt-6 w-full max-w-md rounded-3xl border-2 border-zinc-900 bg-background/95 p-5 shadow-xl dark:border-white dark:bg-zinc-950/95"
+          >
+            <p className="text-lg font-semibold tracking-tight">
+              {accountPanel === "forgot"
+                ? "Forgot password"
+                : accountPanel === "reset"
+                  ? "Set a new password"
+                  : accountMode === "signup"
+                    ? "Create an account"
+                    : "Sign in to talk"}
+            </p>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              {accountPanel === "forgot"
+                ? "We send a one-time reset link to the email on the account. The current password cannot be emailed."
+                : accountPanel === "reset"
+                  ? "Check your email and return with the reset code, then choose a new password."
+                  : accountMode === "signup"
+                    ? "Username, email, and a password of at least 8 characters."
+                    : "Username and password. Email is optional on sign-in."}
+            </p>
+            <div className="mt-4 grid grid-cols-2 rounded-full bg-zinc-100 p-1 text-sm font-medium dark:bg-zinc-800">
+              <button
+                type="button"
+                onClick={() => openAccountAuth("signin")}
+                className={`rounded-full px-3 py-2 ${
+                  accountPanel === "auth" && accountMode === "signin"
+                    ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                    : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => openAccountAuth("signup")}
+                className={`rounded-full px-3 py-2 ${
+                  accountPanel === "auth" && accountMode === "signup"
+                    ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
+                    : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
+            {accountPanel !== "reset" ? (
+              <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
+                Username
+                <input
+                  value={accountDraft}
+                  onChange={(event) => setAccountDraft(event.target.value)}
+                  placeholder="username"
+                  autoComplete="username"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel !== "reset" ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+                Email{accountMode === "signin" && accountPanel === "auth" ? " (optional)" : ""}
+                <input
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={accountEmail}
+                  onChange={(event) => setAccountEmail(event.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel === "reset" ? (
+              <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium">
+                Reset code
+                <input
+                  value={accountResetToken}
+                  onChange={(event) => setAccountResetToken(event.target.value.toUpperCase())}
+                  placeholder="Reset code from your email"
+                  autoComplete="one-time-code"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal tracking-[0.12em] outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel !== "forgot" ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+                {accountPanel === "reset" ? "New password" : "Password"}
+                <input
+                  type="password"
+                  value={accountPassword}
+                  onChange={(event) => setAccountPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete={
+                    accountMode === "signup" || accountPanel === "reset" ? "new-password" : "current-password"
+                  }
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountPanel === "reset" || (accountPanel === "auth" && accountMode === "signup") ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium">
+                Confirm password
+                <input
+                  type="password"
+                  value={accountConfirm}
+                  onChange={(event) => setAccountConfirm(event.target.value)}
+                  placeholder="Type it again"
+                  autoComplete="new-password"
+                  className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
+                />
+              </label>
+            ) : null}
+            {accountNotice ? (
+              <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">{accountNotice}</p>
+            ) : null}
+            {accountError ? <p className="mt-3 text-sm text-red-500">{accountError}</p> : null}
+            <button
+              type="submit"
+              disabled={accountPending}
+              className="mt-5 w-full rounded-full bg-zinc-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-zinc-900"
+            >
+              {accountPending
+                ? accountPanel === "forgot"
+                  ? "Sending reset email…"
+                  : accountPanel === "reset"
+                    ? "Updating password…"
+                    : accountMode === "signup"
+                      ? "Creating account…"
+                      : "Signing in…"
+                : accountPanel === "forgot"
+                  ? "Send reset email"
+                  : accountPanel === "reset"
+                    ? "Set new password"
+                    : accountMode === "signup"
+                      ? "Create account"
+                      : "Sign in"}
+            </button>
+            {accountPanel === "auth" && accountMode === "signin" ? (
+              <div className="mt-3 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setAccountError(null);
+                    setAccountNotice(null);
+                    setAccountPanel("forgot");
+                  }}
+                  className="w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+                >
+                  Forgot password?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setAccountError(null);
+                    setAccountPanel("reset");
+                  }}
+                  className="w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+                >
+                  I have a reset code
+                </button>
+              </div>
+            ) : null}
+            {accountPanel === "forgot" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setAccountError(null);
+                  setAccountPanel("reset");
+                }}
+                className="mt-3 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+              >
+                I already have a reset code
+              </button>
+            ) : null}
+            {accountPanel !== "auth" ? (
+              <button
+                type="button"
+                onClick={() => openAccountAuth("signin")}
+                className="mt-2 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+              >
+                Back to sign in
+              </button>
+            ) : null}
+          </form>
+        ) : null}
       </main>
       <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
         <div className="mx-auto flex w-full max-w-xl flex-col gap-2">

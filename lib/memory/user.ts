@@ -69,7 +69,8 @@ export function ensureRequestUserId(request: Request, queryUserId?: string | nul
 
 export function requireSignedInUserId(request: Request, queryUserId?: string | null) {
   const userId = resolveUserId(request, queryUserId);
-  return userId || null;
+  if (!userId || isGuestUserId(userId)) return null;
+  return userId;
 }
 
 export function requireAdminUserId(request: Request, queryUserId?: string | null) {
