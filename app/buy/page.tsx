@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { LEXI_SESSION_COOKIE, verifyAuthSession } from "@/lib/auth/session";
-import { buyPagePacks } from "@/lib/wallet/packs";
+import { buyPagePacks, isStripeConfigured } from "@/lib/wallet/packs";
 import { BuyClient } from "./buy-client";
 
 export const metadata = {
@@ -17,5 +17,17 @@ export default async function BuyPage() {
     redirect("/?next=/buy");
   }
 
-  return <BuyClient packs={buyPagePacks()} />;
+  const packs = buyPagePacks();
+  const stripeReady = isStripeConfigured();
+
+  return (
+    <main className="flex min-h-dvh flex-1 flex-col font-sans text-zinc-100">
+      {!stripeReady ? (
+        <p className="relative z-20 mx-auto max-w-3xl px-6 pt-6 text-center text-sm text-zinc-400">
+          Billing is not configured yet.
+        </p>
+      ) : null}
+      <BuyClient packs={packs} />
+    </main>
+  );
 }
