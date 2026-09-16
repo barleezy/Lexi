@@ -1543,6 +1543,11 @@ export function VoiceHome() {
         throw new Error(body.error || (creating ? "Could not create account." : "Could not sign in."));
       }
       applySignedIn(body.userId);
+      const next = new URLSearchParams(window.location.search).get("next");
+      if (next === "/buy") {
+        window.location.href = "/buy";
+        return;
+      }
     } catch (err) {
       setAccountError(err instanceof Error ? err.message : creating ? "Could not create account." : "Could not sign in.");
     } finally {
@@ -1890,20 +1895,14 @@ export function VoiceHome() {
               {isAdminUserId(accountId) ? " · admin" : ""}
               {voiceSeconds != null ? ` · ${voiceLabel || `${voiceSeconds}s`}` : ""}
             </span>
-            {stripeConfigured
-              ? billingPacks
-                  .filter((pack) => pack.configured)
-                  .map((pack) => (
-                    <button
-                      key={pack.id}
-                      type="button"
-                      onClick={() => void buyMinutes(pack.id)}
-                      className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-                    >
-                      Buy {pack.label}
-                    </button>
-                  ))
-              : null}
+            {stripeConfigured ? (
+              <a
+                href="/buy"
+                className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+              >
+                Buy minutes
+              </a>
+            ) : null}
             <button
               type="button"
               onClick={signOutAccount}
