@@ -43,7 +43,20 @@ assert.ok(summariesSrc.includes("CALL_MEMORY_CAP = 10"), "keep last 10");
 assert.ok(summariesSrc.includes("2 to 4"), "2-4 sentence prompt");
 assert.ok(summariesSrc.includes("generateCallSummary"), "summary generator");
 assert.ok(summariesSrc.includes("textFastModelFromEnv"), "text model");
-assert.ok(!/INSERT INTO call_memories[\s\S]*user_text/.test(summariesSrc), "never store transcript columns");
+assert.ok(
+  /INSERT INTO call_memories \(user_id, summary\)/.test(summariesSrc),
+  "insert summary only (no transcript columns)",
+);
+assert.ok(
+  !/CREATE TABLE IF NOT EXISTS call_memories \([^)]*user_text/.test(summariesSrc),
+  "call_memories schema has no transcript columns",
+);
+assert.ok(summariesSrc.includes("listTurnsForSession"), "reads session turns via store helper");
+assert.ok(
+  summariesSrc.includes("Never writes the raw transcript into call_memories") ||
+    summariesSrc.includes("never writes the raw transcript"),
+  "docs: summaries only, not transcript",
+);
 
 const settleSrc = readFileSync(new URL("../app/api/voice/settle/route.ts", import.meta.url), "utf8");
 assert.ok(settleSrc.includes("summarizeSettledCall"), "settle writes summary");

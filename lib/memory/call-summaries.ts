@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import { CHAT_COMPLETIONS_URL, readChatError, readChatText } from "../channels/parse";
 import { parseSessionId } from "./session-id";
+import { listTurnsForSession } from "./store";
 import type { ChatTurn } from "./turns";
 import { normalizeUserId } from "./user";
 import { TEXT_FAST_MAX_TOKENS, TEXT_FAST_MODEL, textFastModelFromEnv } from "../wallet/models";
@@ -113,23 +114,6 @@ export function mergeMemoryInstructions(factsBlock: string, callMemoriesBlock: s
   return facts || calls;
 }
 
-async function listSessionTurns(userId: string, sessionId: string): Promise<ChatTurn[]> {
-  const db = sql();
-  if (!db) return [];
-  const id = normalizeUserId(userId);
-  const sid = parseSessionId(sessionId);
-  if (!id || !sid) return [];
-  const rows = (await db.query(
-    `SELECT id, user_text, assistant_text
-     FROM turns
-     WHERE lower(user_id) = lower($1) AND session_id = $2::uuid
-     ORDER BY created_at ASC
-     LIMIT 64`,
-    [id, sid],
-  )) as { id: string; user_text: string; assistant_text: string }[];
-  return rows;
-}
-
 function turnsToSummarySource(turns: ChatTurn[]) {
   const lines: string[] = [];
   for (const turn of turns) {
@@ -198,7 +182,7 @@ export async function summarizeSettledCall(input: {
   const sessionId = parseSessionId(input.sessionId);
   if (!userId || !sessionId) return { ok: false as const, reason: "missing_ids" as const };
 
-  const turns = await listSessionTurns(userId, sessionId);
+  const turns = await listTurnsForSession(userId, sessionId);
   if (turns.length === 0) return { ok: false as const, reason: "no_turns" as const };
 
   const summary = await generateCallSummary(turns);
