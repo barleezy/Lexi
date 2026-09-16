@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { markAccountPaidByEmail } from "@/lib/auth/accounts";
+import { AccountAuthError, markAccountPaidByEmail } from "@/lib/auth/accounts";
 import { stripeClient } from "@/lib/wallet/stripe";
 
 function customerEmailFromSession(session: Stripe.Checkout.Session) {
@@ -58,6 +58,7 @@ export async function handleSubscriptionStripeWebhook(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not mark account paid.";
-    return { ok: false as const, status: 500, error: message };
+    const status = error instanceof AccountAuthError ? error.status : 500;
+    return { ok: false as const, status, error: message };
   }
 }
