@@ -45,7 +45,18 @@ assert.equal(chatModelFromEnv({ XAI_CHAT_MODEL: "grok-voice-latest" }), DEFAULT_
 assert.equal(textFastModelFromEnv({ XAI_CHAT_MODEL: "grok-4-1-fast-reasoning" }), "grok-4-1-fast-reasoning");
 
 assert.equal(VOICE_PACKS[0].seconds, 600);
+assert.equal(VOICE_PACKS[0].id, "whisper");
+assert.equal(VOICE_PACKS[0].priceLabel, "$2");
+assert.equal(VOICE_PACKS[0].minutes, 10);
+assert.equal(VOICE_PACKS[1].id, "murmur");
+assert.equal(VOICE_PACKS[1].priceLabel, "$5");
+assert.equal(VOICE_PACKS[1].minutes, 30);
+assert.equal(VOICE_PACKS[2].id, "echo");
+assert.equal(VOICE_PACKS[2].priceLabel, "$9");
+assert.equal(VOICE_PACKS[2].minutes, 60);
+assert.equal(VOICE_PACKS[2].seconds, 3600);
 assert.equal(voicePackById("pack_30")?.seconds, 1800);
+assert.equal(voicePackById("murmur")?.seconds, 1800);
 assert.equal(voicePackById("nope"), null);
 assert.ok(publicPacks({}).every((p) => typeof p.seconds === "number"));
 assert.equal(
@@ -55,6 +66,40 @@ assert.equal(
 );
 assert.ok(!STRIPE_WEBHOOK_URL.includes("://talktolexi.app/"), "never apex host");
 assert.ok(!STRIPE_WEBHOOK_URL.endsWith("/"), "no trailing slash");
+
+const packsSrc = readFileSync(new URL("../lib/wallet/packs.ts", import.meta.url), "utf8");
+assert.ok(packsSrc.includes("BUY_SUCCESS_URL"), "buy success url");
+assert.ok(packsSrc.includes("/buy/success"), "buy success path");
+assert.ok(packsSrc.includes("STRIPE_PRICE_PACK_10"), "whisper price env");
+assert.ok(packsSrc.includes('id: "whisper"'), "whisper pack");
+assert.ok(packsSrc.includes('id: "murmur"'), "murmur pack");
+assert.ok(packsSrc.includes('id: "echo"'), "echo pack");
+assert.ok(packsSrc.includes("thumbnail"), "packs declare thumbnail paths");
+assert.ok(packsSrc.includes("/buy/whisper.jpg"), "whisper thumbnail path");
+assert.ok(packsSrc.includes("/buy/murmur.jpg"), "murmur thumbnail path");
+assert.ok(packsSrc.includes("/buy/echo.jpg"), "echo thumbnail path");
+
+const buyPage = readFileSync(new URL("../app/buy/page.tsx", import.meta.url), "utf8");
+assert.ok(buyPage.includes("redirect"), "buy requires sign-in");
+assert.ok(buyPage.includes("/?next=/buy"), "buy redirects to sign-in");
+
+const buyClient = readFileSync(new URL("../app/buy/buy-client.tsx", import.meta.url), "utf8");
+assert.ok(buyClient.includes("Talk To Lexi"), "buy brand hero");
+assert.ok(buyClient.includes("Choose Your AI Companion Plan"), "buy subtitle");
+assert.ok(buyClient.includes("pack.thumbnail"), "buy cards render thumbnails when present");
+assert.ok(buyClient.includes("/api/checkout"), "buy posts checkout");
+assert.ok(buyClient.includes("priceId"), "buy sends priceId");
+assert.ok(buyClient.includes("/lexi.jpg"), "buy uses Lexi portrait");
+assert.ok(buyClient.includes("Buy"), "buy buttons");
+
+const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
+assert.ok(buySuccess.includes("Minutes added"), "success copy");
+assert.ok(buySuccess.includes('href="/"'), "success links to Call");
+
+const checkoutApi = readFileSync(new URL("../app/api/checkout/route.ts", import.meta.url), "utf8");
+assert.ok(checkoutApi.includes("priceId"), "checkout takes priceId");
+assert.ok(checkoutApi.includes("createCheckoutByPriceId"), "checkout by price");
+assert.ok(!checkoutApi.includes("body.seconds"), "checkout ignores client seconds");
 
 const resetSrc = readFileSync(new URL("../lib/auth/reset.ts", import.meta.url), "utf8");
 assert.ok(resetSrc.includes('hostname === "talktolexi.app"'), "publicAppUrl remaps apex → www");
@@ -106,9 +151,15 @@ assert.ok(stripeSrc.includes("stripeEventId: event.id"), "idempotent on event id
 assert.ok(!/Number\(session\.metadata\?\.seconds\)/.test(stripeSrc), "webhook does not trust metadata seconds alone");
 assert.ok(stripeSrc.includes("missing_checkout_metadata"), "test events without metadata return ok");
 assert.ok(!stripeSrc.includes("Checkout metadata missing user/pack"), "missing metadata is not a 400");
+assert.ok(stripeSrc.includes("user_id"), "checkout metadata user_id");
+assert.ok(stripeSrc.includes("pack:"), "checkout metadata pack");
+assert.ok(stripeSrc.includes("BUY_SUCCESS_URL"), "checkout success → /buy/success");
+assert.ok(stripeSrc.includes("BUY_CANCEL_URL"), "checkout cancel → /buy");
+assert.ok(stripeSrc.includes("createCheckoutByPriceId"), "priceId checkout helper");
+assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
-assert.ok(checkoutRoute.includes("packId"), "checkout takes packId");
+assert.ok(checkoutRoute.includes("packId"), "legacy checkout takes packId");
 assert.ok(!checkoutRoute.includes("body.seconds"), "checkout ignores client seconds");
 
 // Tiny HMAC session check mirrored from lib/auth/session.ts

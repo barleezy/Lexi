@@ -322,9 +322,6 @@ export function VoiceHome() {
   const [accountId, setAccountId] = useState("");
   const [voiceSeconds, setVoiceSeconds] = useState<number | null>(null);
   const [voiceLabel, setVoiceLabel] = useState("");
-  const [billingPacks, setBillingPacks] = useState<
-    Array<{ id: string; label: string; seconds: number; configured: boolean }>
-  >([]);
   const [stripeConfigured, setStripeConfigured] = useState(false);
   const [accountDraft, setAccountDraft] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
@@ -1198,40 +1195,19 @@ export function VoiceHome() {
       if (response.status === 401) {
         setVoiceSeconds(null);
         setVoiceLabel("");
-        setBillingPacks([]);
         return;
       }
       const body = (await response.json()) as {
         voiceSeconds?: number;
         label?: string;
-        packs?: Array<{ id: string; label: string; seconds: number; configured: boolean }>;
         stripeConfigured?: boolean;
       };
       if (!response.ok) return;
       setVoiceSeconds(typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0);
       setVoiceLabel(typeof body.label === "string" ? body.label : "");
-      setBillingPacks(Array.isArray(body.packs) ? body.packs : []);
       setStripeConfigured(body.stripeConfigured === true);
     } catch {
       // ignore
-    }
-  }
-
-  async function buyMinutes(packId: string) {
-    setError(null);
-    try {
-      const response = await fetch("/api/billing/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
-        body: JSON.stringify({ packId }),
-      });
-      const body = (await response.json()) as { url?: string; error?: string };
-      if (!response.ok || !body.url) {
-        throw new Error(body.error || "Could not start Checkout.");
-      }
-      window.location.href = body.url;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start Checkout.");
     }
   }
 
@@ -1543,6 +1519,11 @@ export function VoiceHome() {
         throw new Error(body.error || (creating ? "Could not create account." : "Could not sign in."));
       }
       applySignedIn(body.userId);
+      const next = new URLSearchParams(window.location.search).get("next");
+      if (next === "/buy") {
+        window.location.href = "/buy";
+        return;
+      }
     } catch (err) {
       setAccountError(err instanceof Error ? err.message : creating ? "Could not create account." : "Could not sign in.");
     } finally {
@@ -1890,20 +1871,14 @@ export function VoiceHome() {
               {isAdminUserId(accountId) ? " · admin" : ""}
               {voiceSeconds != null ? ` · ${voiceLabel || `${voiceSeconds}s`}` : ""}
             </span>
-            {stripeConfigured
-              ? billingPacks
-                  .filter((pack) => pack.configured)
-                  .map((pack) => (
-                    <button
-                      key={pack.id}
-                      type="button"
-                      onClick={() => void buyMinutes(pack.id)}
-                      className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-                    >
-                      Buy {pack.label}
-                    </button>
-                  ))
-              : null}
+            {stripeConfigured ? (
+              <a
+                href="/buy"
+                className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+              >
+                Buy minutes
+              </a>
+            ) : null}
             <button
               type="button"
               onClick={signOutAccount}
