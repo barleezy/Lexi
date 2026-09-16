@@ -9,6 +9,7 @@ export type BuyPackCard = {
   label: string;
   minutes: number;
   priceLabel: string;
+  thumbnail: string;
   priceId: string;
   configured: boolean;
 };
@@ -130,30 +131,44 @@ export function BuyClient({ packs }: { packs: BuyPackCard[] }) {
           {packs.map((pack) => (
             <li
               key={pack.id}
-              className="buy-card flex flex-col items-center rounded-[1.75rem] px-6 py-8 text-center"
+              className="buy-card flex flex-col items-center overflow-hidden rounded-[1.75rem] text-center"
             >
-              <p className="text-lg font-medium tracking-wide" style={{ color: "var(--buy-pink)" }}>
-                {pack.label}
-              </p>
-              <p className="mt-4 text-5xl font-semibold tracking-tight text-white sm:text-6xl">
-                {pack.priceLabel}
-              </p>
-              <p className="mt-3 text-sm" style={{ color: "var(--buy-muted)" }}>
-                {pack.minutes} minutes
-              </p>
-              <button
-                type="button"
-                disabled={pendingId != null || !pack.configured}
-                onClick={() => void buy(pack)}
-                className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
-              >
-                {pendingId === pack.id ? "Starting…" : "Buy"}
-              </button>
-              {!pack.configured ? (
-                <p className="mt-3 text-xs" style={{ color: "var(--buy-muted)" }}>
-                  Not configured yet.
-                </p>
+              {pack.thumbnail ? (
+                <div className="relative aspect-[4/3] w-full overflow-hidden">
+                  <Image
+                    src={pack.thumbnail}
+                    alt=""
+                    fill
+                    sizes="(max-width: 640px) 100vw, 33vw"
+                    className="object-cover object-center"
+                    priority={pack.id === "whisper"}
+                  />
+                </div>
               ) : null}
+              <div className="flex w-full flex-col items-center px-6 py-8">
+                <p className="text-lg font-medium tracking-wide" style={{ color: "var(--buy-pink)" }}>
+                  {pack.label}
+                </p>
+                <p className="mt-4 text-5xl font-semibold tracking-tight text-white sm:text-6xl">
+                  {pack.priceLabel}
+                </p>
+                <p className="mt-3 text-sm" style={{ color: "var(--buy-muted)" }}>
+                  {pack.minutes} minutes
+                </p>
+                <button
+                  type="button"
+                  disabled={pendingId != null || !pack.configured}
+                  onClick={() => void buy(pack)}
+                  className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
+                >
+                  {pendingId === pack.id ? "Starting…" : "Buy"}
+                </button>
+                {!pack.configured ? (
+                  <p className="mt-3 text-xs" style={{ color: "var(--buy-muted)" }}>
+                    Not configured yet.
+                  </p>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>

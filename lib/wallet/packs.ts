@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 /** Canonical production origin. Apex talktolexi.app 307s to www — Stripe will not follow. */
 export const CANONICAL_APP_ORIGIN = "https://www.talktolexi.app";
 
@@ -20,6 +23,8 @@ export const VOICE_PACKS = [
     seconds: 600,
     priceLabel: "$2",
     envPrice: "STRIPE_PRICE_PACK_10",
+    /** Set when Ian drops the pack thumbnail into /public/buy/whisper.jpg */
+    thumbnail: "/buy/whisper.jpg",
   },
   {
     id: "murmur",
@@ -28,6 +33,7 @@ export const VOICE_PACKS = [
     seconds: 1800,
     priceLabel: "$5",
     envPrice: "STRIPE_PRICE_PACK_30",
+    thumbnail: "/buy/murmur.jpg",
   },
   {
     id: "echo",
@@ -36,6 +42,7 @@ export const VOICE_PACKS = [
     seconds: 3600,
     priceLabel: "$9",
     envPrice: "STRIPE_PRICE_PACK_60",
+    thumbnail: "/buy/echo.jpg",
   },
 ] as const;
 
@@ -83,11 +90,13 @@ export function publicPacks(env: NodeJS.ProcessEnv = process.env) {
 export function buyPagePacks(env: NodeJS.ProcessEnv = process.env) {
   return VOICE_PACKS.map((pack) => {
     const priceId = stripePriceIdForPack(pack, env);
+    const publicFile = join(process.cwd(), "public", pack.thumbnail.replace(/^\//, ""));
     return {
       id: pack.id,
       label: pack.label,
       minutes: pack.minutes,
       priceLabel: pack.priceLabel,
+      thumbnail: existsSync(publicFile) ? pack.thumbnail : "",
       priceId,
       configured: Boolean(priceId),
     };
