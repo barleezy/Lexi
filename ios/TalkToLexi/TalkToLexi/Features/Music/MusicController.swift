@@ -19,6 +19,7 @@ final class MusicController: ObservableObject {
     private var developerToken = ""
     private var urlPlayer: AVPlayer?
     private let nowPlaying = NowPlayingCenter()
+    private var interruptionObserver: NSObjectProtocol?
     var onChange: (() -> Void)?
 
     init() {
@@ -28,6 +29,46 @@ final class MusicController: ObservableObject {
         nowPlaying.onNext = { [weak self] in
             guard let self else { return }
             Task { await self.skipNext(using: LexiAPIClient()) }
+        }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            Task { @MainActor in
+                self.handleInterruption(notification)
+            }
+        }
+    }
+
+    /// Voice playAndRecord can briefly interrupt MusicKit. Resume if we still own playback.
+    func resumeIfNeeded() {
+        guard playing else { return }
+        if source == "url" {
+            urlPlayer?.play()
+            nowPlaying.setPlaying(true)
+            notify()
+            return
+        }
+        Task { @MainActor in
+            guard playing, source == "apple" else { return }
+            if ApplicationMusicPlayer.shared.state.playbackStatus != .playing {
+                try? await ApplicationMusicPlayer.shared.play()
+            }
+            nowPlaying.setPlaying(true)
+            notify()
+        }
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard
+            let info = notification.userInfo,
+            let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else { return }
+        if type == .ended {
+            resumeIfNeeded()
         }
     }
 

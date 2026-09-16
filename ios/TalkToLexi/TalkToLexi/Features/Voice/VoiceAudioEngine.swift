@@ -19,17 +19,19 @@ final class VoiceAudioEngine {
 
     /// Activates `AVAudioSession` `.playAndRecord` only while a voice session is running.
     /// Never call this at launch, while signed out, or while idle.
+    /// Default path mixes with Apple Music / system playback (A2DP). Party-chat HFP
+    /// is exclusive — DualSense needs voiceChat + HFP and that route stops Music.
     private func categoryOptions(partyChat: Bool) -> AVAudioSession.CategoryOptions {
-        var options: AVAudioSession.CategoryOptions = [.mixWithOthers, .defaultToSpeaker]
-        if !partyChat {
-            options.insert(.allowBluetoothA2DP)
+        if partyChat {
+            var options: AVAudioSession.CategoryOptions = [.defaultToSpeaker]
+            #if compiler(>=6.2)
+            options.insert(.allowBluetoothHFP)
+            #else
+            options.insert(.allowBluetooth)
+            #endif
+            return options
         }
-        #if compiler(>=6.2)
-        options.insert(.allowBluetoothHFP)
-        #else
-        options.insert(.allowBluetooth)
-        #endif
-        return options
+        return [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
     }
 
     private func activatePlayAndRecord(partyChat: Bool) async throws {
@@ -59,6 +61,7 @@ final class VoiceAudioEngine {
         }
         do {
             try await configureSession(partyChat: routeThroughPS5PartyChat)
+            applyVoiceProcessing(enabled: routeThroughPS5PartyChat)
             await applyPreferredRoute(partyChat: routeThroughPS5PartyChat)
         } catch {
             await applyPreferredRoute(partyChat: routeThroughPS5PartyChat)
@@ -201,6 +204,7 @@ final class VoiceAudioEngine {
         input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(Self.chunkFrames), format: hwFormat) { [weak self] buffer, _ in
             self?.capture(buffer)
         }
+        applyVoiceProcessing(enabled: routeThroughPS5PartyChat)
         engine.prepare()
         do {
             try engine.start()
@@ -241,6 +245,16 @@ final class VoiceAudioEngine {
 
     func setVoiceDucked(_ ducked: Bool) {
         player.volume = ducked ? Self.voiceDuckLevel : 1
+    }
+
+    /// Voice-processing I/O takes a telephony route and pauses Apple Music.
+    /// Keep it off except PS5 party-chat HFP, where AEC on the controller is required.
+    private func applyVoiceProcessing(enabled: Bool) {
+        do {
+            try engine.inputNode.setVoiceProcessingEnabled(enabled)
+        } catch {
+            // Some routes reject the toggle; still start the engine.
+        }
     }
 
     func schedulePCM16(_ data: Data) {

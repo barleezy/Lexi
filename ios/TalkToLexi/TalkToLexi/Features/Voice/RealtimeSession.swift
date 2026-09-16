@@ -224,7 +224,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             } else if part.source == "upload" {
                 labels.append("Uploaded photo (user allowed).")
             } else {
-                labels.append("Camera viewfinder frame (user allowed).")
+                labels.append("Live 30fps camera video (exactly what the camera sees).")
             }
         }
         let preface = watchTotal > 0
@@ -266,8 +266,8 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         let text: String
         if source == "camera" {
             text = active
-                ? "The user allowed camera viewfinder frames. You can see what the camera shows when a frame is attached. Comment only when relevant."
-                : "The user stopped the camera. You can no longer see the viewfinder."
+                ? "The user started the camera. You are receiving a live 30fps video stream of exactly what the camera sees — not stills. Comment only when relevant."
+                : "The user stopped the camera. You can no longer see the live camera video."
         } else {
             text = active
                 ? "The user started sharing their screen. You can see the shared screen when a frame is attached. Voices or audio from the shared screen, TV, or other media are not the user. Comment only when relevant."

@@ -18,10 +18,10 @@ final class CameraFramePump: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     var isPaused = false
 
     private var lastSent: TimeInterval = 0
-    /// Video-like cadence. Grok realtime has no live video item — only `input_image`.
-    private let minInterval: TimeInterval = 0.25
-    private let maxEdge: CGFloat = 640
-    private let jpegQuality: CGFloat = 0.55
+    /// Same 30fps live feed as web camera / tab share.
+    private let minInterval: TimeInterval = 1.0 / 30.0
+    private let maxEdge: CGFloat = 1280
+    private let jpegQuality: CGFloat = 0.6
     private let context = CIContext(options: [.useSoftwareRenderer: false])
 
     func resetClock() {
@@ -65,6 +65,11 @@ final class CameraCapturePipeline {
     private let output = AVCaptureVideoDataOutput()
     let pump = CameraFramePump()
     private let queue = DispatchQueue(label: "app.talktolexi.ios.camera")
+
+    init() {
+        // Default true resets the shared session and stops Apple Music / mix-with-others.
+        session.automaticallyConfiguresApplicationAudioSession = false
+    }
 
     func start(facing: CameraFacing, orientation: AVCaptureVideoOrientation) {
         queue.async { [weak self] in

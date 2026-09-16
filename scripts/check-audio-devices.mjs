@@ -11,7 +11,12 @@ import {
   scoreAudioInputLabel,
 } from "../lib/voice/audio-devices.ts";
 import {
+  CAMERA_VISION_FPS,
   CAMERA_VISION_INTERVAL_MS,
+  DETAIL_JPEG_QUALITY,
+  DETAIL_MAX_EDGE,
+  DualLiveVisionMux,
+  mergeLiveVisionParts,
   nextCameraFacing,
   SCREEN_VISION_FPS,
   SCREEN_VISION_INTERVAL_MS,
@@ -71,9 +76,34 @@ expect(CAR_MIC_MUTE_RECLAIM_MS < MIC_MUTE_RECLAIM_MS, "car does not sit on the 4
 
 expect(nextCameraFacing("user") === "environment", "front to rear");
 expect(nextCameraFacing("environment") === "user", "rear to front");
-expect(CAMERA_VISION_INTERVAL_MS === 250, "camera feed is 4 fps");
+expect(CAMERA_VISION_FPS === 30, "camera capture is 30 fps");
+expect(CAMERA_VISION_INTERVAL_MS === Math.round(1000 / 30), "camera samples at 30 fps");
 expect(SCREEN_VISION_FPS === 30, "shared tab capture is 30 fps");
-expect(SCREEN_VISION_INTERVAL_MS === Math.round(1000 / 30), "shared tab samples at 30 fps");
+expect(SCREEN_VISION_INTERVAL_MS === CAMERA_VISION_INTERVAL_MS, "camera matches shared-tab cadence");
+expect(DETAIL_MAX_EDGE >= 1152, "analysis stills are high-detail");
+expect(DETAIL_JPEG_QUALITY >= 0.8, "analysis jpeg is sharp enough to read text");
 expect(VISION_INTERVAL_MS <= 250, "default vision cadence is live");
+
+const merged = mergeLiveVisionParts(
+  [{ source: "camera", dataUrl: "old-cam" }],
+  [
+    { source: "camera", dataUrl: "new-cam" },
+    { source: "screen", dataUrl: "tab" },
+  ],
+);
+expect(merged.length === 2, "pending live frames keep one of each stream");
+expect(merged.find((part) => part.source === "camera")?.dataUrl === "new-cam", "newer camera wins");
+expect(merged.find((part) => part.source === "screen")?.dataUrl === "tab", "screen is kept");
+
+const paired = [];
+const mux = new DualLiveVisionMux();
+mux.setActive("camera", true);
+mux.setActive("screen", true);
+mux.setFlush((parts) => paired.push(parts.map((part) => part.source).sort().join("+")));
+mux.push({ source: "camera", dataUrl: "c" });
+mux.push({ source: "screen", dataUrl: "s" });
+await new Promise((resolve) => setTimeout(resolve, 30));
+expect(paired.includes("camera+screen"), "mux pairs camera and shared tab");
+mux.dispose();
 
 console.log("audio-devices ok");

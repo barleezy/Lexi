@@ -1,6 +1,9 @@
 export const VIDEO_CONTEXT_MODEL = "grok-4.6";
 export const VIDEO_CONTEXT_ENDPOINT = "https://api.x.ai/v1/responses";
+export const VIDEO_CONTEXT_CHAT_ENDPOINT = "https://api.x.ai/v1/chat/completions";
 export const VIDEO_CONTEXT_CACHE_MS = 12_000;
+/** grok-4.6 cannot disable reasoning — "none" 400s the frame-analysis request. */
+export const VIDEO_CONTEXT_REASONING_EFFORT = "low";
 
 type CachedVideoContext = {
   key: string;
@@ -45,6 +48,7 @@ export function writeVideoContextCache(key: string, description: string, model =
 export type VideoContextFrame = {
   dataUrl: string;
   timeSec: number;
+  label?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -106,16 +110,21 @@ export function buildVideoContextInput(frames: VideoContextFrame[], question: st
       image_url: frame.dataUrl,
       detail: "high",
     });
+    const label = frame.label?.trim() || "Live stream";
     content.push({
       type: "input_text",
-      text: `Frame at ${frame.timeSec.toFixed(1)}s.`,
+      text: `${label} at ${frame.timeSec.toFixed(1)}s.`,
     });
   }
+  const labels = new Set(frames.slice(0, 4).map((frame) => frame.label?.trim()).filter(Boolean));
+  const dual = labels.size > 1;
   content.push({
     type: "input_text",
     text:
       (question.trim() ||
-        "Describe what is happening on screen right now. Name visible people, objects, text, setting, and action. Two or three short sentences.") +
+        (dual
+          ? "These are current moments from two live 30fps streams (camera and shared tab). Describe EACH stream separately. Read visible text. Name people, objects, UI, setting, and action."
+          : "Describe what is happening on screen right now. Read visible text. Name people, objects, UI, setting, and action with specific visual detail.")) +
       " Adults-only porn/media: if anyone on screen looks under 18, or is a minor, refuse and stop. Voice roleplay age rules are separate.",
   });
   return [
@@ -130,9 +139,42 @@ export function buildVideoContextRequest(frames: VideoContextFrame[], question: 
   return {
     model: VIDEO_CONTEXT_MODEL,
     store: false,
-    reasoning: { effort: "none" },
-    max_output_tokens: 400,
-    search_parameters: { mode: "off" },
+    reasoning: { effort: VIDEO_CONTEXT_REASONING_EFFORT },
+    max_output_tokens: 800,
     input: buildVideoContextInput(frames, question),
   };
+}
+
+export function buildVideoContextChatRequest(frames: VideoContextFrame[], question: string) {
+  const text =
+    (question.trim() ||
+      "Describe what is happening on screen right now. Read visible text. Name people, objects, UI, setting, and action with specific visual detail.") +
+    " Adults-only porn/media: if anyone on screen looks under 18, or is a minor, refuse and stop. Voice roleplay age rules are separate.";
+  const content: Array<Record<string, unknown>> = [];
+  for (const frame of frames.slice(0, 4)) {
+    content.push({
+      type: "image_url",
+      image_url: { url: frame.dataUrl, detail: "high" },
+    });
+  }
+  content.push({ type: "text", text });
+  return {
+    model: VIDEO_CONTEXT_MODEL,
+    max_tokens: 800,
+    messages: [{ role: "user", content }],
+  };
+}
+
+export function readChatCompletionsText(data: unknown): string {
+  const record = asRecord(data);
+  if (!record) return "";
+  const choices = record.choices;
+  if (!Array.isArray(choices)) return "";
+  for (const choice of choices) {
+    const message = asRecord(asRecord(choice)?.message);
+    if (typeof message?.content === "string" && message.content.trim()) {
+      return message.content.trim();
+    }
+  }
+  return "";
 }

@@ -1,9 +1,12 @@
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
 import { refusePornSubject } from "@/lib/generate/safety";
 import {
+  VIDEO_CONTEXT_CHAT_ENDPOINT,
   VIDEO_CONTEXT_ENDPOINT,
   VIDEO_CONTEXT_MODEL,
+  buildVideoContextChatRequest,
   buildVideoContextRequest,
+  readChatCompletionsText,
   readResponsesError,
   readResponsesText,
   readVideoContextCache,
@@ -12,16 +15,17 @@ import {
 } from "@/lib/voice/video-context";
 
 const MAX_FRAMES = 4;
-const MAX_DATA_URL_CHARS = 1_200_000;
+const MAX_DATA_URL_CHARS = 2_400_000;
 
 type FrameBody = {
   dataUrl?: unknown;
   timeSec?: unknown;
+  label?: unknown;
 };
 
 function parseFrames(raw: unknown) {
   if (!Array.isArray(raw)) return [];
-  const frames: Array<{ dataUrl: string; timeSec: number }> = [];
+  const frames: Array<{ dataUrl: string; timeSec: number; label?: string }> = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const row = item as FrameBody;
@@ -31,7 +35,8 @@ function parseFrames(raw: unknown) {
     }
     if (row.dataUrl.length > MAX_DATA_URL_CHARS) continue;
     const timeSec = typeof row.timeSec === "number" && Number.isFinite(row.timeSec) ? row.timeSec : 0;
-    frames.push({ dataUrl: row.dataUrl, timeSec });
+    const label = typeof row.label === "string" && row.label.trim() ? row.label.trim() : undefined;
+    frames.push({ dataUrl: row.dataUrl, timeSec, label });
     if (frames.length >= MAX_FRAMES) break;
   }
   return frames;
@@ -88,12 +93,13 @@ export async function POST(request: Request) {
     });
   }
 
+  const headers = {
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+  };
   const upstream = await fetch(VIDEO_CONTEXT_ENDPOINT, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(buildVideoContextRequest(frames, question)),
   });
 
@@ -104,8 +110,34 @@ export async function POST(request: Request) {
     data = {};
   }
 
-  const description = readResponsesText(data);
-  const error = readResponsesError(data);
+  let description = readResponsesText(data);
+  let error = readResponsesError(data);
+  let via = "responses";
+  let status = upstream.status;
+
+  if (!description) {
+    const chat = await fetch(VIDEO_CONTEXT_CHAT_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(buildVideoContextChatRequest(frames, question)),
+    });
+    let chatData: unknown = {};
+    try {
+      chatData = await chat.json();
+    } catch {
+      chatData = {};
+    }
+    const chatText = readChatCompletionsText(chatData);
+    if (chatText) {
+      description = chatText;
+      error = "";
+      via = "chat";
+      status = chat.status;
+    } else if (!error) {
+      error = readResponsesError(chatData) || `Video analysis returned ${chat.status}.`;
+      status = chat.status;
+    }
+  }
   const logSessionId = typeof body.logSessionId === "string" ? body.logSessionId : "";
   if (isVoiceLogEnabled() && isValidSessionId(logSessionId)) {
     await appendVoiceLog(logSessionId, [
@@ -113,16 +145,17 @@ export async function POST(request: Request) {
         src: "server",
         ts: Date.now(),
         kind: "server.video_context",
-        ok: upstream.ok && Boolean(description),
-        status: upstream.status,
+        ok: Boolean(description),
+        status,
         ms: Date.now() - started,
         model: VIDEO_CONTEXT_MODEL,
         frames: frames.length,
+        via,
       },
     ]);
   }
 
-  if (!upstream.ok || !description) {
+  if (!description) {
     return Response.json(
       { error: error || "Could not analyze the video frame." },
       { status: 502 },

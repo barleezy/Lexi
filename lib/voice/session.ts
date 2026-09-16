@@ -56,7 +56,12 @@ import {
   videoContextCacheKey,
   writeVideoContextCache,
 } from "@/lib/voice/video-context";
-import type { SendVisionFramesOptions, VisionFramePart, VisionSource } from "@/lib/voice/vision";
+import {
+  mergeLiveVisionParts,
+  type SendVisionFramesOptions,
+  type VisionFramePart,
+  type VisionSource,
+} from "@/lib/voice/vision";
 import { parseToyControlIntent, resolveToyControlRequest } from "@/lib/voice/toy-control";
 import {
   PREOPEN_CAP,
@@ -306,7 +311,7 @@ const GET_VIDEO_CONTEXT_TOOL = {
   type: "function",
   name: "get_video_context",
   description:
-    "Look at the live shared tab, screen, or watch-together video the user is viewing with you right now. Call this when they ask what is happening, what is on screen, or any question that needs the current picture. Returns a short scene description from the live stream. Do not call this if nothing is being shared.",
+    "Look at the live camera and/or shared tab. Both can be on at once as separate 30fps video streams. Returns a description of each live stream. Call this when they ask what is on camera, on the shared tab, or on both.",
   parameters: {
     type: "object",
     properties: {
@@ -926,6 +931,9 @@ export class VoiceSession {
     this.setPhase("connecting");
     this.logger.log("start", { url: REALTIME_URL, target_rate: TARGET_RATE });
 
+    if (this.musicState.playing) setMediaSessionYield(true);
+    applyPlayAndRecordSession();
+
     const ctx = createAudioContext();
     this.ctx = ctx;
     await resumeAudioContext(ctx);
@@ -952,11 +960,10 @@ export class VoiceSession {
       return;
     }
 
-    if (this.musicState.playing) setMediaSessionYield(true);
-
     const micStarted = Date.now();
     try {
       this.stream = await openUserMic();
+      applyPlayAndRecordSession();
       this.bindMic(this.stream);
       const track = this.stream.getAudioTracks()[0];
       const settings = track?.getSettings() ?? {};
@@ -1096,11 +1103,11 @@ export class VoiceSession {
   sendVisionFrames(parts: VisionFramePart[], options?: SendVisionFramesOptions) {
     if (this.stopped || !parts.length) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.pendingLiveFrames = parts;
+      this.pendingLiveFrames = mergeLiveVisionParts(this.pendingLiveFrames, parts);
       return;
     }
     if (shouldDeferLiveVision(this.phase, Boolean(options?.respond), parts.map((part) => part.source))) {
-      this.deferredLiveFrames = parts;
+      this.deferredLiveFrames = mergeLiveVisionParts(this.deferredLiveFrames, parts);
       return;
     }
     const content: Array<Record<string, unknown>> = [];
@@ -1127,7 +1134,7 @@ export class VoiceSession {
         uploadIndex += 1;
         labels.push(`Uploaded video frame ${uploadIndex} of ${uploadTotal}${time}.`);
       } else if (part.source === "camera") {
-        labels.push("Camera viewfinder frame (user allowed).");
+        labels.push("Live 30fps camera video (exactly what the camera sees).");
       } else {
         labels.push("Live shared-tab video (exactly what the user is viewing).");
       }
@@ -1138,13 +1145,17 @@ export class VoiceSession {
       bytes,
       respond: Boolean(options?.respond),
     });
+    const hasCamera = parts.some((part) => part.source === "camera");
+    const hasScreen = parts.some((part) => part.source === "screen");
     const preface = options?.prompt?.trim()
       ? `${options.prompt.trim()} `
       : watchTotal
         ? "The user is watching a video with you. These are separate recent stills from that video. Talk while it plays. On-screen voices are not the user. Soundtrack may be absent — it plays in the watch tab. "
         : uploadTotal
           ? "USER UPLOADED VIDEO, analyze these frames. "
-          : "";
+          : hasCamera && hasScreen
+            ? "Two live 30fps video streams at the same moment: camera and shared tab. Analyze both. Do not drop either stream. "
+            : "";
     content.push({
       type: "input_text",
       text: `${preface}${labels.join(" ")}`,
@@ -1322,10 +1333,10 @@ export class VoiceSession {
     if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const text = active
       ? source === "camera"
-        ? "The user allowed camera viewfinder frames. You can see what the camera shows when a frame is attached. Comment only when relevant."
+        ? "The user started the camera. You are receiving a live 30fps video stream of exactly what the camera sees — not stills. Comment only when relevant."
         : "The user started sharing a browser tab or screen. You are receiving a live video stream of exactly what they are viewing, plus the shared tab soundtrack when they enabled Share tab audio. That soundtrack and on-screen voices are not the user. The microphone is still the user. Comment only when relevant."
       : source === "camera"
-        ? "The user stopped the camera. You can no longer see the viewfinder."
+        ? "The user stopped the camera. You can no longer see the live camera video."
         : "The user stopped screen sharing. You can no longer see or hear the shared tab.";
     this.logger.log("vision.state", { source, active });
     this.send(
@@ -1335,6 +1346,27 @@ export class VoiceSession {
           type: "message",
           role: "user",
           content: [{ type: "input_text", text }],
+        },
+      },
+      true,
+    );
+  }
+
+  notifyDualLiveVision() {
+    if (this.stopped || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.logger.log("vision.state", { source: "camera+screen", active: true });
+    this.send(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Camera and shared tab are both live at 30fps. You are receiving both video streams at once. Analyze both. Do not drop one for the other.",
+            },
+          ],
         },
       },
       true,
@@ -2949,6 +2981,20 @@ export class VoiceSession {
     if (!snapshot.loaded) {
       return { error: "No video is loaded." };
     }
+    if (!snapshot.frames.length && (snapshot.liveStream || /\+/.test(snapshot.title))) {
+      return {
+        ok: true,
+        live: true,
+        source: snapshot.title || snapshot.liveStream,
+        title: snapshot.title,
+        playing: true,
+        description: snapshot.title.includes("+")
+          ? "Camera and shared tab are already live 30fps video streams in this session. Describe what you see on EACH stream from the live video you are receiving."
+          : snapshot.liveStream === "camera"
+            ? "The camera is already a live 30fps video stream in this session. Describe what you see from that live camera video."
+            : "The shared tab is already a live 30fps video stream in this session. Describe what you see from that live feed.",
+      };
+    }
     if (snapshot.captureError && !snapshot.frames.length) {
       return {
         error: snapshot.captureError,
@@ -3016,6 +3062,30 @@ export class VoiceSession {
         status: response.status,
         error: body.error,
       });
+      if (snapshot.frames.length) {
+        this.sendVisionFrames(
+          snapshot.frames.map((frame) => ({
+            source: "screen",
+            dataUrl: frame.dataUrl,
+            timeSec: frame.timeSec,
+          })),
+          {
+            respond: true,
+            prompt:
+              "High-detail stills from the live shared tab the user is viewing right now. Read on-screen text and describe specific visual details from these images. Do not say frame analysis failed.",
+          },
+        );
+        return {
+          ok: true,
+          fallback: "live_frames",
+          title: snapshot.title,
+          currentTime: snapshot.currentTime,
+          duration: snapshot.duration,
+          playing: snapshot.playing,
+          description:
+            "High-detail shared-tab frames were just attached. Answer from those images — read visible text and describe what is on screen.",
+        };
+      }
       return {
         error: typeof body.error === "string" ? body.error : "Could not analyze the video.",
         title: snapshot.title,

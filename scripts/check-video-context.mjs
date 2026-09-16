@@ -1,7 +1,11 @@
 import {
+  VIDEO_CONTEXT_CHAT_ENDPOINT,
   VIDEO_CONTEXT_ENDPOINT,
   VIDEO_CONTEXT_MODEL,
+  VIDEO_CONTEXT_REASONING_EFFORT,
+  buildVideoContextChatRequest,
   buildVideoContextRequest,
+  readChatCompletionsText,
   readResponsesError,
   readResponsesText,
   readVideoContextCache,
@@ -37,8 +41,24 @@ const request = buildVideoContextRequest(
 );
 if (request.model !== "grok-4.6") throw new Error("request model");
 if (request.store !== false) throw new Error("must not store image history");
-if (request.reasoning?.effort !== "none") throw new Error("reasoning should stay off for voice turns");
-if (request.search_parameters?.mode !== "off") throw new Error("frame analysis must not web-search");
+if (request.reasoning?.effort !== VIDEO_CONTEXT_REASONING_EFFORT) {
+  throw new Error("grok-4.6 frame analysis must use a valid reasoning effort");
+}
+if (VIDEO_CONTEXT_REASONING_EFFORT === "none") {
+  throw new Error("reasoning none 400s grok-4.6 image understanding");
+}
+if (request.search_parameters) throw new Error("frame analysis must not web-search");
+if (VIDEO_CONTEXT_CHAT_ENDPOINT !== "https://api.x.ai/v1/chat/completions") {
+  throw new Error("chat fallback endpoint");
+}
+const chat = buildVideoContextChatRequest(
+  [{ dataUrl: "data:image/jpeg;base64,abc", timeSec: 12.4 }],
+  "What's happening?",
+);
+if (chat.messages[0].content[0].type !== "image_url") throw new Error("chat image_url missing");
+if (readChatCompletionsText({ choices: [{ message: { content: "A red car turns left." } }] }) !== "A red car turns left.") {
+  throw new Error("readChatCompletionsText failed");
+}
 if (!String(request.input[0].content.at(-1)?.text ?? "").includes("under 18")) {
   throw new Error("video context porn frames refuse under 18");
 }

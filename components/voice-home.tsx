@@ -32,6 +32,7 @@ import {
   isVideoFile,
   directVideoHref,
   playableVideoSrc,
+  mergeVideoSnapshots,
   snapshotFromFrames,
   snapshotFromShareStream,
   snapshotFromVideo,
@@ -54,8 +55,8 @@ import {
   startLiveVisionCapture,
   startScreenStream,
   sameVideoDevice,
-  startVisionLoop,
   stopMediaStream,
+  DualLiveVisionMux,
   VisionFrameBatcher,
   type CameraFacing,
   type VisionSource,
@@ -76,6 +77,7 @@ import {
   pauseAppleMusicPlayback,
   playAppleMusicFromGesture,
   playAppleMusicSong,
+  resumeAppleMusicPlayback,
   prefetchOurSong,
   readAppleMusicNowPlaying,
   searchAppleMusicCatalog,
@@ -346,6 +348,8 @@ export function VoiceHome() {
   const videoObjectUrl = useRef<string | null>(null);
   const videoFrames = useRef(new VideoFrameBuffer());
   const screenFrames = useRef(new VideoFrameBuffer());
+  const cameraFrames = useRef(new VideoFrameBuffer());
+  const liveMux = useRef(new DualLiveVisionMux());
   const stopVideoLoop = useRef<(() => void) | null>(null);
   const videoMeta = useRef<{ title: string; source: VideoSourceKind | null }>({
     title: "",
@@ -473,6 +477,9 @@ export function VoiceHome() {
     visionBatcher.current.setFlush((parts) => {
       sessionRef.current?.sendVisionFrames(parts);
     });
+    liveMux.current.setFlush((parts) => {
+      sessionRef.current?.sendVisionFrames(parts);
+    });
     const channel = openWatchChannel((message) => {
       if (message.type === "hello") {
         channel?.postMessage({ type: "ready" });
@@ -557,6 +564,7 @@ export function VoiceHome() {
       stopVideoLoop.current?.();
       if (videoObjectUrl.current) URL.revokeObjectURL(videoObjectUrl.current);
       visionBatcher.current.dispose();
+      liveMux.current.dispose();
       channel?.close();
       if (locationWatch.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(locationWatch.current);
@@ -598,11 +606,8 @@ export function VoiceHome() {
   }, [videoSrc]);
 
   function sendCameraFrame(dataUrl: string) {
-    if (watchTabActiveRef.current || videoMeta.current.source) {
-      visionBatcher.current.push({ source: "camera", dataUrl });
-      return;
-    }
-    sessionRef.current?.sendVisionFrame("camera", dataUrl);
+    cameraFrames.current.push({ dataUrl, timeSec: Date.now() / 1000, label: "Live camera" });
+    liveMux.current.push({ source: "camera", dataUrl });
   }
 
   function bindCameraTrack(stream: MediaStream) {
@@ -619,9 +624,8 @@ export function VoiceHome() {
     if (!video || !stream) return;
     video.srcObject = stream;
     void video.play().catch(() => {});
-    if (!cameraSlot.current.stopLoop) {
-      cameraSlot.current.stopLoop = startVisionLoop(video, sendCameraFrame, CAMERA_VISION_INTERVAL_MS);
-    }
+    cameraSlot.current.stopLoop?.();
+    cameraSlot.current.stopLoop = startLiveVisionCapture(video, sendCameraFrame, CAMERA_VISION_INTERVAL_MS);
     return () => {
       cameraSlot.current.stopLoop?.();
       cameraSlot.current.stopLoop = null;
@@ -638,12 +642,8 @@ export function VoiceHome() {
     void video.play().catch(() => {});
     screenSlot.current.stopLoop?.();
     screenSlot.current.stopLoop = startLiveVisionCapture(video, (dataUrl) => {
-      screenFrames.current.push({ dataUrl, timeSec: Date.now() / 1000 });
-      if (watchTabActiveRef.current || videoMeta.current.source) {
-        visionBatcher.current.push({ source: "screen", dataUrl });
-        return;
-      }
-      sessionRef.current?.sendVisionFrame("screen", dataUrl);
+      screenFrames.current.push({ dataUrl, timeSec: Date.now() / 1000, label: "Shared tab" });
+      liveMux.current.push({ source: "screen", dataUrl });
     }, SCREEN_VISION_INTERVAL_MS);
     return () => {
       screenSlot.current.stopLoop?.();
@@ -661,6 +661,9 @@ export function VoiceHome() {
       setCameraOn(false);
       if (wasOn && notify) sessionRef.current?.notifyVision("camera", false);
       visionBatcher.current.clear("camera");
+      liveMux.current.setActive("camera", false);
+      liveMux.current.clear("camera");
+      cameraFrames.current.clear();
     }
     if (!source || source === "screen") {
       const wasOn = Boolean(screenSlot.current.stream);
@@ -671,6 +674,8 @@ export function VoiceHome() {
       setScreenOn(false);
       if (wasOn && notify) sessionRef.current?.notifyVision("screen", false);
       visionBatcher.current.clear("screen");
+      liveMux.current.setActive("screen", false);
+      liveMux.current.clear("screen");
       screenFrames.current.clear();
     }
   }
@@ -688,12 +693,17 @@ export function VoiceHome() {
           releaseVision(source);
         });
       }
-      if (source === "camera") setCameraOn(true);
-      else {
+      if (source === "camera") {
+        liveMux.current.setActive("camera", true);
+        setCameraOn(true);
+      } else {
+        liveMux.current.setActive("screen", true);
         setScreenOn(true);
         sessionRef.current?.setSharedTabAudio(stream);
       }
       sessionRef.current?.notifyVision(source, true);
+      const other = source === "camera" ? screenSlot.current.stream : cameraSlot.current.stream;
+      if (other) sessionRef.current?.notifyDualLiveVision();
     } catch (caught) {
       releaseVision(source, false);
       const message =
@@ -746,6 +756,12 @@ export function VoiceHome() {
       if (video) {
         video.srcObject = stream;
         void video.play().catch(() => {});
+        cameraSlot.current.stopLoop?.();
+        cameraSlot.current.stopLoop = startLiveVisionCapture(
+          video,
+          sendCameraFrame,
+          CAMERA_VISION_INTERVAL_MS,
+        );
       }
       if (previous !== stream) stopMediaStream(previous);
       setCameraFacing(next);
@@ -759,6 +775,12 @@ export function VoiceHome() {
           if (video) {
             video.srcObject = restored;
             void video.play().catch(() => {});
+            cameraSlot.current.stopLoop?.();
+            cameraSlot.current.stopLoop = startLiveVisionCapture(
+              video,
+              sendCameraFrame,
+              CAMERA_VISION_INTERVAL_MS,
+            );
           }
         } catch {
           releaseVision("camera", true);
@@ -880,21 +902,27 @@ export function VoiceHome() {
 
   function bindVideoProvider(session: VoiceSession) {
     session.setVideoContextProvider(async () => {
+      const parts = [];
       if (watchTabActiveRef.current) {
-        return snapshotFromFrames(videoFrames.current, {
-          title: videoMeta.current.title,
-          source: videoMeta.current.source,
-          playing: watchPlayingRef.current,
-          currentTime: watchTimeRef.current,
-          duration: watchDurationRef.current,
-        });
-      }
-      if (videoMeta.current.source) {
-        return snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current);
+        parts.push(
+          snapshotFromFrames(videoFrames.current, {
+            title: videoMeta.current.title,
+            source: videoMeta.current.source,
+            playing: watchPlayingRef.current,
+            currentTime: watchTimeRef.current,
+            duration: watchDurationRef.current,
+          }),
+        );
+      } else if (videoMeta.current.source) {
+        parts.push(snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current));
       }
       if (screenSlot.current.stream) {
-        return snapshotFromShareStream(screenVideoRef.current, screenFrames.current);
+        parts.push(snapshotFromShareStream(screenVideoRef.current, screenFrames.current, "Shared tab"));
       }
+      if (cameraSlot.current.stream) {
+        parts.push(snapshotFromShareStream(cameraVideoRef.current, cameraFrames.current, "Live camera"));
+      }
+      if (parts.length) return mergeVideoSnapshots(parts);
       return snapshotFromVideo(watchVideoRef.current, videoFrames.current, videoMeta.current);
     });
     if (videoMeta.current.source) {
@@ -1573,20 +1601,39 @@ export function VoiceHome() {
     if (alreadyPlaying.playing) {
       applyApplePlayback(alreadyPlaying);
     }
+    const urlWasPlaying = backgroundAudio.current.playing;
     await session.start();
+    if (urlWasPlaying && !backgroundAudio.current.playing) {
+      try {
+        await backgroundAudio.current.resume();
+      } catch {
+        // browser may still require a tap
+      }
+    }
     if (cameraSlot.current.stream) session.notifyVision("camera", true);
     if (screenSlot.current.stream) {
       session.setSharedTabAudio(screenSlot.current.stream);
       session.notifyVision("screen", true);
+      if (cameraSlot.current.stream) session.notifyDualLiveVision();
       const shot = screenVideoRef.current ? captureVideoShot(screenVideoRef.current) : null;
       if (shot) {
         screenFrames.current.push(shot);
         session.sendVisionFrame("screen", shot.dataUrl);
       }
     }
-    const nowPlaying = readAppleMusicNowPlaying();
-    if (nowPlaying.playing) {
-      applyApplePlayback(nowPlaying);
+    if (alreadyPlaying.playing && appleDeveloperToken.current) {
+      const now = readAppleMusicNowPlaying();
+      if (!now.playing) {
+        try {
+          await resumeAppleMusicPlayback(appleDeveloperToken.current);
+        } catch {
+          // MusicKit may need another Play tap after an OS pause
+        }
+      }
+      applyApplePlayback(readAppleMusicNowPlaying());
+    } else {
+      const nowPlaying = readAppleMusicNowPlaying();
+      if (nowPlaying.playing) applyApplePlayback(nowPlaying);
     }
     const permission = await readGeoPermission();
     if (locationOn || lastLocation.current || permission === "granted") {

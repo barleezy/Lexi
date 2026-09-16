@@ -27,6 +27,8 @@ export const KEEPALIVE_SILENCE_MS = 20;
 export const IOS_KEEPALIVE_HZ = 48;
 export const IOS_KEEPALIVE_AMP = 180;
 export const PLAY_AND_RECORD_TYPES = ["play-and-record", "playAndRecord"] as const;
+/** Safari types that mix with Apple Music / system playback instead of exclusive-locking. */
+export const MIXABLE_AUDIO_SESSION_TYPES = ["auto", "ambient"] as const;
 export const AUDIO_SESSION_INTERRUPT_EVENTS = [
   "statechange",
   "interruptionbegin",
@@ -272,15 +274,21 @@ export function shouldReclaimMicForRouteChange(event: { type: string; visibility
   return shouldReclaimForLifecycle(event);
 }
 
+/**
+ * Keep mic + playback without exclusive-locking other audio.
+ * Safari `play-and-record` pauses Apple Music / the system player.
+ */
 export function applyPlayAndRecordSession() {
   const session = readAudioSession();
   if (!session) return false;
-  for (const type of PLAY_AND_RECORD_TYPES) {
+  for (const type of MIXABLE_AUDIO_SESSION_TYPES) {
     try {
       session.type = type;
-      if (session.type === "play-and-record" || session.type === type) return true;
+      if (session.type === type || session.type === "auto" || session.type === "ambient") {
+        return true;
+      }
     } catch {
-      // try the camelCase alias used by some WebKit builds
+      // try the next mixable type
     }
   }
   return false;
@@ -310,14 +318,16 @@ export function isMediaSessionYielded() {
   return yieldMediaSession;
 }
 
-export function shouldUseHtmlKeepAlive(opts?: { yieldToMedia?: boolean; carAudio?: boolean }) {
-  const yieldToMedia = opts?.yieldToMedia ?? yieldMediaSession;
-  const car = opts?.carAudio ?? carAudioRoute;
-  return !yieldToMedia && !car;
+export function shouldUseHtmlKeepAlive(_opts?: { yieldToMedia?: boolean; carAudio?: boolean }) {
+  // A looping HTMLAudioElement pauses MusicKit in this tab and can pause
+  // system / Apple Music. Destination keep-alive is enough for the voice graph.
+  return false;
 }
 
-export function shouldClaimMediaSession(yieldToOther = yieldMediaSession) {
-  return !yieldToOther && !carAudioRoute;
+export function shouldClaimMediaSession(_yieldToOther = yieldMediaSession) {
+  // Never steal lock-screen / OS audio focus. Claiming pauses Apple Music,
+  // Spotify, and other players even when MusicKit is not the source.
+  return false;
 }
 
 function syncKeepAliveMedia() {
@@ -589,6 +599,15 @@ export function installVoiceKeepAlive(handlers: VoiceKeepAliveHandlers) {
 }
 
 function startHtmlKeepAlive(ios: boolean) {
+  if (!shouldUseHtmlKeepAlive()) {
+    htmlKeepAliveHold = () => {};
+    return {
+      ensurePlaying: () => {},
+      stop: () => {
+        if (htmlKeepAliveHold) htmlKeepAliveHold = null;
+      },
+    };
+  }
   const audio = new Audio(
     buildKeepAliveWavDataUrl(ios ? 2 : 1.5, 8000, {
       hz: ios ? IOS_KEEPALIVE_HZ : 19,

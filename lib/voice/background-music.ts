@@ -48,6 +48,13 @@ export class BackgroundAudioPlayer {
     return this.title;
   }
 
+  async resume() {
+    const audio = this.el;
+    if (!audio || !audio.paused) return;
+    await audio.play();
+    this.onState?.(true, this.title);
+  }
+
   async playUrl(href: string, title = "") {
     const parsed = parseAudioSourceUrl(href);
     if (!parsed.ok) throw new Error(parsed.error);

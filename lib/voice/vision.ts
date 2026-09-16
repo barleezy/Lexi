@@ -13,14 +13,18 @@ export type SendVisionFramesOptions = {
 
 /** Grok realtime has no video-track item — live camera/tab use high-cadence `input_image`. */
 export const VISION_INTERVAL_MS = 200;
-export const CAMERA_VISION_INTERVAL_MS = 250;
 export const SCREEN_VISION_FPS = 30;
 export const SCREEN_VISION_INTERVAL_MS = Math.round(1000 / SCREEN_VISION_FPS);
+export const CAMERA_VISION_FPS = SCREEN_VISION_FPS;
+export const CAMERA_VISION_INTERVAL_MS = SCREEN_VISION_INTERVAL_MS;
 export const VISION_BATCH_SIZE = 4;
 export const VISION_BATCH_GAP_MS = 600;
 export const VISION_BATCH_FLUSH_MS = 800;
 const MAX_EDGE = 640;
 const JPEG_QUALITY = 0.6;
+/** High-detail stills for get_video_context — live 30fps thumbs are too small to read. */
+export const DETAIL_MAX_EDGE = 1280;
+export const DETAIL_JPEG_QUALITY = 0.85;
 
 let captureCanvas: HTMLCanvasElement | null = null;
 let captureCtx: CanvasRenderingContext2D | null = null;
@@ -58,9 +62,9 @@ async function cameraDeviceIdForFacing(facing: CameraFacing) {
 
 export async function startCameraStream(facing: CameraFacing = "user") {
   const video: MediaTrackConstraints = {
-    width: { ideal: 640 },
-    height: { ideal: 480 },
-    frameRate: { ideal: 24, max: 30 },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: CAMERA_VISION_FPS, max: CAMERA_VISION_FPS },
   };
   const deviceId = await cameraDeviceIdForFacing(facing);
   const attempts: MediaStreamConstraints[] = deviceId
@@ -76,7 +80,10 @@ export async function startCameraStream(facing: CameraFacing = "user") {
   let lastError: unknown;
   for (const constraints of attempts) {
     try {
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && "contentHint" in videoTrack) videoTrack.contentHint = "motion";
+      return stream;
     } catch (error) {
       lastError = error;
     }
@@ -187,6 +194,16 @@ export function captureJpegDataUrl(video: HTMLVideoElement) {
   );
 }
 
+export function captureDetailJpegDataUrl(video: HTMLVideoElement) {
+  return jpegDataUrlFromImage(
+    video,
+    video.videoWidth,
+    video.videoHeight,
+    DETAIL_MAX_EDGE,
+    DETAIL_JPEG_QUALITY,
+  );
+}
+
 export class VisionFrameBatcher {
   private watch: VisionFramePart[] = [];
   private extras = new Map<Exclude<VisionFramePart["source"], "watch">, VisionFramePart>();
@@ -264,6 +281,79 @@ export class VisionFrameBatcher {
   private schedule() {
     if (this.timer) return;
     this.timer = setTimeout(() => this.flush(), VISION_BATCH_FLUSH_MS);
+  }
+}
+
+export function mergeLiveVisionParts(current: VisionFramePart[], incoming: VisionFramePart[]) {
+  const next = [...current];
+  for (const part of incoming) {
+    if (part.source === "camera" || part.source === "screen") {
+      const index = next.findIndex((row) => row.source === part.source);
+      if (index >= 0) next[index] = part;
+      else next.push(part);
+      continue;
+    }
+    next.push(part);
+  }
+  return next;
+}
+
+/** Pair camera + shared-tab 30fps tracks into one session item so neither stream is dropped. */
+export class DualLiveVisionMux {
+  private latest = new Map<Extract<VisionSource, "camera" | "screen">, VisionFramePart>();
+  private active = new Set<Extract<VisionSource, "camera" | "screen">>();
+  private flushFn: ((parts: VisionFramePart[]) => void) | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly pairWindowMs = 16;
+
+  setFlush(fn: ((parts: VisionFramePart[]) => void) | null) {
+    this.flushFn = fn;
+  }
+
+  setActive(source: Extract<VisionSource, "camera" | "screen">, on: boolean) {
+    if (on) this.active.add(source);
+    else {
+      this.active.delete(source);
+      this.latest.delete(source);
+    }
+  }
+
+  push(part: VisionFramePart) {
+    if (part.source !== "camera" && part.source !== "screen") {
+      this.flushFn?.([part]);
+      return;
+    }
+    this.active.add(part.source);
+    this.latest.set(part.source, part);
+    if (this.active.size < 2) {
+      this.flushFn?.([part]);
+      return;
+    }
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const parts = [...this.latest.values()];
+      if (parts.length) this.flushFn?.(parts);
+    }, this.pairWindowMs);
+  }
+
+  clear(source?: Extract<VisionSource, "camera" | "screen">) {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (!source) {
+      this.latest.clear();
+      this.active.clear();
+      return;
+    }
+    this.latest.delete(source);
+    this.active.delete(source);
+  }
+
+  dispose() {
+    this.clear();
+    this.flushFn = null;
   }
 }
 

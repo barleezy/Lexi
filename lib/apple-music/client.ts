@@ -278,6 +278,28 @@ export async function pauseAppleMusicPlayback(developerToken: string) {
   emitPlayback();
 }
 
+/** Resume MusicKit if opening the mic / AudioContext paused it. Does not reset the queue. */
+export async function resumeAppleMusicPlayback(developerToken: string) {
+  const music = await musicForGesture(developerToken);
+  const now = readAppleMusicNowPlaying();
+  if (now.playing) {
+    return {
+      ok: true as const,
+      title: [now.title, now.artist].filter(Boolean).join(" — ") || "Apple Music",
+    };
+  }
+  if (!hasQueue(music)) {
+    throw new Error("Nothing is queued on Apple Music.");
+  }
+  await music.play();
+  emitPlayback();
+  const resumed = readAppleMusicNowPlaying();
+  return {
+    ok: true as const,
+    title: [resumed.title, resumed.artist].filter(Boolean).join(" — ") || "Apple Music",
+  };
+}
+
 export async function skipAppleMusicFromGesture(developerToken: string, input = "") {
   const music = await musicForGesture(developerToken);
   await ensureAuthorized(music);

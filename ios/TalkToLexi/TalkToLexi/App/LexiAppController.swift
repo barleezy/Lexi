@@ -369,6 +369,10 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         Task { @MainActor in
             self.phase = phase
             self.isLive = session.isLive
+            if session.isLive {
+                self.music.resumeIfNeeded()
+                self.syncDuck()
+            }
         }
     }
 
@@ -478,7 +482,15 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             let frames = watch.framesForContext().map { frame -> [String: Any] in
                 ["dataUrl": frame.dataUrl, "timeSec": frame.timeSec]
             }
-            guard !frames.isEmpty else {
+            if frames.isEmpty {
+                if camera.isOn {
+                    return stringify([
+                        "ok": true,
+                        "live": true,
+                        "source": "camera",
+                        "description": "The camera is already a live 30fps video stream in this session. Describe what you see from that live camera video. Do not ask for stills.",
+                    ])
+                }
                 return stringify(["ok": false, "error": "No video is loaded."])
             }
             do {

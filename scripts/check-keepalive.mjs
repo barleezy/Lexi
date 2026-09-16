@@ -9,6 +9,7 @@ import {
   KEEPALIVE_INTERVAL_MS,
   KEEPALIVE_SILENCE_MS,
   MEDIA_SESSION_TITLE,
+  MIXABLE_AUDIO_SESSION_TYPES,
   PLAY_AND_RECORD_TYPES,
   PLAYBACK_DUCK_GAIN,
   PLAYBACK_FULL_GAIN,
@@ -45,6 +46,8 @@ expect(IOS_KEEPALIVE_HZ === 48, "ios keep-alive is 48Hz, not a beep");
 expect(IOS_KEEPALIVE_AMP === 180, "ios wav amp is still very low");
 expect(PLAY_AND_RECORD_TYPES.includes("play-and-record"), "kebab play-and-record");
 expect(PLAY_AND_RECORD_TYPES.includes("playAndRecord"), "camelCase alias");
+expect(MIXABLE_AUDIO_SESSION_TYPES.includes("auto"), "mixable auto session");
+expect(MIXABLE_AUDIO_SESSION_TYPES.includes("ambient"), "mixable ambient session");
 expect(AUDIO_SESSION_INTERRUPT_EVENTS.includes("statechange"), "statechange");
 expect(AUDIO_SESSION_INTERRUPT_EVENTS.includes("interruptionbegin"), "interruptionbegin");
 expect(AUDIO_SESSION_INTERRUPT_EVENTS.includes("interruptionend"), "interruptionend");
@@ -101,7 +104,7 @@ expect(shouldDisconnectForLifecycle({ type: "blur" }) === false, "game blur must
 expect(shouldDuckPlaybackForCoexist({ pageHidden: true }) === true, "duck when hidden");
 expect(shouldDuckPlaybackForCoexist({ blurred: true }) === true, "duck when blurred");
 expect(shouldDuckPlaybackForCoexist({}) === false, "full volume in foreground");
-expect(shouldClaimMediaSession(false) === true, "claim media session when music is not playing");
+expect(shouldClaimMediaSession(false) === false, "never steal media session from other players");
 expect(shouldClaimMediaSession(true) === false, "yield media session while MusicKit plays");
 setMediaSessionYield(true);
 expect(shouldUseHtmlKeepAlive() === false, "pause html keep-alive while MusicKit plays");
@@ -114,7 +117,7 @@ setCarAudioRoute(true);
 expect(shouldClaimMediaSession(false) === false, "do not claim media session on car HFP");
 expect(shouldUseHtmlKeepAlive({ carAudio: true }) === false, "no html media keep-alive on car HFP");
 setCarAudioRoute(false);
-expect(shouldUseHtmlKeepAlive() === true, "html keep-alive when not yielding and not car");
+expect(shouldUseHtmlKeepAlive() === false, "html keep-alive never starts — it pauses music");
 expect(shouldReclaimMicForRouteChange({ type: "devicechange" }) === true, "devicechange reclaims mic");
 expect(shouldReclaimMicForRouteChange({ type: "pagehide" }) === true, "pagehide retries mic");
 expect(

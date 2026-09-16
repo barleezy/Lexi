@@ -1,4 +1,4 @@
-import { captureJpegDataUrl } from "@/lib/voice/vision";
+import { captureDetailJpegDataUrl, captureJpegDataUrl } from "@/lib/voice/vision";
 import { directVideoHref } from "@/lib/voice/watch-formats";
 
 export {
@@ -20,6 +20,7 @@ export type VideoSourceKind = "url" | "file";
 export type VideoFrameShot = {
   dataUrl: string;
   timeSec: number;
+  label?: string;
 };
 
 export type VideoContextSnapshot = {
@@ -32,7 +33,26 @@ export type VideoContextSnapshot = {
   source: VideoSourceKind | null;
   frames: VideoFrameShot[];
   captureError?: string;
+  /** Live 30fps camera/screen already in the voice session — do not grab stills. */
+  liveStream?: "camera" | "screen";
 };
+
+export function snapshotFromLiveStream(
+  source: "camera" | "screen",
+  title: string,
+): VideoContextSnapshot {
+  return {
+    loaded: true,
+    playing: true,
+    paused: false,
+    currentTime: 0,
+    duration: 0,
+    title,
+    source: "url",
+    frames: [],
+    liveStream: source,
+  };
+}
 
 export function formatTimecode(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -129,6 +149,19 @@ export function captureVideoShot(video: HTMLVideoElement): VideoFrameShot | null
   }
 }
 
+export function captureDetailVideoShot(video: HTMLVideoElement): VideoFrameShot | null {
+  try {
+    const dataUrl = captureDetailJpegDataUrl(video);
+    if (!dataUrl) return null;
+    const timeSec = Number.isFinite(video.currentTime) && video.currentTime > 0
+      ? video.currentTime
+      : Date.now() / 1000;
+    return { dataUrl, timeSec };
+  } catch {
+    return null;
+  }
+}
+
 export type VideoSnapshotMeta = {
   title: string;
   source: VideoSourceKind | null;
@@ -174,20 +207,58 @@ export function snapshotFromShareStream(
   title = "Shared tab",
 ): VideoContextSnapshot {
   if (video) {
-    const live = captureVideoShot(video);
-    if (live) buffer.push(live);
+    const detail = captureDetailVideoShot(video);
+    if (detail) buffer.push(detail);
+    else {
+      const live = captureVideoShot(video);
+      if (live) buffer.push(live);
+    }
   }
-  const frames = buffer.list();
+  const frames = buffer.list().slice(-2).map((shot) => ({
+    ...shot,
+    label: shot.label || title,
+  }));
   return {
     loaded: true,
-    playing: Boolean(video && !video.paused && !video.ended),
+    playing: Boolean(video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA),
     paused: Boolean(!video || video.paused || video.ended),
     currentTime: frames.at(-1)?.timeSec ?? 0,
     duration: 0,
     title,
     source: "url",
     frames,
-    captureError: frames.length ? undefined : "Could not capture the shared tab.",
+    liveStream: title.toLowerCase().includes("camera") ? "camera" : "screen",
+    captureError: frames.length ? undefined : `Could not capture ${title.toLowerCase()}.`,
+  };
+}
+
+export function mergeVideoSnapshots(parts: VideoContextSnapshot[]): VideoContextSnapshot {
+  const live = parts.filter((part) => part.loaded);
+  if (!live.length) {
+    return {
+      loaded: false,
+      playing: false,
+      paused: true,
+      currentTime: 0,
+      duration: 0,
+      title: "",
+      source: null,
+      frames: [],
+    };
+  }
+  const frames = live.flatMap((part) => part.frames).slice(0, 4);
+  const titles = [...new Set(live.map((part) => part.title).filter(Boolean))];
+  return {
+    loaded: true,
+    playing: live.some((part) => part.playing),
+    paused: live.every((part) => part.paused),
+    currentTime: frames.at(-1)?.timeSec ?? 0,
+    duration: Math.max(0, ...live.map((part) => part.duration)),
+    title: titles.join(" + "),
+    source: live.find((part) => part.source)?.source ?? "url",
+    frames,
+    liveStream: live.length === 1 ? live[0]?.liveStream : undefined,
+    captureError: frames.length ? undefined : live.find((part) => part.captureError)?.captureError,
   };
 }
 
@@ -201,7 +272,7 @@ export function snapshotFromVideo(
   }
   if (!video) return snapshotFromFrames(buffer, meta);
 
-  const live = captureVideoShot(video);
+  const live = captureDetailVideoShot(video) ?? captureVideoShot(video);
   if (live) buffer.push(live);
 
   const frames = buffer.list();
