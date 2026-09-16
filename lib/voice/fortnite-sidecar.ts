@@ -166,7 +166,7 @@ export async function waitForFortnitepySidecar(timeoutMs = START_WAIT_MS) {
 }
 
 function repoRoot() {
-  const fromCwd = resolve(process.cwd());
+  const fromCwd = resolve(/*turbopackIgnore: true*/ process.cwd());
   if (existsSync(resolve(fromCwd, "sidecars/fortnite/sidecar.py"))) return fromCwd;
   try {
     return resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -203,7 +203,7 @@ async function startSidecarProcess() {
   const script = sidecarScript();
   let exited = false;
   try {
-    const child = spawn(python, [script], {
+    const child = spawn(/*turbopackIgnore: true*/ python, [script], {
       cwd: repoRoot(),
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
