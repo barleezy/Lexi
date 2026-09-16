@@ -26,13 +26,14 @@ export async function loginAccount(
   if (typeof password !== "string" || !password) {
     throw new AccountAuthError("Password is required.");
   }
-  if (typeof email !== "string" || !email.trim()) {
-    throw new AccountAuthError("Email is required.");
-  }
   await ensureBootstrapAdmin();
-  return action === "signup"
-    ? createAccount(typeof userId === "string" ? userId : "", password, email)
-    : authenticateAccount(typeof userId === "string" ? userId : "", password, email);
+  if (action === "signup") {
+    if (typeof email !== "string" || !email.trim()) {
+      throw new AccountAuthError("Email is required.");
+    }
+    return createAccount(typeof userId === "string" ? userId : "", password, email);
+  }
+  return authenticateAccount(typeof userId === "string" ? userId : "", password, email);
 }
 
 export async function runPasswordFlow(

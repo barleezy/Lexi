@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { neon } from "@neondatabase/serverless";
-import { normalizeUserId } from "@/lib/memory/user";
+import { isIanUserId, normalizeUserId } from "@/lib/memory/user";
 
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
@@ -67,6 +67,32 @@ export function validateEmail(raw?: unknown) {
   return email;
 }
 
+/** Sign-in can omit email. Empty stays empty; any value must still be a valid address. */
+export function optionalEmail(raw?: unknown) {
+  if (raw == null) return "";
+  if (typeof raw !== "string") throw new AccountAuthError("Enter a valid email address.");
+  if (!raw.trim()) return "";
+  return validateEmail(raw);
+}
+
+type AccountRow = { user_id?: string; password_hash?: string; email?: string | null };
+
+function asRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown }).rows)) {
+    return (result as { rows: T[] }).rows;
+  }
+  return [];
+}
+
+function lookupIds(userId: string) {
+  const ids = new Set([userId, userId.toLowerCase()]);
+  if (isIanUserId(userId)) {
+    for (const alias of ["Ian", "ian", "Barleezy", "barleezy"]) ids.add(alias);
+  }
+  return [...ids];
+}
+
 export function hashPassword(password: string) {
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, KEY_LEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P });
@@ -126,43 +152,105 @@ async function ensureAccountsTable() {
 /** Barleezy and Ian are the same admin row (`normalizeUserId`). Server-only — not shown in UI. */
 export const ADMIN_ACCOUNT_EMAIL = "barlow80136@gmail.com";
 
-export async function ensureBootstrapAdmin() {
-  const db = await ensureAccountsTable();
-  const userId = normalizeUserId("Barleezy");
-  const email = ADMIN_ACCOUNT_EMAIL;
-  const password = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
-  if (password) {
+async function listAccounts(db: NonNullable<ReturnType<typeof sql>>, userId: string) {
+  const ids = lookupIds(userId);
+  return asRows<AccountRow>(
     await db.query(
       `
-      INSERT INTO accounts (user_id, password_hash, email)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (user_id) DO UPDATE
-      SET email = EXCLUDED.email, updated_at = now()
+      SELECT user_id, password_hash, email
+      FROM accounts
+      WHERE user_id = ANY($1::text[]) OR lower(user_id) = ANY($2::text[])
+      LIMIT 8
     `,
-      [userId, hashPassword(password), email],
-    );
-    return;
-  }
-  await db.query(
-    `
-    UPDATE accounts
-    SET email = $1, updated_at = now()
-    WHERE user_id = $2
-  `,
-    [email, userId],
+      [ids, ids.map((id) => id.toLowerCase())],
+    ),
   );
+}
+
+function pickAccount(rows: AccountRow[], userId: string) {
+  if (!rows.length) return null;
+  const preferred =
+    rows.find((row) => row.user_id === userId) ||
+    rows.find((row) => (row.user_id ?? "").toLowerCase() === userId.toLowerCase()) ||
+    rows[0];
+  if (!preferred) return null;
+  if (!(preferred.email ?? "").trim()) {
+    const withEmail = rows.find((row) => (row.email ?? "").trim());
+    if (withEmail) return { ...preferred, email: withEmail.email };
+  }
+  return preferred;
+}
+
+export async function findAccountRow(userId: string) {
+  const db = await ensureAccountsTable();
+  return pickAccount(await listAccounts(db, userId), userId);
+}
+
+export async function ensureBootstrapAdmin() {
+  try {
+    const db = await ensureAccountsTable();
+    const userId = normalizeUserId("Barleezy");
+    const email = ADMIN_ACCOUNT_EMAIL;
+    const password = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
+
+    // Old admin rows were stored as Barleezy. Login now canonicalizes to Ian.
+    await db.query(
+      `
+      UPDATE accounts
+      SET user_id = $1, updated_at = now()
+      WHERE lower(user_id) = 'barleezy'
+        AND NOT EXISTS (SELECT 1 FROM accounts WHERE user_id = $1)
+    `,
+      [userId],
+    );
+
+    const existing = pickAccount(await listAccounts(db, userId), userId);
+    if (!existing && password) {
+      await db.query(
+        `
+        INSERT INTO accounts (user_id, password_hash, email)
+        SELECT $1, $2, $3
+        WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE user_id = $1)
+      `,
+        [userId, hashPassword(password), email],
+      );
+    }
+
+    // Fill Ian's email only when empty and the address is not owned elsewhere.
+    // Never overwrite a working password, and never fail other people's sign-in.
+    await db.query(
+      `
+      UPDATE accounts
+      SET email = $1, updated_at = now()
+      WHERE user_id = $2
+        AND (email IS NULL OR btrim(email) = '')
+        AND NOT EXISTS (
+          SELECT 1 FROM accounts
+          WHERE lower(email) = lower($1) AND user_id <> $2
+        )
+    `,
+      [email, userId],
+    );
+  } catch (error) {
+    console.info(
+      "[auth] bootstrap admin skipped:",
+      error instanceof Error ? error.message : "unknown error",
+    );
+  }
 }
 
 async function emailTakenByOther(db: NonNullable<ReturnType<typeof sql>>, email: string, userId?: string) {
   const rows = userId
-    ? ((await db.query(
-        `SELECT user_id FROM accounts WHERE lower(email) = $1 AND user_id <> $2 LIMIT 1`,
-        [email, userId],
-      )) as { user_id?: string }[])
-    : ((await db.query(`SELECT user_id FROM accounts WHERE lower(email) = $1 LIMIT 1`, [
-        email,
-      ])) as { user_id?: string }[]);
-  return Array.isArray(rows) && rows.length > 0;
+    ? asRows<{ user_id?: string }>(
+        await db.query(`SELECT user_id FROM accounts WHERE lower(email) = $1 AND user_id <> $2 LIMIT 1`, [
+          email,
+          userId,
+        ]),
+      )
+    : asRows<{ user_id?: string }>(
+        await db.query(`SELECT user_id FROM accounts WHERE lower(email) = $1 LIMIT 1`, [email]),
+      );
+  return rows.length > 0;
 }
 
 export async function createAccount(rawUserId: string, password: string, rawEmail: string) {
@@ -171,8 +259,7 @@ export async function createAccount(rawUserId: string, password: string, rawEmai
   const email = validateEmail(rawEmail);
   await ensureBootstrapAdmin();
   const db = await ensureAccountsTable();
-  const existing = await db.query(`SELECT user_id FROM accounts WHERE user_id = $1 LIMIT 1`, [userId]);
-  if (Array.isArray(existing) && existing.length > 0) {
+  if (pickAccount(await listAccounts(db, userId), userId)) {
     throw new AccountAuthError("That account already exists. Sign in instead.", 409);
   }
   if (await emailTakenByOther(db, email)) {
@@ -186,33 +273,26 @@ export async function createAccount(rawUserId: string, password: string, rawEmai
   return userId;
 }
 
-export async function authenticateAccount(rawUserId: string, password: string, rawEmail: string) {
+export async function authenticateAccount(rawUserId: string, password: string, rawEmail?: unknown) {
   const userId = validateAccountName(rawUserId);
   const secret = validatePassword(password);
-  const email = validateEmail(rawEmail);
+  const email = optionalEmail(rawEmail);
   await ensureBootstrapAdmin();
   const db = await ensureAccountsTable();
-  const rows = (await db.query(
-    `SELECT password_hash, email FROM accounts WHERE user_id = $1 LIMIT 1`,
-    [userId],
-  )) as { password_hash?: string; email?: string | null }[];
-  const stored = typeof rows[0]?.password_hash === "string" ? rows[0].password_hash : "";
-  if (!stored || !verifyPassword(secret, stored)) {
+  const rows = await listAccounts(db, userId);
+  const match = rows.find(
+    (row) => typeof row.password_hash === "string" && verifyPassword(secret, row.password_hash),
+  );
+  if (!match?.user_id) {
     throw new AccountAuthError("Account, email, or password is wrong.", 401);
   }
-  const bound = typeof rows[0]?.email === "string" ? rows[0].email.trim().toLowerCase() : "";
-  if (bound) {
-    if (bound !== email) {
-      throw new AccountAuthError("Account, email, or password is wrong.", 401);
-    }
-    return userId;
+  const bound = typeof match.email === "string" ? match.email.trim().toLowerCase() : "";
+  // Username + password is enough. A provided email binds only when none is stored.
+  if (email && !bound && !(await emailTakenByOther(db, email, match.user_id))) {
+    await db.query(`UPDATE accounts SET email = $1, updated_at = now() WHERE user_id = $2`, [
+      email,
+      match.user_id,
+    ]);
   }
-  if (await emailTakenByOther(db, email, userId)) {
-    throw new AccountAuthError("That email is already in use.", 409);
-  }
-  await db.query(`UPDATE accounts SET email = $1, updated_at = now() WHERE user_id = $2`, [
-    email,
-    userId,
-  ]);
   return userId;
 }

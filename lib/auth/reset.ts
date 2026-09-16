@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "crypto";
 import {
   AccountAuthError,
   ensureBootstrapAdmin,
+  findAccountRow,
   hashPassword,
   isAccountStoreConfigured,
   validateAccountName,
@@ -90,7 +91,10 @@ async function dispatchResetEmail(to: string, userId: string, token: string, res
     } else {
       console.info("[auth] password reset created; outbound email is not configured (EMAIL_FROM + RESEND_API_KEY or SMTP_*).");
     }
-    return;
+    throw new AccountAuthError(
+      "Email is not configured. Set EMAIL_FROM and RESEND_API_KEY on the host.",
+      503,
+    );
   }
   const result = await sendOutboundEmail({
     to,
@@ -103,7 +107,7 @@ async function dispatchResetEmail(to: string, userId: string, token: string, res
       console.info("[auth] password reset link (not emailed):", resetUrl);
     }
     throw new AccountAuthError(
-      "Could not send the reset email. Verify talktolexi.app in Resend, or wait for the onboarding-from fallback.",
+      result.error || "Could not send the reset email. Check RESEND_API_KEY and EMAIL_FROM.",
       502,
     );
   }
@@ -118,10 +122,8 @@ export async function requestPasswordReset(rawUserId: unknown, rawEmail: unknown
   const email = validateEmail(rawEmail);
   await ensureBootstrapAdmin();
   const db = await ensureResetTable();
-  const rows = (await db.query(`SELECT email FROM accounts WHERE user_id = $1 LIMIT 1`, [
-    userId,
-  ])) as { email?: string | null }[];
-  const bound = typeof rows[0]?.email === "string" ? rows[0].email.trim().toLowerCase() : "";
+  const account = await findAccountRow(userId);
+  const bound = typeof account?.email === "string" ? account.email.trim().toLowerCase() : "";
   if (bound && bound === email) {
     const token = generateResetToken();
     const tokenHash = hashResetToken(token);

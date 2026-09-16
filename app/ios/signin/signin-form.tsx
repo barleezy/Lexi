@@ -28,9 +28,8 @@ export function IosSignInForm({
   const authReady =
     callbackOk &&
     userId.trim().length > 0 &&
-    email.trim().length > 0 &&
     password.length >= 8 &&
-    (!creating || password === confirm);
+    (!creating || (email.trim().length > 0 && password === confirm));
   const forgotReady = userId.trim().length > 0 && email.trim().length > 0;
   const resetReady = resetToken.trim().length > 0 && password.length >= 8 && password === confirm;
   const ready = panel === "forgot" ? forgotReady : panel === "reset" ? resetReady : authReady;
@@ -49,7 +48,7 @@ export function IosSignInForm({
       setError("Passwords do not match.");
       return;
     }
-    if (!email.trim()) {
+    if (creating && !email.trim()) {
       setError("Enter the email for this account.");
       return;
     }
@@ -102,11 +101,14 @@ export function IosSignInForm({
       if (!response.ok) {
         throw new Error(body.error || "Could not send a reset email.");
       }
-      setNotice(
-        body.message ||
-          "If that account exists, we sent a reset email. We never email the current password.",
-      );
+      setUserId("");
+      setEmail("");
+      setPassword("");
+      setConfirm("");
+      setResetToken("");
+      setMode("signin");
       setPanel("reset");
+      setNotice("Check your email and return with the reset code.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send a reset email.");
     } finally {
@@ -176,7 +178,7 @@ export function IosSignInForm({
         <p className="text-sm text-neutral-500">
           {panel === "forgot"
             ? "We send a one-time reset link. The current password cannot be emailed."
-            : "Enter the code from your email, then choose a new password."}
+            : "Check your email and return with the reset code, then choose a new password."}
         </p>
       )}
       {panel !== "reset" ? (
@@ -213,7 +215,7 @@ export function IosSignInForm({
             name="token"
             value={resetToken}
             onChange={(event) => setResetToken(event.target.value.toUpperCase())}
-            placeholder="Code from your email"
+            placeholder="Reset code from your email"
             autoComplete="one-time-code"
             className="rounded-xl border border-neutral-300 bg-transparent px-4 py-3 text-base tracking-[0.12em] outline-none focus:border-neutral-900 dark:border-neutral-700 dark:focus:border-white"
           />
@@ -276,17 +278,29 @@ export function IosSignInForm({
                 : "Sign in"}
       </button>
       {panel === "auth" && !creating ? (
-        <button
-          type="button"
-          onClick={() => {
-            setError("");
-            setNotice("");
-            setPanel("forgot");
-          }}
-          className="text-center text-sm text-neutral-500 underline-offset-4 hover:underline"
-        >
-          Forgot password?
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setNotice("");
+              setPanel("forgot");
+            }}
+            className="text-center text-sm text-neutral-500 underline-offset-4 hover:underline"
+          >
+            Forgot password?
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setPanel("reset");
+            }}
+            className="text-center text-sm text-neutral-500 underline-offset-4 hover:underline"
+          >
+            I have a reset code
+          </button>
+        </>
       ) : null}
       {panel === "forgot" ? (
         <button

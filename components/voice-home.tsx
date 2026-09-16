@@ -1325,7 +1325,7 @@ export function VoiceHome() {
       setError("Enter an account.");
       return;
     }
-    if (!accountEmail.trim()) {
+    if (creating && !accountEmail.trim()) {
       setError("Enter the email for this account.");
       return;
     }
@@ -1385,11 +1385,14 @@ export function VoiceHome() {
       if (!response.ok) {
         throw new Error(body.error || "Could not send a reset email.");
       }
-      setAccountNotice(
-        body.message ||
-          "If that account exists, we sent a reset email. We never email the current password.",
-      );
+      setAccountDraft("");
+      setAccountEmail("");
+      setAccountPassword("");
+      setAccountConfirm("");
+      setAccountResetToken("");
+      setAccountMode("signin");
       setAccountPanel("reset");
+      setAccountNotice("Check your email and return with the reset code.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send a reset email.");
     } finally {
@@ -1712,7 +1715,7 @@ export function VoiceHome() {
               {accountPanel === "forgot"
                 ? "We send a one-time reset link to the email on the account. The current password cannot be emailed."
                 : accountPanel === "reset"
-                  ? "Enter the code from your email, then choose a new password."
+                  ? "Check your email and return with the reset code, then choose a new password."
                   : "Use your account, email, and password. New here? Create an account first."}
             </p>
             {accountPanel === "auth" ? (
@@ -1768,7 +1771,7 @@ export function VoiceHome() {
                 <input
                   value={accountResetToken}
                   onChange={(event) => setAccountResetToken(event.target.value.toUpperCase())}
-                  placeholder="Code from your email"
+                  placeholder="Reset code from your email"
                   autoComplete="one-time-code"
                   className="rounded-2xl border border-zinc-400 bg-transparent px-4 py-3 text-base font-normal tracking-[0.12em] outline-none focus:border-zinc-900 dark:border-zinc-500 dark:focus:border-white"
                 />
@@ -1827,17 +1830,29 @@ export function VoiceHome() {
                       : "Sign in"}
             </button>
             {accountPanel === "auth" && accountMode === "signin" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setError(null);
-                  setAccountNotice(null);
-                  setAccountPanel("forgot");
-                }}
-                className="mt-3 w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
-              >
-                Forgot password?
-              </button>
+              <div className="mt-3 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setAccountNotice(null);
+                    setAccountPanel("forgot");
+                  }}
+                  className="w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+                >
+                  Forgot password?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setAccountPanel("reset");
+                  }}
+                  className="w-full text-center text-sm font-medium text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+                >
+                  I have a reset code
+                </button>
+              </div>
             ) : null}
             {accountPanel === "forgot" ? (
               <button
