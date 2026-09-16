@@ -15,11 +15,11 @@ export type BuyPackCard = {
 
 export function BuyPacks({
   packs,
-  signedIn = false,
+  signedIn,
   className = "",
 }: {
   packs: BuyPackCard[];
-  signedIn?: boolean;
+  signedIn: boolean;
   className?: string;
 }) {
   const [pendingId, setPendingId] = useState<string | null>(null);

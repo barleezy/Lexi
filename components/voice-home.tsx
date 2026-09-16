@@ -287,27 +287,33 @@ function ComposerButton({
 }
 
 function LiveClock() {
-  const [now, setNow] = useState(() => new Date());
+  const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 1000);
+    const tick = () => setNow(new Date());
+    tick();
+    const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, []);
-  const clock = now.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const spoken = now.toLocaleString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  const clock = now
+    ? now.toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "--:--:--";
+  const spoken = now
+    ? now.toLocaleString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "Current time";
   return (
     <time
-      dateTime={now.toISOString()}
-      title={spoken}
+      dateTime={now ? now.toISOString() : undefined}
+      title={now ? spoken : undefined}
       aria-label={spoken}
       className="shrink-0 tabular-nums text-[11px] text-zinc-500"
     >
@@ -334,6 +340,9 @@ export function VoiceHome({
   const [buyPacks, setBuyPacks] = useState<BuyPackCard[]>(catalogPacks);
   const [buyIntent, setBuyIntent] = useState(false);
   const [rehearsal, setRehearsal] = useState(false);
+  const [callCapAtMs, setCallCapAtMs] = useState<number | null>(null);
+  const [callLeftover, setCallLeftover] = useState(0);
+  const [callTick, setCallTick] = useState(0);
   const [accountDraft, setAccountDraft] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
@@ -444,6 +453,12 @@ export function VoiceHome({
   useEffect(() => {
     setBuyIntent(new URLSearchParams(window.location.search).get("next") === "/buy");
   }, []);
+
+  useEffect(() => {
+    if (!callCapAtMs) return;
+    const timer = window.setInterval(() => setCallTick((tick) => tick + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [callCapAtMs]);
 
   useEffect(() => {
     const persisted = readVoiceSessionStore();
@@ -1200,11 +1215,14 @@ export function VoiceHome({
     setToyControl(false);
     setToyGrantPending(false);
     setMicResume(false);
+    setCallCapAtMs(null);
+    setCallLeftover(0);
   }
 
   async function refreshVoiceBalance() {
     try {
       const response = await fetch("/api/billing/balance", {
+        credentials: "include",
         headers: { "ngrok-skip-browser-warning": "1" },
       });
       if (response.status === 401) {
@@ -1541,8 +1559,8 @@ export function VoiceHome({
       }
       applySignedIn(body.userId);
       const next = new URLSearchParams(window.location.search).get("next");
-      if (next === "/buy") {
-        window.location.href = "/buy";
+      if (next === "/buy" || next === "/subscribe") {
+        window.location.href = next;
         return;
       }
     } catch (err) {
@@ -1711,11 +1729,16 @@ export function VoiceHome({
       },
       onMicNeedsGesture: () => setMicResume(true),
       onMicRecovered: () => setMicResume(false),
+      onWallet: ({ voiceSeconds: leftover, capAtMs }) => {
+        setCallLeftover(leftover);
+        setCallCapAtMs(capAtMs);
+      },
       onError: (message) => {
         setError(message);
         if (/^out of minutes\.?$/i.test(message.trim())) setRehearsal(true);
         releaseVision(undefined, false);
         clearSession();
+        void refreshVoiceBalance();
       },
     });
     attach(session);
@@ -1838,6 +1861,17 @@ export function VoiceHome({
   }
 
   const live = phase !== "idle";
+  const callNow = callTick ? Date.now() : Date.now();
+  const callLeftSeconds =
+    live && callCapAtMs
+      ? Math.max(0, Math.floor((callCapAtMs - callNow) / 1000) + callLeftover)
+      : null;
+  const callLeftLabel =
+    callLeftSeconds == null
+      ? ""
+      : callLeftSeconds >= 60
+        ? `${Math.floor(callLeftSeconds / 60)}m ${callLeftSeconds % 60}s left`
+        : `${callLeftSeconds}s left`;
   const gameHasFocus = tabHidden || windowBlurred;
   const hasUnsent = chips.some((chip) => !chip.sent);
   const hasText = draft.trim().length > 0 || hasUnsent;
@@ -1892,13 +1926,23 @@ export function VoiceHome({
             <span>
               Signed in as <strong className="font-medium text-foreground">{accountId}</strong>
               {isAdminUserId(accountId) ? " · admin" : ""}
-              {voiceSeconds != null ? ` · ${voiceLabel || `${voiceSeconds}s`}` : ""}
+              {live && callLeftLabel
+                ? ` · ${callLeftLabel}`
+                : voiceSeconds != null
+                  ? ` · ${voiceLabel || `${voiceSeconds}s`}`
+                  : ""}
             </span>
             <a
               href="/buy"
               className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
             >
               Buy minutes
+            </a>
+            <a
+              href="/subscribe"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Subscribe
             </a>
             <button
               type="button"
@@ -1915,6 +1959,12 @@ export function VoiceHome({
               className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
             >
               Buy minutes
+            </a>
+            <a
+              href="/subscribe"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Subscribe
             </a>
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
           </div>
@@ -1934,11 +1984,13 @@ export function VoiceHome({
           data-stream-tick={streamTick}
           className="mt-6 min-h-8 max-w-md text-center text-lg leading-8 text-zinc-600 dark:text-zinc-400"
         >
-          {rehearsal && accountId && !live
-            ? "Rehearsal is free practice. Buy minutes for a live Call."
-            : buyIntent && !accountId
-              ? "Sign in to buy Whisper, Murmur, or Echo."
-              : error ?? (latestText || (accountId ? "A voice-first companion." : "Sign in to talk."))}
+          {error
+            ? error
+            : rehearsal && accountId && !live
+              ? "Rehearsal is free practice. Buy minutes for a live Call."
+              : buyIntent && !accountId
+                ? "Sign in to buy Whisper, Murmur, or Echo."
+                : latestText || (accountId ? "A voice-first companion." : "Sign in to talk.")}
         </p>
         {(rehearsal && accountId && !live) || (buyIntent && !live) ? (
           <section className="mt-6 flex w-full max-w-4xl flex-col items-center" aria-label="Rehearsal">

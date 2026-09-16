@@ -78,6 +78,8 @@ assert.ok(packsSrc.includes("thumbnail"), "packs declare thumbnail paths");
 assert.ok(packsSrc.includes("/buy/whisper.jpg"), "whisper thumbnail path");
 assert.ok(packsSrc.includes("/buy/murmur.jpg"), "murmur thumbnail path");
 assert.ok(packsSrc.includes("/buy/echo.jpg"), "echo thumbnail path");
+assert.ok(!packsSrc.includes("existsSync"), "pack thumbs are not fs.stat'd at render");
+assert.ok(packsSrc.includes("packThumbnailSrc"), "pack thumbs resolve without node:fs");
 
 const buyPage = readFileSync(new URL("../app/buy/page.tsx", import.meta.url), "utf8");
 assert.ok(!buyPage.includes("redirect"), "buy catalog is public");
@@ -92,6 +94,10 @@ assert.ok(buyClient.includes("Whisper") || buyPage.includes("buyPagePacks"), "bu
 assert.ok(buyClient.includes("BuyPacks"), "buy page uses shared pack cards");
 assert.ok(buyClient.includes("signedIn"), "buy passes sign-in to cards");
 assert.ok(buyClient.includes("stripeReady"), "buy surfaces billing status");
+assert.ok(!buyClient.includes("existsSync"), "buy client does not restat pack thumbs");
+assert.ok(!buyClient.includes("Date.now"), "buy client does not clock-render");
+assert.ok(!buyClient.includes("document.cookie"), "buy client does not re-read session cookies");
+assert.ok(!buyClient.includes("@/lib/wallet/packs"), "buy client uses server-computed pack props");
 
 const buyPacks = readFileSync(new URL("../components/buy-packs.tsx", import.meta.url), "utf8");
 assert.ok(buyPacks.includes("pack.thumbnail"), "buy cards render thumbnails when present");
@@ -108,12 +114,17 @@ assert.ok(homeSrc.includes("BuyPacks"), "home can show pack cards");
 assert.ok(homeSrc.includes("Rehearsal"), "rehearsal screen label");
 assert.ok(homeSrc.includes("catalogPacks"), "home receives public catalog");
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
+assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
 
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs");
 
 const balanceSrc = readFileSync(new URL("../app/api/billing/balance/route.ts", import.meta.url), "utf8");
 assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
+assert.ok(balanceSrc.includes('from "next/headers"'), "balance reads Next cookies like /buy");
+assert.ok(balanceSrc.includes("LEXI_SESSION_COOKIE"), "balance uses lexi_session");
+assert.ok(balanceSrc.includes("verifyAuthSession"), "balance verifies the same session token");
+assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
 assert.ok(buySuccess.includes("Minutes added"), "success copy");
@@ -146,6 +157,7 @@ assert.ok(voiceSrc.includes("CREATE TABLE IF NOT EXISTS voice_sessions"), "voice
 assert.ok(voiceSrc.includes("voice_seconds"), "voice_seconds column");
 assert.ok(voiceSrc.includes("VOICE_HOLD_SECONDS = 90"), "hold 90");
 assert.ok(voiceSrc.includes("VOICE_MIN_SECONDS = 30"), "min 30");
+assert.ok(voiceSrc.includes("export async function extendVoiceHold"), "extend hold while leftover remains");
 assert.ok(voiceSrc.includes("sweepStaleVoiceSessions"), "sweeper");
 assert.ok(voiceSrc.includes("stripe_event_id"), "idempotent stripe event");
 
@@ -160,12 +172,18 @@ assert.ok(!/model=grok-4-1-fast/.test(realtimeSrc), "no text model on mint route
 const sessionClient = readFileSync(new URL("../lib/voice/session.ts", import.meta.url), "utf8");
 assert.ok(sessionClient.includes('handlers.onError("Out of minutes.")'), "web surfaces Out of minutes.");
 assert.ok(sessionClient.includes("/^out of minutes"), "402 copy not wrapped in session id");
+assert.ok(sessionClient.includes("extendHoldAndRemint"), "web rolls hold instead of hanging up at 90s");
+assert.ok(sessionClient.includes("extend: extend") || sessionClient.includes("extend: true"), "web sends extend");
+assert.ok(homeSrc.includes("? error"), "Out of minutes is not hidden by rehearsal copy");
+assert.ok(homeSrc.includes("${callLeftSeconds}s left"), "live Call shows remaining time");
 
 const iosClient = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Shared/API/LexiAPIClient.swift", import.meta.url),
   "utf8",
 );
 assert.ok(iosClient.includes('"Out of minutes."'), "iOS surfaces Out of minutes.");
+assert.ok(iosClient.includes("extendRealtimeSession"), "iOS can extend the hold");
+assert.ok(realtimeSrc.includes("extendVoiceHold"), "web mint can extend");
 
 const stripeSrc = readFileSync(new URL("../lib/wallet/stripe.ts", import.meta.url), "utf8");
 assert.ok(stripeSrc.includes("constructEvent"), "webhook verifies signature");
@@ -179,7 +197,25 @@ assert.ok(stripeSrc.includes("pack:"), "checkout metadata pack");
 assert.ok(stripeSrc.includes("BUY_SUCCESS_URL"), "checkout success → /buy/success");
 assert.ok(stripeSrc.includes("BUY_CANCEL_URL"), "checkout cancel → /buy");
 assert.ok(stripeSrc.includes("createCheckoutByPriceId"), "priceId checkout helper");
+assert.ok(stripeSrc.includes("createSubscriptionCheckout"), "subscription checkout helper");
+assert.ok(stripeSrc.includes('mode: "subscription"'), "subscription checkout is recurring");
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
+
+const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
+assert.ok(subscribePage.includes("SubscribeClient"), "subscribe page renders client");
+assert.ok(subscribePage.includes("SUBSCRIPTION_PLAN"), "subscribe shows monthly plan");
+
+const subscribeClient = readFileSync(new URL("../app/subscribe/subscribe-client.tsx", import.meta.url), "utf8");
+assert.ok(subscribeClient.includes("/api/checkout/subscribe"), "subscribe posts subscription checkout");
+assert.ok(subscribeClient.includes("Subscribe"), "subscribe button");
+assert.ok(subscribeClient.includes("/?next=/subscribe"), "unsigned subscribe asks to sign in");
+
+const subscribeApi = readFileSync(new URL("../app/api/checkout/subscribe/route.ts", import.meta.url), "utf8");
+assert.ok(subscribeApi.includes("createSubscriptionCheckout"), "subscribe route creates subscription");
+
+assert.ok(packsSrc.includes("STRIPE_PRICE_SUBSCRIPTION"), "subscription price env");
+assert.ok(homeSrc.includes('href="/subscribe"'), "home nav links to /subscribe");
+assert.ok(buyClient.includes('href="/subscribe"'), "buy page links to /subscribe");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutRoute.includes("packId"), "legacy checkout takes packId");

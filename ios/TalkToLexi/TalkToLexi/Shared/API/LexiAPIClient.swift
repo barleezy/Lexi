@@ -10,6 +10,7 @@ struct IosSessionResponse {
     var sessionId: String?
     var voiceSessionId: String?
     var holdSeconds: Int?
+    var voiceSeconds: Int?
     var capAtMs: Double?
     var decayState: String?
     var memoryInstructions: String?
@@ -97,6 +98,33 @@ final class LexiAPIClient {
         if let sessionId, !sessionId.isEmpty { body["sessionId"] = sessionId }
         if let previousSessionId, !previousSessionId.isEmpty { body["previousSessionId"] = previousSessionId }
         if let location { body["location"] = location }
+        return try await postIosSession(body)
+    }
+
+    func extendRealtimeSession(
+        voiceSessionId: String,
+        sessionId: String?,
+        timeZone: String,
+        location: [String: Any]?,
+        musicPlaying: Bool,
+        musicTitle: String,
+        musicSource: String
+    ) async throws -> IosSessionResponse {
+        var body: [String: Any] = [
+            "userId": account.sessionUserId,
+            "clientTimeZone": timeZone,
+            "musicPlaying": musicPlaying,
+            "musicTitle": musicTitle,
+            "musicSource": musicSource,
+            "extend": true,
+            "voiceSessionId": voiceSessionId,
+        ]
+        if let sessionId, !sessionId.isEmpty { body["sessionId"] = sessionId }
+        if let location { body["location"] = location }
+        return try await postIosSession(body)
+    }
+
+    private func postIosSession(_ body: [String: Any]) async throws -> IosSessionResponse {
         let raw = try await postJSON("/api/ios/session", body: body)
         guard let token = raw["token"] as? String, !token.isEmpty else {
             let code = raw["code"] as? String
@@ -114,6 +142,7 @@ final class LexiAPIClient {
             sessionId: raw["sessionId"] as? String,
             voiceSessionId: raw["voiceSessionId"] as? String,
             holdSeconds: raw["holdSeconds"] as? Int,
+            voiceSeconds: raw["voiceSeconds"] as? Int,
             capAtMs: raw["capAtMs"] as? Double,
             decayState: raw["decayState"] as? String,
             memoryInstructions: raw["memoryInstructions"] as? String,

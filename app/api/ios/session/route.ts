@@ -6,9 +6,11 @@ import type { MusicSessionState } from "@/lib/voice/persona";
 import {
   OUT_OF_MINUTES_CODE,
   OUT_OF_MINUTES_MESSAGE,
+  extendVoiceHold,
   placeVoiceHold,
   REALTIME_VOICE_MODEL,
   releaseVoiceHold,
+  shrinkVoiceHold,
   sweepStaleVoiceSessions,
 } from "@/lib/wallet/voice";
 
@@ -45,6 +47,8 @@ export async function POST(request: Request) {
     musicTitle?: unknown;
     musicSource?: unknown;
     rehearsal?: unknown;
+    voiceSessionId?: unknown;
+    extend?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -80,7 +84,12 @@ export async function POST(request: Request) {
   }
 
   await sweepStaleVoiceSessions(userId);
-  const hold = await placeVoiceHold(userId);
+  const resumeVoiceSessionId =
+    typeof body.voiceSessionId === "string" ? body.voiceSessionId.trim() : "";
+  const hold =
+    body.extend === true && resumeVoiceSessionId
+      ? await extendVoiceHold(userId, resumeVoiceSessionId)
+      : await placeVoiceHold(userId);
   if (!hold.ok) {
     const status = hold.code === OUT_OF_MINUTES_CODE ? 402 : hold.code === "busy" ? 409 : 401;
     return Response.json(
@@ -94,7 +103,11 @@ export async function POST(request: Request) {
 
   const minted = await mintXaiClientSecret(key, hold.mintTtlSeconds);
   if (!minted.ok || !minted.token) {
-    await releaseVoiceHold(userId, hold.voiceSessionId);
+    if (body.extend === true) {
+      await shrinkVoiceHold(userId, hold.voiceSessionId, hold.addedSeconds ?? 0);
+    } else {
+      await releaseVoiceHold(userId, hold.voiceSessionId);
+    }
     return Response.json({ error: "Could not start a voice session." }, { status: 502 });
   }
 

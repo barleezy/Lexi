@@ -5,7 +5,11 @@ import { normalizeUserId } from "../memory/user";
 /** Minimum balance to start a Call. */
 export const VOICE_MIN_SECONDS = 30;
 
-/** Per-Call hold / hard cap (seconds). Mint TTL ≤ this. */
+/**
+ * Per-slice hold (seconds). Mint TTL ≤ remaining hold.
+ * Not a Call hard cap — client/server extend while wallet leftover > 0 so a
+ * paid Call lasts for the purchased balance. Small slices keep crash-sweep fast.
+ */
 export const VOICE_HOLD_SECONDS = 90;
 
 /** Sweeper grace after hold before forced settle. */
@@ -200,6 +204,7 @@ export type VoiceHoldOk = {
   startedAt: string;
   capAtMs: number;
   mintTtlSeconds: number;
+  addedSeconds?: number;
 };
 
 export type VoiceHoldFail = {
@@ -297,6 +302,139 @@ export async function placeVoiceHold(userId: string): Promise<VoiceHoldOk | Voic
     capAtMs: Date.parse(startedAt) + hold * 1000,
     mintTtlSeconds: hold,
   };
+}
+
+function holdResultFromRow(
+  row: { id?: string; started_at?: string; hold_seconds?: number; voice_seconds?: number },
+  addedSeconds = 0,
+): VoiceHoldOk {
+  const startedAt = String(row.started_at ?? new Date().toISOString());
+  const hold = Math.floor(Number(row.hold_seconds) || 0);
+  const startedMs = Date.parse(startedAt);
+  const elapsed = Number.isFinite(startedMs)
+    ? Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+    : 0;
+  return {
+    ok: true,
+    voiceSessionId: String(row.id),
+    holdSeconds: hold,
+    voiceSeconds: Math.max(0, Math.floor(Number(row.voice_seconds) || 0)),
+    startedAt,
+    capAtMs: (Number.isFinite(startedMs) ? startedMs : Date.now()) + hold * 1000,
+    mintTtlSeconds: Math.max(1, hold - elapsed),
+    addedSeconds,
+  };
+}
+
+/**
+ * Debit another slice onto an open Call. leftover < VOICE_MIN_SECONDS is ok —
+ * add whatever remains so paid minutes are not stranded at the 90s slice boundary.
+ */
+export async function extendVoiceHold(
+  userId: string,
+  voiceSessionId: string,
+): Promise<VoiceHoldOk | VoiceHoldFail> {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, code: "no_account", error: "Sign in first." };
+  if (!voiceSessionId) return { ok: false, code: "busy", error: "Voice session expired. Start a new Call." };
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return { ok: false, code: "not_configured", error: "Voice wallet is not configured." };
+
+  const account = await findAccountRow(id);
+  if (!account?.user_id) return { ok: false, code: "no_account", error: "Sign in first." };
+  const accountId = account.user_id;
+
+  const open = asRows<{ id?: string; hold_seconds?: number; started_at?: string; settled_at?: string | null }>(
+    await db.query(
+      `
+      SELECT id, hold_seconds, started_at, settled_at
+      FROM voice_sessions
+      WHERE id = $1::uuid AND lower(user_id) = lower($2) AND settled_at IS NULL
+      LIMIT 1
+    `,
+      [voiceSessionId, accountId],
+    ),
+  );
+  if (!open[0]?.id) {
+    return { ok: false, code: "busy", error: "Voice session expired. Start a new Call." };
+  }
+
+  const balance = (await readVoiceSeconds(accountId)) ?? 0;
+  if (balance <= 0) {
+    return { ok: false, code: OUT_OF_MINUTES_CODE, error: OUT_OF_MINUTES_MESSAGE };
+  }
+  const addSeconds = Math.min(VOICE_HOLD_SECONDS, balance);
+
+  const rows = asRows<{
+    id?: string;
+    started_at?: string;
+    hold_seconds?: number;
+    voice_seconds?: number;
+  }>(
+    await db.query(
+      `
+      WITH open_session AS (
+        SELECT id FROM voice_sessions
+        WHERE id = $4::uuid AND lower(user_id) = lower($1) AND settled_at IS NULL
+      ),
+      debited AS (
+        UPDATE accounts
+        SET voice_seconds = voice_seconds - $2, updated_at = now()
+        WHERE user_id = $1
+          AND voice_seconds >= $3
+          AND EXISTS (SELECT 1 FROM open_session)
+        RETURNING voice_seconds
+      ),
+      updated AS (
+        UPDATE voice_sessions vs
+        SET hold_seconds = vs.hold_seconds + $2
+        FROM open_session o, debited d
+        WHERE vs.id = o.id AND vs.settled_at IS NULL
+        RETURNING vs.id, vs.started_at, vs.hold_seconds
+      )
+      SELECT u.id, u.started_at, u.hold_seconds, d.voice_seconds
+      FROM updated u
+      CROSS JOIN debited d
+    `,
+      [accountId, addSeconds, addSeconds, voiceSessionId],
+    ),
+  );
+
+  const row = rows[0];
+  if (!row?.id) {
+    const again = (await readVoiceSeconds(accountId)) ?? 0;
+    if (again <= 0) {
+      return { ok: false, code: OUT_OF_MINUTES_CODE, error: OUT_OF_MINUTES_MESSAGE };
+    }
+    return { ok: false, code: "busy", error: "Voice session expired. Start a new Call." };
+  }
+  return holdResultFromRow(row, addSeconds);
+}
+
+/** Undo a just-added extend slice when remint fails. Session stays open. */
+export async function shrinkVoiceHold(userId: string, voiceSessionId: string, seconds: number) {
+  const id = normalizeUserId(userId);
+  const refund = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (!id || !voiceSessionId || refund <= 0) return null;
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return null;
+
+  await db.query(
+    `
+    UPDATE voice_sessions
+    SET hold_seconds = GREATEST(
+      hold_seconds - $1,
+      GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)))::int)
+    )
+    WHERE id = $2::uuid AND lower(user_id) = lower($3) AND settled_at IS NULL
+  `,
+    [refund, voiceSessionId, id],
+  );
+  await db.query(
+    `UPDATE accounts SET voice_seconds = voice_seconds + $1, updated_at = now() WHERE lower(user_id) = lower($2)`,
+    [refund, id],
+  );
+  return { refunded: refund };
 }
 
 /** Refund full hold when mint fails after debit. */

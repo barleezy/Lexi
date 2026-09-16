@@ -4,6 +4,8 @@ import {
   BUY_SUCCESS_URL,
   isStripeConfigured,
   stripePriceIdForPack,
+  stripeSubscriptionPriceId,
+  SUBSCRIPTION_PLAN,
   voicePackById,
   voicePackByPriceId,
   type VoicePackId,
@@ -34,6 +36,37 @@ async function createCheckoutForPack(input: {
     metadata: {
       user_id: input.userId,
       pack: input.pack.id,
+    },
+  });
+  if (!session.url) return { ok: false as const, status: 502, error: "Could not start Checkout." };
+  return { ok: true as const, url: session.url, sessionId: session.id };
+}
+
+/** /api/checkout/subscribe — recurring monthly Checkout. Same return URLs as packs. */
+export async function createSubscriptionCheckout(input: {
+  userId: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const env = input.env ?? process.env;
+  if (!isStripeConfigured(env)) {
+    return { ok: false as const, status: 503, error: "Billing is not configured." };
+  }
+  const priceId = stripeSubscriptionPriceId(env);
+  if (!priceId) {
+    return { ok: false as const, status: 503, error: "That plan is not for sale yet." };
+  }
+  const stripe = stripeClient(env);
+  if (!stripe) return { ok: false as const, status: 503, error: "Billing is not configured." };
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    line_items: [{ price: priceId, quantity: 1 }],
+    success_url: BUY_SUCCESS_URL,
+    cancel_url: BUY_CANCEL_URL,
+    client_reference_id: input.userId,
+    metadata: {
+      user_id: input.userId,
+      plan: SUBSCRIPTION_PLAN.id,
     },
   });
   if (!session.url) return { ok: false as const, status: 502, error: "Could not start Checkout." };

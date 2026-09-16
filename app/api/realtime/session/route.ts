@@ -13,10 +13,12 @@ import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice
 import {
   OUT_OF_MINUTES_CODE,
   OUT_OF_MINUTES_MESSAGE,
+  extendVoiceHold,
   placeVoiceHold,
   readOpenVoiceSession,
   REALTIME_VOICE_MODEL,
   releaseVoiceHold,
+  shrinkVoiceHold,
   sweepStaleVoiceSessions,
 } from "@/lib/wallet/voice";
 
@@ -69,6 +71,7 @@ export async function POST(request: Request) {
   let previousSessionId: string | null = null;
   let rehearsal = false;
   let resumeVoiceSessionId = "";
+  let extendHold = false;
   try {
     const body = (await request.json()) as {
       sessionId?: unknown;
@@ -79,6 +82,7 @@ export async function POST(request: Request) {
       rehearsal?: unknown;
       voiceSessionId?: unknown;
       resume?: unknown;
+      extend?: unknown;
     };
     if (typeof body.sessionId === "string") sessionId = body.sessionId;
     if (typeof body.logSessionId === "string") logSessionId = body.logSessionId;
@@ -88,6 +92,7 @@ export async function POST(request: Request) {
     if (typeof body.previousSessionId === "string") previousSessionId = body.previousSessionId;
     else previousSessionId = null;
     rehearsal = body.rehearsal === true;
+    extendHold = body.extend === true;
     if (typeof body.voiceSessionId === "string") resumeVoiceSessionId = body.voiceSessionId.trim();
     const requestedMemory =
       parseSessionId(typeof body.memorySessionId === "string" ? body.memorySessionId : null) ??
@@ -140,13 +145,31 @@ export async function POST(request: Request) {
   await sweepStaleVoiceSessions(userId);
 
   let hold: Awaited<ReturnType<typeof placeVoiceHold>> | null = null;
+  let extended: Awaited<ReturnType<typeof extendVoiceHold>> | null = null;
   let mintTtl = 90;
   let voiceSessionId = "";
   let holdSeconds = 90;
   let voiceSeconds = 0;
   let capAtMs = Date.now() + 90_000;
 
-  if (resumeVoiceSessionId) {
+  if (extendHold && resumeVoiceSessionId) {
+    extended = await extendVoiceHold(userId, resumeVoiceSessionId);
+    if (!extended.ok) {
+      const status = extended.code === OUT_OF_MINUTES_CODE ? 402 : extended.code === "busy" ? 409 : 401;
+      return Response.json(
+        {
+          error: extended.code === OUT_OF_MINUTES_CODE ? OUT_OF_MINUTES_MESSAGE : extended.error,
+          code: extended.code,
+        },
+        { status },
+      );
+    }
+    mintTtl = extended.mintTtlSeconds;
+    voiceSessionId = extended.voiceSessionId;
+    holdSeconds = extended.holdSeconds;
+    voiceSeconds = extended.voiceSeconds;
+    capAtMs = extended.capAtMs;
+  } else if (resumeVoiceSessionId) {
     const open = await readOpenVoiceSession(userId, resumeVoiceSessionId);
     if (!open) {
       return Response.json({ error: "Voice session expired. Start a new Call." }, { status: 409 });
@@ -195,7 +218,8 @@ export async function POST(request: Request) {
   }
 
   if (!minted.upstream.ok || !minted.token) {
-    if (hold?.ok) await releaseVoiceHold(userId, hold.voiceSessionId);
+    if (extended?.ok) await shrinkVoiceHold(userId, extended.voiceSessionId, extended.addedSeconds ?? 0);
+    else if (hold?.ok) await releaseVoiceHold(userId, hold.voiceSessionId);
     const raw =
       minted.data &&
       typeof minted.data === "object" &&

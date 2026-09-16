@@ -140,6 +140,7 @@ type SessionHandlers = {
   onToyControlRequest?: (pending: boolean) => void;
   onMicNeedsGesture?: () => void;
   onMicRecovered?: () => void;
+  onWallet?: (info: { voiceSeconds: number; holdSeconds: number; capAtMs: number | null }) => void;
   onGeneratedMedia?: (item: GeneratedMediaItem) => void;
   onMusicState?: (state: MusicSessionState) => void;
   connectAppleMusic?: () => Promise<{ ok: boolean; connected?: boolean; error?: string }>;
@@ -877,6 +878,9 @@ export class VoiceSession {
   private voiceSessionId: string | null = null;
   private capAtMs: number | null = null;
   private capTimer: ReturnType<typeof setTimeout> | null = null;
+  private walletLeftover = 0;
+  private holdSeconds = 0;
+  private extendingHold = false;
   private settlePosted = false;
   private inflightTools = new Set<string>();
   private handledTools = new Set<string>();
@@ -1417,6 +1421,9 @@ export class VoiceSession {
       clearTimeout(this.capTimer);
       this.capTimer = null;
     }
+    this.extendingHold = false;
+    this.walletLeftover = 0;
+    this.holdSeconds = 0;
     this.postVoiceSettle();
     writePreviousSessionId(null);
     writeVoiceSessionStore({
@@ -1473,7 +1480,7 @@ export class VoiceSession {
     this.setPhase("idle");
   }
 
-  private async fetchSessionToken(resume: boolean) {
+  private async fetchSessionToken(resume: boolean, extend = false) {
     const tokenStarted = Date.now();
     const userId = clientUserId();
     if (!resume) {
@@ -1484,6 +1491,8 @@ export class VoiceSession {
       this.rows = [];
       this.voiceSessionId = null;
       this.capAtMs = null;
+      this.walletLeftover = 0;
+      this.holdSeconds = 0;
       this.settlePosted = false;
       this.setMemorySessionId(newMemorySessionId(), userId);
       const response = await this.postRealtimeSession({
@@ -1511,10 +1520,7 @@ export class VoiceSession {
       this.priorTurns = [];
       this.seedPriorTranscripts();
       this.setMemorySessionId(body.sessionId ?? this.memorySessionId, userId);
-      this.voiceSessionId =
-        typeof body.voiceSessionId === "string" && body.voiceSessionId ? body.voiceSessionId : null;
-      this.capAtMs = typeof body.capAtMs === "number" && Number.isFinite(body.capAtMs) ? body.capAtMs : null;
-      this.armCapHangup();
+      this.applyHold(body);
       writeVoiceSessionStore({
         sessionId: this.memorySessionId,
         previousSessionId: null,
@@ -1543,13 +1549,14 @@ export class VoiceSession {
       previousSessionId: null,
       voiceSessionId: this.voiceSessionId,
       resume: true,
+      extend: extend || undefined,
     });
     const body = await this.readSessionBody(response);
     if (response.status === 402 || body.code === "out_of_minutes") {
       throw new Error("Out of minutes.");
     }
     if (!response.ok || !body.token) {
-      this.logger.error("token.resume", new Error(body.error || "token"), {
+      this.logger.error(extend ? "token.extend" : "token.resume", new Error(body.error || "token"), {
         ms: Date.now() - tokenStarted,
       });
       throw new Error(body.error || "Could not resume the voice session.");
@@ -1557,19 +1564,14 @@ export class VoiceSession {
     if (typeof body.memoryInstructions === "string") {
       this.memoryInstructions = body.memoryInstructions;
     }
-    if (typeof body.voiceSessionId === "string" && body.voiceSessionId) {
-      this.voiceSessionId = body.voiceSessionId;
-    }
-    if (typeof body.capAtMs === "number" && Number.isFinite(body.capAtMs)) {
-      this.capAtMs = body.capAtMs;
-      this.armCapHangup();
-    }
+    this.applyHold(body);
     // Keep in-call prior on reconnect; hangup already cleared it for the next Call.
     this.setMemorySessionId(body.sessionId ?? this.memorySessionId, userId);
-    this.logger.log("token.resume", {
+    this.logger.log(extend ? "token.extend" : "token.resume", {
       ms: Date.now() - tokenStarted,
       memory_session: this.memorySessionId ?? undefined,
       voice_session: this.voiceSessionId ?? undefined,
+      hold_seconds: body.holdSeconds,
     });
     return body.token;
   }
@@ -1603,6 +1605,32 @@ export class VoiceSession {
     };
   }
 
+  private applyHold(body: {
+    voiceSessionId?: string | null;
+    holdSeconds?: number;
+    voiceSeconds?: number;
+    capAtMs?: number;
+  }) {
+    if (typeof body.voiceSessionId === "string" && body.voiceSessionId) {
+      this.voiceSessionId = body.voiceSessionId;
+    }
+    if (typeof body.holdSeconds === "number" && Number.isFinite(body.holdSeconds)) {
+      this.holdSeconds = Math.max(0, Math.floor(body.holdSeconds));
+    }
+    if (typeof body.voiceSeconds === "number" && Number.isFinite(body.voiceSeconds)) {
+      this.walletLeftover = Math.max(0, Math.floor(body.voiceSeconds));
+    }
+    if (typeof body.capAtMs === "number" && Number.isFinite(body.capAtMs)) {
+      this.capAtMs = body.capAtMs;
+    }
+    this.handlers.onWallet?.({
+      voiceSeconds: this.walletLeftover,
+      holdSeconds: this.holdSeconds,
+      capAtMs: this.capAtMs,
+    });
+    this.armCapHangup();
+  }
+
   private armCapHangup() {
     if (this.capTimer) {
       clearTimeout(this.capTimer);
@@ -1610,11 +1638,35 @@ export class VoiceSession {
     }
     if (!this.capAtMs) return;
     const wait = Math.max(0, this.capAtMs - Date.now());
+    // Roll another 90s slice ~12s before the token/hold dies so paid Calls
+    // last for leftover minutes instead of hanging up at the first hold.
+    const lead = 12_000;
+    if (this.walletLeftover > 0) {
+      this.capTimer = setTimeout(() => {
+        void this.extendHoldAndRemint();
+      }, Math.max(0, wait - lead));
+      return;
+    }
     this.capTimer = setTimeout(() => {
-      this.logger.log("voice.cap", { capAtMs: this.capAtMs });
-      this.handlers.onError?.("Out of minutes.");
-      this.stop("client");
+      this.logger.log("voice.cap", { capAtMs: this.capAtMs, leftover: this.walletLeftover });
+      this.fail(new Error("Out of minutes."));
     }, wait);
+  }
+
+  private async extendHoldAndRemint() {
+    if (this.stopped || this.extendingHold) return;
+    this.extendingHold = true;
+    this.logger.log("voice.extend", { leftover: this.walletLeftover, capAtMs: this.capAtMs });
+    try {
+      const token = await this.fetchSessionToken(true, true);
+      if (this.stopped) return;
+      this.openWebSocket(token, true);
+    } catch (error) {
+      this.logger.error("voice.extend", error);
+      this.fail(error);
+    } finally {
+      this.extendingHold = false;
+    }
   }
 
   private postVoiceSettle() {

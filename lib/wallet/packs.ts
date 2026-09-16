@@ -1,6 +1,3 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-
 /** Canonical production origin. Apex talktolexi.app 307s to www — Stripe will not follow. */
 export const CANONICAL_APP_ORIGIN = "https://www.talktolexi.app";
 
@@ -10,6 +7,23 @@ export const STRIPE_WEBHOOK_URL = `${CANONICAL_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}
 
 export const BUY_SUCCESS_URL = `${CANONICAL_APP_ORIGIN}/buy/success`;
 export const BUY_CANCEL_URL = `${CANONICAL_APP_ORIGIN}/buy`;
+
+/** Recurring monthly tier. Stripe price ID is STRIPE_PRICE_SUBSCRIPTION. */
+export const SUBSCRIPTION_PLAN = {
+  id: "monthly",
+  label: "Monthly",
+  priceLabel: "$9.99",
+  cadence: "per month",
+  envPrice: "STRIPE_PRICE_SUBSCRIPTION",
+} as const;
+
+export function stripeSubscriptionPriceId(env: NodeJS.ProcessEnv = process.env) {
+  return env[SUBSCRIPTION_PLAN.envPrice]?.trim() || "";
+}
+
+export function isSubscriptionConfigured(env: NodeJS.ProcessEnv = process.env) {
+  return Boolean(isStripeConfigured(env) && stripeSubscriptionPriceId(env));
+}
 
 /**
  * Minute packs. Seconds live only in server config — never trust the client.
@@ -47,6 +61,14 @@ export const VOICE_PACKS = [
 ] as const;
 
 export type VoicePackId = (typeof VOICE_PACKS)[number]["id"];
+
+/** Pack jpgs that are actually in /public. Keep this static so SSR and the client pick the same src. */
+const PUBLIC_PACK_THUMBS = new Set<string>();
+const PACK_THUMB_FALLBACK = "/lexi.jpg";
+
+export function packThumbnailSrc(thumbnail: string) {
+  return PUBLIC_PACK_THUMBS.has(thumbnail) ? thumbnail : PACK_THUMB_FALLBACK;
+}
 
 const LEGACY_PACK_IDS: Record<string, VoicePackId> = {
   pack_10: "whisper",
@@ -90,13 +112,12 @@ export function publicPacks(env: NodeJS.ProcessEnv = process.env) {
 export function buyPagePacks(env: NodeJS.ProcessEnv = process.env) {
   return VOICE_PACKS.map((pack) => {
     const priceId = stripePriceIdForPack(pack, env);
-    const publicFile = join(process.cwd(), "public", pack.thumbnail.replace(/^\//, ""));
     return {
       id: pack.id,
       label: pack.label,
       minutes: pack.minutes,
       priceLabel: pack.priceLabel,
-      thumbnail: existsSync(publicFile) ? pack.thumbnail : "/lexi.jpg",
+      thumbnail: packThumbnailSrc(pack.thumbnail),
       priceId,
       configured: Boolean(priceId),
     };

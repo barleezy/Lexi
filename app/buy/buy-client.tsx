@@ -8,12 +8,12 @@ export type { BuyPackCard };
 
 export function BuyClient({
   packs,
-  signedIn = false,
-  stripeReady = false,
+  signedIn,
+  stripeReady,
 }: {
   packs: BuyPackCard[];
-  signedIn?: boolean;
-  stripeReady?: boolean;
+  signedIn: boolean;
+  stripeReady: boolean;
 }) {
   return (
     <div className="buy-page relative flex min-h-dvh flex-1 flex-col overflow-hidden">
@@ -70,6 +70,10 @@ export function BuyClient({
         <BuyPacks packs={packs} signedIn={signedIn} className="mt-12 w-full max-w-4xl sm:mt-16" />
 
         <p className="mt-auto pt-12 text-sm text-zinc-400">
+          <Link href="/subscribe" className="underline-offset-4 hover:underline hover:text-white">
+            Subscribe monthly
+          </Link>
+          <span className="px-2">·</span>
           <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
             Back to Call
           </Link>

@@ -33,6 +33,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     private var connectGeneration = 0
     private var refreshGeneration = 0
     private var authRefreshCount = 0
+    private var walletLeftover = 0
+    private var extendingHold = false
     private var cancellables = Set<AnyCancellable>()
 
     var phaseLabel: String {
@@ -249,6 +251,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     func endCall() {
         connectGeneration += 1
         isConnecting = false
+        extendingHold = false
+        walletLeftover = 0
         let sessionId = realtime.memorySessionId
         let voiceSessionId = realtime.voiceSessionId
         realtime.stop()
@@ -282,12 +286,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         guard gen == connectGeneration else { return }
         realtime.memorySessionId = session.sessionId
         realtime.voiceSessionId = session.voiceSessionId
-        if let capAtMs = session.capAtMs {
-            realtime.armVoiceCap(capAtMs: capAtMs) { [weak self] in
-                self?.lastError = "Out of minutes."
-                self?.endCall()
-            }
-        }
+        applyVoiceHold(session)
         var update = session.sessionUpdate
         if update == nil {
             update = [
@@ -312,6 +311,70 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             realtime.notifyVision(source: "camera", active: true)
         }
         refreshStatus()
+    }
+
+    private func applyVoiceHold(_ session: IosSessionResponse) {
+        walletLeftover = session.voiceSeconds ?? 0
+        guard let capAtMs = session.capAtMs else { return }
+        let lead: Double = walletLeftover > 0 ? 12 : 0
+        realtime.armVoiceCap(capAtMs: capAtMs - lead * 1000) { [weak self] in
+            guard let self else { return }
+            if self.walletLeftover > 0 {
+                self.extendHoldOrHangup()
+            } else {
+                self.lastError = "Out of minutes."
+                self.endCall()
+            }
+        }
+    }
+
+    private func extendHoldOrHangup() {
+        if extendingHold { return }
+        extendingHold = true
+        let voiceSessionId = realtime.voiceSessionId ?? ""
+        let sessionId = realtime.memorySessionId
+        Task {
+            defer { extendingHold = false }
+            do {
+                guard !voiceSessionId.isEmpty else {
+                    lastError = "Out of minutes."
+                    endCall()
+                    return
+                }
+                let session = try await api.extendRealtimeSession(
+                    voiceSessionId: voiceSessionId,
+                    sessionId: sessionId,
+                    timeZone: TimeZone.current.identifier,
+                    location: location.payload(),
+                    musicPlaying: music.playing,
+                    musicTitle: music.title,
+                    musicSource: music.source
+                )
+                guard realtime.isLive else { return }
+                realtime.memorySessionId = session.sessionId ?? sessionId
+                realtime.voiceSessionId = session.voiceSessionId ?? voiceSessionId
+                applyVoiceHold(session)
+                var update = session.sessionUpdate
+                if update == nil {
+                    update = [
+                        "type": "session.update",
+                        "session": [
+                            "voice": "aria",
+                            "instructions": session.instructions ?? "",
+                            "turn_detection": ["type": "server_vad"],
+                        ],
+                    ]
+                }
+                realtime.start(
+                    token: session.token,
+                    realtimeURL: session.realtimeUrl ?? "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
+                    sessionUpdate: update ?? [:]
+                )
+            } catch {
+                lastError = error.localizedDescription
+                endCall()
+            }
+        }
     }
 
     private func refreshVoiceSession() {
