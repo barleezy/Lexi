@@ -62,6 +62,14 @@ export async function ensureVoiceWalletSchema() {
         `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS voice_seconds integer NOT NULL DEFAULT 0`,
       );
       await db.query(
+        `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS paid boolean NOT NULL DEFAULT false`,
+      );
+      await db.query(
+        `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscribed boolean NOT NULL DEFAULT false`,
+      );
+      await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text`);
+      await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id text`);
+      await db.query(
         `
         CREATE TABLE IF NOT EXISTS voice_sessions (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -105,9 +105,6 @@ const HINTS: Record<VoicePhase, string> = {
   speaking: "Speaking…",
 };
 
-const showRehearsalBadge =
-  process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_STRIPE_MODE === "test";
-
 function StrokedWaveformIcon() {
   return (
     <svg
@@ -345,6 +342,7 @@ export function VoiceHome({
   const [buyPacks, setBuyPacks] = useState<BuyPackCard[]>(catalogPacks);
   const [buyIntent, setBuyIntent] = useState(false);
   const [rehearsal, setRehearsal] = useState(false);
+  const [subscribed, setSubscribed] = useState(false);
   const [callCapAtMs, setCallCapAtMs] = useState<number | null>(null);
   const [callLeftover, setCallLeftover] = useState(0);
   const [callTick, setCallTick] = useState(0);
@@ -1237,6 +1235,7 @@ export function VoiceHome({
         setVoiceSeconds(null);
         setVoiceLabel("");
         setBuyPacks(catalogPacks);
+        setSubscribed(false);
         return null;
       }
       const body = (await response.json()) as {
@@ -1244,6 +1243,7 @@ export function VoiceHome({
         label?: string;
         stripeConfigured?: boolean;
         buyPacks?: BuyPackCard[];
+        subscribed?: boolean;
       };
       if (!response.ok) return null;
       const seconds = typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0;
@@ -1251,6 +1251,7 @@ export function VoiceHome({
       setVoiceLabel(typeof body.label === "string" ? body.label : "");
       setStripeConfigured(body.stripeConfigured === true);
       setBuyPacks(Array.isArray(body.buyPacks) && body.buyPacks.length ? body.buyPacks : catalogPacks);
+      setSubscribed(body.subscribed === true);
       return seconds;
     } catch {
       return null;
@@ -1673,6 +1674,9 @@ export function VoiceHome({
     setAccountResetToken("");
     setAccountNotice(null);
     setAccountPanel("auth");
+    setBuyIntent(false);
+    setRehearsal(false);
+    setSubscribed(false);
     writeVoiceSessionStore({ userId: "" });
     try {
       await fetch("/api/auth", { method: "DELETE" });
@@ -1688,8 +1692,9 @@ export function VoiceHome({
     }
     const seconds = await refreshVoiceBalance();
     if (seconds !== null && seconds <= 0) {
-      setRehearsal(true);
       setBuyIntent(true);
+      if (process.env.NODE_ENV === "development") setRehearsal(true);
+      else setRehearsal(false);
       return null;
     }
     setRehearsal(false);
@@ -1774,7 +1779,10 @@ export function VoiceHome({
       },
       onError: (message) => {
         setError(message);
-        if (/^out of minutes\.?$/i.test(message.trim())) setRehearsal(true);
+        if (/^out of minutes\.?$/i.test(message.trim())) {
+          setBuyIntent(true);
+          if (process.env.NODE_ENV === "development") setRehearsal(true);
+        }
         releaseVision(undefined, false);
         clearSession();
         void refreshVoiceBalance();
@@ -1977,12 +1985,14 @@ export function VoiceHome({
             >
               Buy minutes
             </a>
-            <a
-              href="/subscribe"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Subscribe
-            </a>
+            {!subscribed ? (
+              <a
+                href="/subscribe"
+                className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+              >
+                Subscribe
+              </a>
+            ) : null}
             <button
               type="button"
               onClick={signOutAccount}
@@ -2031,19 +2041,28 @@ export function VoiceHome({
         >
           {error
             ? error
-            : rehearsal && accountId && !live
+            : process.env.NODE_ENV === "development" && rehearsal && accountId && !live
               ? "Rehearsal is free practice. Buy minutes for a live Call."
               : buyIntent && !accountId
                 ? "Sign in to buy Whisper, Murmur, or Echo."
-                : latestText || (accountId ? "A voice-first companion." : "Sign in to talk.")}
+                : buyIntent && !live
+                  ? "Buy minutes for a live Call."
+                  : latestText || (accountId ? "A voice-first companion." : "Sign in to talk.")}
         </p>
-        {(rehearsal && accountId && !live) || (buyIntent && !live) ? (
-          <section className="mt-6 flex w-full max-w-4xl flex-col items-center" aria-label="Rehearsal">
-            {rehearsal && accountId && showRehearsalBadge ? (
+        {buyIntent && !live ? (
+          <section
+            className="mt-6 flex w-full max-w-4xl flex-col items-center"
+            aria-label={
+              process.env.NODE_ENV === "development" && rehearsal && accountId
+                ? "Rehearsal"
+                : "Minutes"
+            }
+          >
+            {process.env.NODE_ENV === "development" && rehearsal && accountId ? (
               <p className="text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
                 Rehearsal
               </p>
-            ) : rehearsal && accountId ? null : (
+            ) : (
               <p className="text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
                 Minutes
               </p>

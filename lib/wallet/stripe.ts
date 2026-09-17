@@ -12,6 +12,10 @@ import {
   voicePackByPriceId,
   type VoicePackId,
 } from "./packs";
+import {
+  markAccountSubscribed,
+  setSubscriptionByStripeId,
+} from "./subscription";
 import { creditVoiceSeconds } from "./voice";
 
 export function stripeClient(env: NodeJS.ProcessEnv = process.env) {
@@ -96,6 +100,12 @@ export async function createSubscriptionCheckout(input: {
         user_id: input.userId,
         plan: SUBSCRIPTION_PLAN.id,
       },
+      subscription_data: {
+        metadata: {
+          user_id: input.userId,
+          plan: SUBSCRIPTION_PLAN.id,
+        },
+      },
     });
     if (!session.url) {
       console.error("[subscribe-checkout] Stripe session had no URL", session.id);
@@ -163,6 +173,37 @@ export async function handleStripeWebhook(input: {
     return { ok: false as const, status: 400, error: "Invalid Stripe signature." };
   }
 
+  if (event.type === "customer.subscription.deleted") {
+    const subscription = event.data.object as Stripe.Subscription;
+    const userId =
+      (typeof subscription.metadata?.user_id === "string" && subscription.metadata.user_id.trim()) ||
+      (typeof subscription.metadata?.userId === "string" && subscription.metadata.userId.trim()) ||
+      "";
+    const updated = await setSubscriptionByStripeId({
+      subscriptionId: subscription.id,
+      customerId: typeof subscription.customer === "string" ? subscription.customer : "",
+      userId,
+      subscribed: false,
+    });
+    return { ok: true as const, subscribed: false, ...updated };
+  }
+
+  if (event.type === "customer.subscription.updated") {
+    const subscription = event.data.object as Stripe.Subscription;
+    const userId =
+      (typeof subscription.metadata?.user_id === "string" && subscription.metadata.user_id.trim()) ||
+      (typeof subscription.metadata?.userId === "string" && subscription.metadata.userId.trim()) ||
+      "";
+    const subscribed = subscription.status === "active" || subscription.status === "trialing";
+    const updated = await setSubscriptionByStripeId({
+      subscriptionId: subscription.id,
+      customerId: typeof subscription.customer === "string" ? subscription.customer : "",
+      userId,
+      subscribed,
+    });
+    return { ok: true as const, subscribed, ...updated };
+  }
+
   if (event.type !== "checkout.session.completed") {
     return { ok: true as const, ignored: true as const };
   }
@@ -173,6 +214,28 @@ export async function handleStripeWebhook(input: {
     (typeof session.metadata?.userId === "string" && session.metadata.userId.trim()) ||
     (typeof session.client_reference_id === "string" && session.client_reference_id.trim()) ||
     "";
+  const subscriptionCheckout =
+    session.mode === "subscription" || session.metadata?.plan === SUBSCRIPTION_PLAN.id;
+  if (subscriptionCheckout) {
+    if (!userId) {
+      return {
+        ok: true as const,
+        ignored: true as const,
+        reason: "missing_checkout_metadata",
+      };
+    }
+    const marked = await markAccountSubscribed({
+      userId,
+      customerId: typeof session.customer === "string" ? session.customer : "",
+      subscriptionId: typeof session.subscription === "string" ? session.subscription : "",
+      subscribed: true,
+    });
+    if (!marked.ok) {
+      return { ok: false as const, status: 500, error: marked.error };
+    }
+    return { ok: true as const, subscribed: true, userId: marked.userId };
+  }
+
   // Seconds always from server pack map — never trust a client-invented amount.
   const pack = voicePackById(session.metadata?.pack ?? session.metadata?.packId);
   const seconds = pack?.seconds ?? 0;

@@ -117,6 +117,16 @@ const homeSrc = readFileSync(new URL("../components/voice-home.tsx", import.meta
 assert.ok(homeSrc.includes('href="/buy"'), "home Buy links to /buy");
 assert.ok(homeSrc.includes("BuyPacks"), "home can show pack cards");
 assert.ok(homeSrc.includes("Rehearsal"), "rehearsal screen label");
+assert.ok(
+  homeSrc.includes('process.env.NODE_ENV === "development"') &&
+    homeSrc.includes("Rehearsal"),
+  "rehearsal badge is development-only",
+);
+assert.ok(!homeSrc.includes("NEXT_PUBLIC_STRIPE_MODE"), "rehearsal badge ignores Stripe test mode");
+assert.ok(!/setRehearsal\(seconds/.test(homeSrc), "balance refresh does not open rehearsal");
+assert.ok(!homeSrc.includes('get("next") === "/buy"'), "home does not auto-open buy from ?next=");
+assert.ok(homeSrc.includes("buyIntent && !live"), "buy section is click-intent only");
+assert.ok(homeSrc.includes("!subscribed"), "home hides Subscribe when subscribed");
 assert.ok(homeSrc.includes("catalogPacks"), "home receives public catalog");
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
 assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
@@ -127,6 +137,8 @@ assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs"
 
 const balanceSrc = readFileSync(new URL("../app/api/billing/balance/route.ts", import.meta.url), "utf8");
 assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
+assert.ok(balanceSrc.includes("readAccountSubscribed"), "balance returns subscription status");
+assert.ok(balanceSrc.includes("subscribed"), "balance JSON includes subscribed");
 assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared session helper");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 
@@ -213,6 +225,9 @@ assert.ok(stripeSrc.includes("createCheckoutByPriceId"), "priceId checkout helpe
 assert.ok(stripeSrc.includes("createSubscriptionCheckout"), "subscription checkout helper");
 assert.ok(stripeSrc.includes('mode: "subscription"'), "subscription checkout is recurring");
 assert.ok(stripeSrc.includes("[subscribe-checkout]"), "subscription checkout logs Stripe failures");
+assert.ok(stripeSrc.includes("markAccountSubscribed"), "webhook marks monthly subscribers");
+assert.ok(stripeSrc.includes("customer.subscription.deleted"), "webhook clears canceled subscriptions");
+assert.ok(stripeSrc.includes("subscription_data"), "subscribe checkout stamps subscription metadata");
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
 
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
