@@ -75,22 +75,15 @@ import {
 } from "@/lib/voice/location";
 import {
   authorizeAppleMusic,
-  cacheAppleMusicSongs,
   configureMusicKit,
-  pauseAppleMusicPlayback,
-  playAppleMusicFromGesture,
   playAppleMusicSong,
   resumeAppleMusicPlayback,
   prefetchOurSong,
   readAppleMusicNowPlaying,
-  searchAppleMusicCatalog,
-  skipAppleMusicFromGesture,
   stopAppleMusicPlayback,
   subscribeAppleMusicPlayback,
   unauthorizeAppleMusic,
 } from "@/lib/apple-music/client";
-import { OUR_SONG_SEARCH } from "@/lib/apple-music/config";
-import { AppleMusicBar } from "@/components/apple-music-bar";
 import { BackgroundAudioPlayer } from "@/lib/voice/background-music";
 import { setMediaSessionYield } from "@/lib/voice/keepalive";
 import { DEFAULT_MUSIC_STATE, type MusicSessionState } from "@/lib/voice/persona";
@@ -402,7 +395,6 @@ export function VoiceHome({
   const [locationOn, setLocationOn] = useState(false);
   const [locationHint, setLocationHint] = useState<string | null>(null);
   const [music, setMusic] = useState<MusicSessionState>(DEFAULT_MUSIC_STATE);
-  const [musicQuery, setMusicQuery] = useState("");
   const [appleHint, setAppleHint] = useState<string | null>(null);
   const [appleBusy, setAppleBusy] = useState(false);
   const backgroundAudio = useRef(new BackgroundAudioPlayer());
@@ -614,17 +606,6 @@ export function VoiceHome({
       sessionRef.current?.stop();
     };
   }, []);
-
-  useEffect(() => {
-    if (!music.appleConnected) return;
-    const term = musicQuery.trim() || OUR_SONG_SEARCH;
-    const timer = window.setTimeout(() => {
-      void searchAppleMusicCatalog(term)
-        .then((songs) => cacheAppleMusicSongs(term, songs))
-        .catch(() => {});
-    }, 280);
-    return () => window.clearTimeout(timer);
-  }, [music.appleConnected, musicQuery]);
 
   useEffect(() => {
     if (!videoSrc) return;
@@ -1364,7 +1345,7 @@ export function VoiceHome({
       sessionRef.current?.setAppleMusicConnected(true);
       void prefetchOurSong();
       applyApplePlayback(readAppleMusicNowPlaying());
-      setAppleHint("Apple Music connected. Tap Play to start a song.");
+      setAppleHint("Apple Music connected.");
       return { ok: true, connected: true };
     } catch (error) {
       const message =
@@ -1419,66 +1400,6 @@ export function VoiceHome({
       return;
     }
     startLocationWatch(true);
-  }
-
-  function notifyUserMusic(title: string) {
-    setAppleHint(null);
-    setMusic((current) => ({
-      ...current,
-      playing: true,
-      title: title || current.title || "Apple Music",
-      source: "apple",
-    }));
-    sessionRef.current?.setMusicPlayback(true, title || "Apple Music", "apple");
-    setMediaSessionYield(true);
-  }
-
-  function onApplePlayPause() {
-    const token = appleDeveloperToken.current;
-    if (!token) {
-      setAppleHint("Connect Apple Music first.");
-      return;
-    }
-    if (music.playing && music.source === "apple") {
-      void pauseAppleMusicPlayback(token)
-        .then(() => {
-          setMediaSessionYield(false);
-          setMusic((current) => ({ ...current, playing: false }));
-          sessionRef.current?.setMusicPlayback(false);
-        })
-        .catch((error) => {
-          setAppleHint(error instanceof Error ? error.message : "Could not pause.");
-        });
-      return;
-    }
-    backgroundAudio.current.stop();
-    setMediaSessionYield(true);
-    void playAppleMusicFromGesture(token, musicQuery)
-      .then((played) => {
-        notifyUserMusic(played.title);
-      })
-      .catch((error) => {
-        setMediaSessionYield(false);
-        setAppleHint(error instanceof Error ? error.message : "Could not play on Apple Music.");
-      });
-  }
-
-  function onAppleNext() {
-    const token = appleDeveloperToken.current;
-    if (!token) {
-      setAppleHint("Connect Apple Music first.");
-      return;
-    }
-    backgroundAudio.current.stop();
-    setMediaSessionYield(true);
-    void skipAppleMusicFromGesture(token, musicQuery)
-      .then((played) => {
-        notifyUserMusic(played.title);
-      })
-      .catch((error) => {
-        if (!readAppleMusicNowPlaying().playing) setMediaSessionYield(false);
-        setAppleHint(error instanceof Error ? error.message : "Could not skip.");
-      });
   }
 
   function applySignedIn(id: string) {
@@ -2580,23 +2501,10 @@ export function VoiceHome({
           {locationHint ? (
             <p className="px-1 text-[11px] text-zinc-500">{locationHint}</p>
           ) : null}
-          {music.appleConnected ? (
-            <AppleMusicBar
-              connected={music.appleConnected}
-              playing={music.playing && music.source !== "url"}
-              title={music.source === "apple" ? music.title : ""}
-              query={musicQuery}
-              busy={appleBusy}
-              hint={appleHint}
-              onQueryChange={setMusicQuery}
-              onPlayPause={onApplePlayPause}
-              onNext={onAppleNext}
-            />
-          ) : null}
-          {appleHint && !music.appleConnected ? (
+          {appleHint ? (
             <p className="px-1 text-[11px] text-zinc-500">{appleHint}</p>
           ) : null}
-          {music.playing && !music.appleConnected ? (
+          {music.playing ? (
             <p className="px-1 text-[11px] text-zinc-500">Playing: {music.title || "music"}</p>
           ) : null}
         <form
