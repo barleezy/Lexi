@@ -20,6 +20,24 @@ export function stripeClient(env: NodeJS.ProcessEnv = process.env) {
   return new Stripe(key, { apiVersion: "2025-02-24.acacia" });
 }
 
+/** Diagnose STRIPE_PRICE_SUBSCRIPTION without dumping the full price id. */
+function describeStripePriceSubscription(raw: string | undefined) {
+  if (raw === undefined) return { set: false as const, status: "missing" as const };
+  if (raw.length === 0 || raw.trim().length === 0) {
+    return { set: false as const, status: "empty" as const, length: raw.length };
+  }
+  const value = raw.trim();
+  const prefix = value.startsWith("price_") ? "price_" : "";
+  const tail = value.slice(-4);
+  const starCount = Math.max(0, value.length - prefix.length - tail.length);
+  const masked = `${prefix}${"*".repeat(starCount)}${tail}`;
+  return { set: true as const, prefix: prefix || "(none)", length: value.length, tail, masked };
+}
+
+function logStripePriceSubscription() {
+  console.info("[stripe] STRIPE_PRICE_SUBSCRIPTION", describeStripePriceSubscription(process.env.STRIPE_PRICE_SUBSCRIPTION));
+}
+
 async function createCheckoutForPack(input: {
   userId: string;
   pack: (typeof import("./packs").VOICE_PACKS)[number];
@@ -56,6 +74,7 @@ export async function createSubscriptionCheckout(input: {
   }
   const priceId = stripeSubscriptionPriceId(env);
   if (!priceId) {
+    logStripePriceSubscription();
     console.error("[subscribe-checkout] STRIPE_PRICE_SUBSCRIPTION is missing");
     return { ok: false as const, status: 503, error: "That plan is not for sale yet." };
   }
@@ -66,6 +85,7 @@ export async function createSubscriptionCheckout(input: {
   }
 
   try {
+    logStripePriceSubscription();
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
