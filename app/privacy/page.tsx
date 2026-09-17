@@ -227,6 +227,10 @@ export default function PrivacyPage() {
             Support
           </Link>
           <span className="px-2">·</span>
+          <Link href="/site" className="underline-offset-4 hover:underline hover:text-white">
+            Site
+          </Link>
+          <span className="px-2">·</span>
           <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
             Back to Call
           </Link>

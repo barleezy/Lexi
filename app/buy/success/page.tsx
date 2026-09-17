@@ -35,6 +35,27 @@ export default function BuySuccessPage() {
             Back to Call
           </Link>
         </div>
+        <p className="mt-12 text-sm text-zinc-400">
+          <Link href="/refund" className="underline-offset-4 hover:underline hover:text-white">
+            Refunds
+          </Link>
+          <span className="px-2">·</span>
+          <Link href="/privacy" className="underline-offset-4 hover:underline hover:text-white">
+            Privacy
+          </Link>
+          <span className="px-2">·</span>
+          <Link href="/terms" className="underline-offset-4 hover:underline hover:text-white">
+            Terms
+          </Link>
+          <span className="px-2">·</span>
+          <Link href="/support" className="underline-offset-4 hover:underline hover:text-white">
+            Support
+          </Link>
+          <span className="px-2">·</span>
+          <Link href="/site" className="underline-offset-4 hover:underline hover:text-white">
+            Site
+          </Link>
+        </p>
       </div>
     </main>
   );

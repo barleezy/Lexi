@@ -2,13 +2,11 @@ import Image from "next/image";
 import Link from "next/link";
 
 export const metadata = {
-  title: "Support · Talk To Lexi",
-  description: "Questions, billing, or a broken call — email Ian at Talk to Lexi.",
+  title: "Site · Talk To Lexi",
+  description: "Every public page on Talk to Lexi.",
 };
 
-const SUPPORT_EMAIL = "barleezy@talktolexi.app";
-
-export default function SupportPage() {
+export default function SitePage() {
   return (
     <main className="buy-page relative flex min-h-dvh flex-1 flex-col overflow-hidden font-sans text-zinc-100">
       <style>{`
@@ -73,67 +71,82 @@ export default function SupportPage() {
         <header className="buy-title space-y-3 text-center">
           <p className="text-sm font-medium uppercase tracking-[0.22em] text-pink-300/80">Talk To Lexi</p>
           <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl md:text-6xl">
-            Support
+            Site
           </h1>
           <p
             className="buy-subtitle text-base tracking-wide sm:text-lg"
             style={{ color: "var(--buy-pink-muted)" }}
           >
-            Questions, billing, or a broken call — email Ian.
+            Every public page on Talk to Lexi.
           </p>
         </header>
 
         <article className="buy-card mt-12 w-full space-y-8 rounded-[1.75rem] px-6 py-8 text-sm leading-7 text-zinc-200 sm:mt-16 sm:px-10 sm:py-10 sm:text-base sm:leading-8">
-          <p>
-            Email{" "}
-            <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>{" "}
-            from the email on your account if you have one. Include your username. For billing, include the date of the charge and whether it was Whisper, Murmur, Echo, or Monthly.
-          </p>
-
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">What I can help with</h2>
+            <h2 className="text-lg font-medium tracking-wide">Talk</h2>
             <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
-              <li>• Sign-in, password reset, account delete</li>
-              <li>• Minute packs and the $9.99 monthly plan</li>
               <li>
-                • Refunds (see{" "}
-                <Link href="/refund">/refund</Link>)
+                • <Link href="/">Home</Link> — /
               </li>
-              <li>• Live Call vs rehearsal / no-spend</li>
-              <li>• Memory delete</li>
-              <li>• CarPlay and the iPhone app</li>
+              <li>
+                • <Link href="/buy">Buy minutes</Link> — /buy
+              </li>
+              <li>
+                • <Link href="/buy/success">Checkout success</Link> — /buy/success
+              </li>
+              <li>
+                • <Link href="/subscribe">Subscribe</Link> — /subscribe
+              </li>
             </ul>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">Typical reply time</h2>
-            <p style={{ color: "var(--buy-muted)" }}>
-              3 business days. Same-day if I am at the laptop.
-            </p>
+            <h2 className="text-lg font-medium tracking-wide">Account help</h2>
+            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
+              <li>
+                • <Link href="/support">Support</Link> — /support
+              </li>
+              <li>
+                • <Link href="/help">Help</Link> — /help
+              </li>
+              <li>
+                • <Link href="/contact">Contact</Link> — /contact
+              </li>
+            </ul>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">Before you email</h2>
+            <h2 className="text-lg font-medium tracking-wide">Money and legal</h2>
             <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
-              <li>• Rehearsal / no-spend does not use live minutes and will not charge</li>
               <li>
-                • Live Call needs a signed-in account and at least 30 seconds in the wallet, or an active monthly plan once billing is live
+                • <Link href="/refund">Refunds</Link> — /refund
               </li>
               <li>
-                • Packs are one-time minutes. Monthly is recurring until you cancel on{" "}
-                <Link href="/subscribe">/subscribe</Link>
+                • <Link href="/refunds">Refunds (alias)</Link> — /refunds
               </li>
               <li>
-                • Refunds:{" "}
-                <Link href="/refund">/refund</Link>
+                • <Link href="/return-policy">Return policy</Link> — /return-policy
               </li>
               <li>
-                • Privacy:{" "}
-                <Link href="/privacy">/privacy</Link>
+                • <Link href="/privacy">Privacy</Link> — /privacy
               </li>
               <li>
-                • Terms:{" "}
-                <Link href="/terms">/terms</Link>
+                • <Link href="/terms">Terms</Link> — /terms
+              </li>
+            </ul>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium tracking-wide">This directory</h2>
+            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
+              <li>
+                • <Link href="/site">Site</Link> — /site
+              </li>
+              <li>
+                • <Link href="/directory">Directory</Link> — /directory
+              </li>
+              <li>
+                • <Link href="/links">Links</Link> — /links
               </li>
             </ul>
           </section>
@@ -158,6 +171,10 @@ export default function SupportPage() {
           <span className="px-2">·</span>
           <Link href="/terms" className="underline-offset-4 hover:underline hover:text-white">
             Terms
+          </Link>
+          <span className="px-2">·</span>
+          <Link href="/support" className="underline-offset-4 hover:underline hover:text-white">
+            Support
           </Link>
           <span className="px-2">·</span>
           <Link href="/site" className="underline-offset-4 hover:underline hover:text-white">
