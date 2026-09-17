@@ -156,6 +156,7 @@ assert.ok(balanceSrc.includes("subscribed"), "balance JSON includes subscribed")
 assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared session helper");
 assert.ok(balanceSrc.includes('force-dynamic'), "balance is not statically cached");
 assert.ok(balanceSrc.includes("await connection()"), "balance reads live env and cookies");
+assert.ok(balanceSrc.includes("creditPaidCheckoutsForUser"), "balance credits paid packs before showing minutes");
 assert.ok(balanceSrc.includes("no-store"), "balance forbids HTTP cache");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 
@@ -165,6 +166,8 @@ assert.ok(homeSrc.includes("await settled"), "home waits for settle before readi
 
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
 assert.ok(buySuccess.includes("Minutes added"), "success copy");
+assert.ok(buySuccess.includes("creditPaidCheckoutsForUser"), "success credits paid packs before showing minutes");
+assert.ok(buySuccess.includes("You now have"), "success shows live allotted minutes");
 assert.ok(buySuccess.includes('href="/"'), "success links to Call");
 
 const subscribeSuccess = readFileSync(new URL("../app/subscribe/success/page.tsx", import.meta.url), "utf8");
@@ -238,6 +241,7 @@ assert.ok(voiceSrc.includes("VOICE_MIN_SECONDS = 30"), "min 30");
 assert.ok(voiceSrc.includes("export async function extendVoiceHold"), "extend hold while leftover remains");
 assert.ok(voiceSrc.includes("sweepStaleVoiceSessions"), "sweeper");
 assert.ok(voiceSrc.includes("stripe_event_id"), "idempotent stripe event");
+assert.ok(voiceSrc.includes("voice_credits_stripe_session_uidx"), "idempotent stripe checkout session");
 assert.ok(voiceSrc.includes("creditSubscriptionCheckoutMinutes"), "subscription checkout credits 150 minutes");
 assert.ok(voiceSrc.includes("maybeRefillMonthlyMinutes"), "call start can refill monthly minutes");
 assert.ok(voiceSrc.includes("await maybeRefillMonthlyMinutes(accountId)"), "placeVoiceHold refills before debit");
@@ -304,6 +308,7 @@ assert.ok(stripeSrc.includes("subscription_data"), "subscribe checkout stamps su
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
 assert.ok(stripeSrc.includes("resolveVoicePackFromCheckout"), "webhook falls back to Stripe price id");
 assert.ok(stripeSrc.includes("price_id: input.priceId"), "checkout stamps price_id metadata");
+assert.ok(stripeSrc.includes("creditPaidCheckoutsForUser"), "page load can credit paid Checkout sessions");
 
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
 assert.ok(subscribePage.includes("await connection()"), "subscribe page reads live Stripe price env");
@@ -335,6 +340,7 @@ assert.ok(layoutSrc.includes("readStoredSubscribed"), "layout reads stored subsc
 assert.ok(layoutSrc.includes("subscribed={subscribed}"), "layout passes subscribed to SiteChrome");
 
 const accountPage = readFileSync(new URL("../app/account/page.tsx", import.meta.url), "utf8");
+assert.ok(accountPage.includes("creditPaidCheckoutsForUser"), "account credits paid packs before showing minutes");
 assert.ok(accountPage.includes("readIncomingAuthSession"), "account page uses shared session helper");
 assert.ok(accountPage.includes("readAccountSubscribed"), "account page loads subscription status");
 assert.ok(accountPage.includes("readVoiceSeconds"), "account page loads minute balance");

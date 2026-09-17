@@ -366,6 +366,49 @@ export async function handleStripeWebhook(input: {
   }
 
   const session = event.data.object as Stripe.Checkout.Session;
+  return creditCompletedCheckoutSession({
+    session,
+    stripe,
+    env,
+    stripeEventId: event.id,
+  });
+}
+
+/** Pull paid Checkout sessions for this user so the page can show minutes if the webhook only topped up xAI. */
+export async function creditPaidCheckoutsForUser(
+  userId: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const stripe = stripeClient(env);
+  const id = userId.trim();
+  if (!stripe || !id) return { ok: true as const, creditedSeconds: 0 };
+  const sessions = await listCompletedCheckoutsForUser(stripe, id);
+  let creditedSeconds = 0;
+  for (const session of sessions) {
+    try {
+      const result = await creditCompletedCheckoutSession({
+        session,
+        stripe,
+        env,
+        stripeEventId: `cs:${session.id}`,
+      });
+      if (result.ok && "credited" in result && typeof result.credited === "number") {
+        creditedSeconds += result.credited;
+      }
+    } catch (error) {
+      console.error("[stripe-minutes] reconcile session failed", session.id, error);
+    }
+  }
+  return { ok: true as const, creditedSeconds };
+}
+
+async function creditCompletedCheckoutSession(input: {
+  session: Stripe.Checkout.Session;
+  stripe: Stripe;
+  env: NodeJS.ProcessEnv;
+  stripeEventId: string;
+}) {
+  const { session, stripe, env } = input;
   const userId = checkoutUserId(session);
   const subscriptionCheckout =
     session.mode === "subscription" || session.metadata?.plan === SUBSCRIPTION_PLAN.id;
@@ -388,7 +431,7 @@ export async function handleStripeWebhook(input: {
     }
     const credited = await creditSubscriptionCheckoutMinutes({
       userId,
-      stripeEventId: event.id,
+      stripeEventId: input.stripeEventId,
       stripeSessionId: session.id,
     });
     if (!credited.ok) {
@@ -403,12 +446,11 @@ export async function handleStripeWebhook(input: {
     };
   }
 
-  // Seconds always from server pack map — never trust a client-invented amount.
   const pack = await resolveVoicePackFromCheckout(session, stripe, env);
   const seconds = pack?.seconds ?? 0;
-  if (!userId || seconds <= 0) {
+  if (!userId || !pack || seconds <= 0) {
     console.warn("[stripe-minutes] ignored checkout.session.completed", {
-      eventId: event.id,
+      eventId: input.stripeEventId,
       sessionId: session.id,
       userId: userId || null,
       pack: pack?.id ?? null,
@@ -425,26 +467,28 @@ export async function handleStripeWebhook(input: {
     userId,
     seconds,
     source: "stripe",
-    stripeEventId: event.id,
+    stripeEventId: input.stripeEventId,
     stripeSessionId: session.id,
   });
   if (!credited.ok) {
     console.error("[stripe-minutes] credit failed", credited.error, {
-      eventId: event.id,
+      eventId: input.stripeEventId,
       userId,
       pack: pack.id,
       seconds,
     });
     return { ok: false as const, status: 500, error: credited.error };
   }
-  console.info("[stripe-minutes] credited", {
-    eventId: event.id,
-    userId,
-    pack: pack.id,
-    seconds,
-    credited: credited.credited,
-    voiceSeconds: credited.voiceSeconds,
-  });
+  if (credited.credited > 0) {
+    console.info("[stripe-minutes] credited", {
+      eventId: input.stripeEventId,
+      userId,
+      pack: pack.id,
+      seconds,
+      credited: credited.credited,
+      voiceSeconds: credited.voiceSeconds,
+    });
+  }
   return {
     ok: true as const,
     credited: credited.credited,
@@ -485,4 +529,18 @@ async function resolveVoicePackFromCheckout(
     console.error("[stripe-minutes] could not resolve pack from line items", error);
     return null;
   }
+}
+
+function checkoutBelongsToUser(session: Stripe.Checkout.Session, userId: string) {
+  const owner = checkoutUserId(session);
+  return Boolean(owner) && owner.toLowerCase() === userId.toLowerCase();
+}
+
+async function listCompletedCheckoutsForUser(stripe: Stripe, userId: string) {
+  const listed = await stripe.checkout.sessions.list({
+    limit: 40,
+    status: "complete",
+    created: { gte: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 14 },
+  });
+  return listed.data.filter((session) => checkoutBelongsToUser(session, userId));
 }

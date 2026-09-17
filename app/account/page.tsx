@@ -1,7 +1,7 @@
 import { connection } from "next/server";
 import { readIncomingAuthSession } from "@/lib/auth/session";
 import { findAccountRow } from "@/lib/auth/accounts";
-import { readAccountSubscriptionCancelState } from "@/lib/wallet/stripe";
+import { creditPaidCheckoutsForUser, readAccountSubscriptionCancelState } from "@/lib/wallet/stripe";
 import { readAccountSubscribed } from "@/lib/wallet/subscription";
 import { formatVoiceMinutes, readVoiceSeconds, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 import { AccountClient } from "./account-client";
@@ -26,6 +26,7 @@ export default async function AccountPage() {
 
   if (userId) {
     await sweepStaleVoiceSessions(userId);
+    await creditPaidCheckoutsForUser(userId);
     const [account, nextSubscribed, seconds, cancelState] = await Promise.all([
       findAccountRow(userId),
       readAccountSubscribed(userId),

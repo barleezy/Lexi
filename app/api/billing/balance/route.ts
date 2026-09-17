@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
 import { buyPagePacks, publicPacks, isStripeConfigured } from "@/lib/wallet/packs";
+import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
 import { readAccountSubscribed } from "@/lib/wallet/subscription";
 import { formatVoiceMinutes, readVoiceSeconds, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 
@@ -17,6 +18,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "Sign in first." }, { status: 401, headers: NO_STORE });
   }
   await sweepStaleVoiceSessions(userId);
+  await creditPaidCheckoutsForUser(userId);
   const voiceSeconds = (await readVoiceSeconds(userId)) ?? 0;
   const subscribed = await readAccountSubscribed(userId);
   return Response.json(

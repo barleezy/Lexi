@@ -111,6 +111,13 @@ export async function ensureVoiceWalletSchema() {
         WHERE stripe_event_id IS NOT NULL AND stripe_event_id <> ''
       `,
       );
+      await db.query(
+        `
+        CREATE UNIQUE INDEX IF NOT EXISTS voice_credits_stripe_session_uidx
+        ON voice_credits (stripe_session_id)
+        WHERE stripe_session_id IS NOT NULL AND stripe_session_id <> ''
+      `,
+      );
     })().catch((error) => {
       ensured = null;
       throw error;
@@ -140,7 +147,7 @@ export async function readVoiceSeconds(userId: string): Promise<number | null> {
 }
 
 /**
- * Stripe webhook only in production. Idempotent on stripe_event_id.
+ * Stripe webhook only in production. Idempotent on event id and checkout session id.
  * Tests may call with source "test".
  */
 export async function creditVoiceSeconds(input: {
@@ -162,9 +169,19 @@ export async function creditVoiceSeconds(input: {
   const accountId = account.user_id;
 
   const eventId = input.stripeEventId?.trim() || null;
+  const sessionId = input.stripeSessionId?.trim() || null;
   if (eventId) {
     const existing = asRows<{ id?: string }>(
       await db.query(`SELECT id FROM voice_credits WHERE stripe_event_id = $1 LIMIT 1`, [eventId]),
+    );
+    if (existing[0]) {
+      const balance = await readVoiceSeconds(accountId);
+      return { ok: true, voiceSeconds: balance ?? 0, credited: 0 };
+    }
+  }
+  if (sessionId) {
+    const existing = asRows<{ id?: string }>(
+      await db.query(`SELECT id FROM voice_credits WHERE stripe_session_id = $1 LIMIT 1`, [sessionId]),
     );
     if (existing[0]) {
       const balance = await readVoiceSeconds(accountId);
@@ -178,11 +195,11 @@ export async function creditVoiceSeconds(input: {
       INSERT INTO voice_credits (user_id, seconds, source, stripe_event_id, stripe_session_id)
       VALUES ($1, $2, $3, $4, $5)
     `,
-      [accountId, seconds, input.source, eventId, input.stripeSessionId?.trim() || null],
+      [accountId, seconds, input.source, eventId, sessionId],
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (/unique|duplicate/i.test(message) && eventId) {
+    if (/unique|duplicate/i.test(message) && (eventId || sessionId)) {
       const balance = await readVoiceSeconds(accountId);
       return { ok: true, voiceSeconds: balance ?? 0, credited: 0 };
     }

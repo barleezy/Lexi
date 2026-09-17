@@ -1,12 +1,27 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import Image from "next/image";
+import { readIncomingAuthSession } from "@/lib/auth/session";
+import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
+import { formatVoiceMinutes, readVoiceSeconds } from "@/lib/wallet/voice";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export const metadata = {
   title: "Minutes added · Talk To Lexi",
   description: "Your Lexi voice minutes were added.",
 };
 
-export default function BuySuccessPage() {
+export default async function BuySuccessPage() {
+  await connection();
+  const session = await readIncomingAuthSession();
+  let minutesLabel = "";
+  if (session?.userId) {
+    await creditPaidCheckoutsForUser(session.userId);
+    minutesLabel = formatVoiceMinutes((await readVoiceSeconds(session.userId)) ?? 0);
+  }
+
   return (
     <main className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto font-sans text-zinc-100">
       <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-black">
@@ -25,8 +40,9 @@ export default function BuySuccessPage() {
           <p className="text-sm font-medium uppercase tracking-[0.22em] text-pink-300/80">Talk To Lexi</p>
           <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">Minutes added</h1>
           <p className="text-base leading-7 text-zinc-400">
-            Your balance updates when Stripe confirms payment. You can start a Call whenever you are
-            ready.
+            {minutesLabel
+              ? `You now have ${minutesLabel} on this account.`
+              : "Your balance updates when Stripe confirms payment. You can start a Call whenever you are ready."}
           </p>
           <Link
             href="/"
