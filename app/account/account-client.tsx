@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -18,7 +18,43 @@ export function AccountClient({
   voiceSeconds?: number;
   cancelAtPeriodEnd?: boolean;
 }) {
+  const [liveMinutes, setLiveMinutes] = useState(minutesLabel);
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
+
+  useEffect(() => {
+    setLiveMinutes(minutesLabel);
+  }, [minutesLabel]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const response = await fetch("/api/billing/balance", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        if (!response.ok) return;
+        const body = (await response.json()) as { label?: string };
+        if (!cancelled && typeof body.label === "string") setLiveMinutes(body.label);
+      } catch {
+        // keep the server-rendered label
+      }
+    }
+    void load();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+  }, [signedIn]);
   const [accountDraft, setAccountDraft] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
@@ -186,7 +222,7 @@ export function AccountClient({
               </div>
               <div>
                 <dt className="text-xs uppercase tracking-[0.18em] text-zinc-400">Minutes</dt>
-                <dd className="mt-1 text-base text-white">{minutesLabel}</dd>
+                <dd className="mt-1 text-base text-white">{liveMinutes}</dd>
               </div>
             </dl>
             {subscribed ? (

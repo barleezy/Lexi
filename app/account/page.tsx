@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { readIncomingAuthSession } from "@/lib/auth/session";
 import { findAccountRow } from "@/lib/auth/accounts";
 import { readAccountSubscriptionCancelState } from "@/lib/wallet/stripe";
@@ -5,12 +6,16 @@ import { readAccountSubscribed } from "@/lib/wallet/subscription";
 import { formatVoiceMinutes, readVoiceSeconds, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 import { AccountClient } from "./account-client";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export const metadata = {
   title: "Account · Talk To Lexi",
   description: "Your Talk To Lexi email, minutes, and subscription.",
 };
 
 export default async function AccountPage() {
+  await connection();
   const session = await readIncomingAuthSession();
   const userId = session?.userId ?? "";
   let email = "";

@@ -484,6 +484,22 @@ export function VoiceHome({
       })
       .catch(() => {});
     void refreshVoiceBalance();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshVoiceBalance();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("pageshow", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
+    const fromCheckout = /\/(buy|subscribe)\/success/.test(document.referrer);
+    let checkoutPoll: number | undefined;
+    if (fromCheckout) {
+      let ticks = 0;
+      checkoutPoll = window.setInterval(() => {
+        ticks += 1;
+        void refreshVoiceBalance();
+        if (ticks >= 6 && checkoutPoll) window.clearInterval(checkoutPoll);
+      }, 2000);
+    }
     void fetch("/api/apple-music", { headers: { "ngrok-skip-browser-warning": "1" } })
       .then((response) => response.json())
       .then(async (body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
@@ -588,9 +604,13 @@ export function VoiceHome({
     return () => {
       unsubscribeMusic();
       document.removeEventListener("visibilitychange", syncHidden);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("pageshow", syncHidden);
+      window.removeEventListener("pageshow", refreshWhenVisible);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", refreshWhenVisible);
+      if (checkoutPoll) window.clearInterval(checkoutPoll);
       cameraSlot.current.stopLoop?.();
       screenSlot.current.stopLoop?.();
       cameraDecipherStop.current?.();
@@ -1228,6 +1248,7 @@ export function VoiceHome({
   async function refreshVoiceBalance(): Promise<number | null> {
     try {
       const response = await fetch("/api/billing/balance", {
+        cache: "no-store",
         credentials: "include",
         headers: { "ngrok-skip-browser-warning": "1" },
       });
@@ -1784,8 +1805,9 @@ export function VoiceHome({
           if (process.env.NODE_ENV === "development") setRehearsal(true);
         }
         releaseVision(undefined, false);
+        const settled = sessionRef.current?.stop();
         clearSession();
-        void refreshVoiceBalance();
+        void Promise.resolve(settled).then(() => refreshVoiceBalance());
       },
     });
     attach(session);
@@ -1852,11 +1874,12 @@ export function VoiceHome({
     releaseVision(undefined, true);
     stopLocationWatch();
     backgroundAudio.current.stop();
-    sessionRef.current?.stop();
+    const settled = sessionRef.current?.stop();
     clearSession();
     // Hang up: drop previousSessionId + transcript. Keep userId for recalled facts.
     clearCallContinuityStore();
-    void refreshVoiceBalance();
+    await settled;
+    await refreshVoiceBalance();
     if (persisted.sessionId && (persisted.userId || accountId)) {
       void fetch("/api/memory", {
         method: "POST",

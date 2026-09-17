@@ -1422,8 +1422,10 @@ export class VoiceSession {
     );
   }
 
+  private settlePromise: Promise<void> | null = null;
+
   stop(by: "client" | "error" = "client") {
-    if (this.stopped) return;
+    if (this.stopped) return this.settlePromise ?? Promise.resolve();
     this.stopped = true;
     this.emitToyControlPending(false);
     this.stopClockRefresh();
@@ -1434,7 +1436,8 @@ export class VoiceSession {
     this.extendingHold = false;
     this.walletLeftover = 0;
     this.holdSeconds = 0;
-    this.postVoiceSettle();
+    this.settlePromise = this.postVoiceSettle();
+    const settled = this.settlePromise;
     writePreviousSessionId(null);
     writeVoiceSessionStore({
       previousSessionId: null,
@@ -1488,6 +1491,7 @@ export class VoiceSession {
     void this.ctx?.close();
     this.logger.close();
     this.setPhase("idle");
+    return settled;
   }
 
   private async fetchSessionToken(resume: boolean, extend = false) {
@@ -1680,12 +1684,13 @@ export class VoiceSession {
   }
 
   private postVoiceSettle() {
-    if (this.settlePosted || !this.voiceSessionId) return;
+    if (this.settlePosted || !this.voiceSessionId) return Promise.resolve();
     this.settlePosted = true;
     const voiceSessionId = this.voiceSessionId;
     const userId = clientUserId();
-    void fetch("/api/voice/settle", {
+    return fetch("/api/voice/settle", {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         "x-lexi-user-id": userId,
@@ -1693,9 +1698,11 @@ export class VoiceSession {
       },
       body: JSON.stringify({ voiceSessionId, userId }),
       keepalive: true,
-    }).catch(() => {
-      // settle sweeper will catch orphans
-    });
+    })
+      .then(() => undefined)
+      .catch(() => {
+        // settle sweeper will catch orphans
+      });
   }
 
   private openWebSocket(token: string, resume: boolean) {

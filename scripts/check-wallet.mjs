@@ -152,7 +152,14 @@ assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
 assert.ok(balanceSrc.includes("readAccountSubscribed"), "balance returns subscription status");
 assert.ok(balanceSrc.includes("subscribed"), "balance JSON includes subscribed");
 assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared session helper");
+assert.ok(balanceSrc.includes('force-dynamic'), "balance is not statically cached");
+assert.ok(balanceSrc.includes("await connection()"), "balance reads live env and cookies");
+assert.ok(balanceSrc.includes("no-store"), "balance forbids HTTP cache");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
+
+assert.ok(homeSrc.includes('cache: "no-store"'), "home balance fetch skips HTTP cache");
+assert.ok(homeSrc.includes("refreshWhenVisible"), "home refreshes minutes when the tab is shown");
+assert.ok(homeSrc.includes("await settled"), "home waits for settle before reading minutes");
 
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
 assert.ok(buySuccess.includes("Minutes added"), "success copy");
@@ -179,6 +186,7 @@ const webhookRoute = readFileSync(new URL("../app/api/billing/webhook/route.ts",
 assert.ok(webhookRoute.includes("export async function POST"), "webhook POST handler");
 assert.ok(webhookRoute.includes("export async function GET"), "webhook GET probe");
 assert.ok(webhookRoute.includes("www.talktolexi.app"), "webhook docs www URL");
+assert.ok(webhookRoute.includes("await connection()"), "minutes webhook reads live Stripe env");
 
 const xaiWebhookRoute = readFileSync(new URL("../app/api/webhooks/stripe/route.ts", import.meta.url), "utf8");
 assert.ok(xaiWebhookRoute.includes("export async function POST"), "xAI webhook POST handler");
@@ -325,8 +333,12 @@ assert.ok(accountPage.includes("readVoiceSeconds"), "account page loads minute b
 assert.ok(accountPage.includes("findAccountRow"), "account page loads email");
 assert.ok(accountPage.includes("AccountClient"), "account page renders client");
 assert.ok(accountPage.includes("cancelAtPeriodEnd"), "account page passes cancel state");
+assert.ok(accountPage.includes('force-dynamic'), "account page is not statically cached");
+assert.ok(accountPage.includes("await connection()"), "account page reads live minutes");
 
 const accountClient = readFileSync(new URL("../app/account/account-client.tsx", import.meta.url), "utf8");
+assert.ok(accountClient.includes("/api/billing/balance"), "account page refreshes live minutes");
+assert.ok(accountClient.includes("liveMinutes"), "account shows the live minute label");
 assert.ok(accountClient.includes("Cancel subscription"), "account has cancel button");
 assert.ok(accountClient.includes("/api/billing/cancel"), "account cancel posts to billing cancel");
 assert.ok(accountClient.includes("active") && accountClient.includes("none"), "account shows active or none");

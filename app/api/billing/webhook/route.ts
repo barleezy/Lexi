@@ -1,7 +1,9 @@
+import { connection } from "next/server";
 import { handleStripeWebhook } from "@/lib/wallet/stripe";
 import { STRIPE_WEBHOOK_URL } from "@/lib/wallet/packs";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /**
  * Stripe webhook — ONLY writer that increments voice_seconds.
@@ -12,6 +14,7 @@ export const runtime = "nodejs";
  * Do not use a trailing slash (Next 308s to the non-slash URL).
  */
 export async function POST(request: Request) {
+  await connection();
   const signature = request.headers.get("stripe-signature") ?? "";
   const rawBody = await request.text();
   const result = await handleStripeWebhook({ rawBody, signature });
