@@ -1,7 +1,9 @@
 import { neon } from "@neondatabase/serverless";
 import { findAccountRow, isAccountStoreConfigured } from "../auth/accounts";
 import { normalizeUserId } from "../memory/user";
-import { SUBSCRIPTION_PLAN } from "./packs";
+import { SUBSCRIPTION_PLAN, VOICE_PACKS } from "./packs";
+
+const PACK_SECONDS = VOICE_PACKS.map((pack) => pack.seconds);
 
 /** Minimum balance to start a Call. */
 export const VOICE_MIN_SECONDS = 30;
@@ -282,33 +284,92 @@ export async function reverseReconciledSubscriptionCredits(userId: string) {
     reversedSeconds += seconds;
   }
 
-  const original = asRows<{ created_at?: string }>(
-    await db.query(
-      `
-      SELECT created_at
-      FROM voice_credits
-      WHERE user_id = $1
-        AND source = 'stripe'
-        AND seconds = $2
-        AND (stripe_event_id IS NULL OR stripe_event_id NOT LIKE 'cs:%')
-      ORDER BY created_at ASC
-      LIMIT 1
-    `,
-      [accountId, SUBSCRIPTION_PLAN.seconds],
-    ),
-  );
-  if (original[0]?.created_at) {
-    await db.query(
-      `UPDATE accounts SET monthly_minutes_reset_at = $1, updated_at = now() WHERE user_id = $2`,
-      [original[0].created_at, accountId],
-    );
-  }
+  await keepMonthlyResetInCurrentPeriod(accountId);
 
   console.info("[stripe-minutes] reversed reconciled subscription grant", {
     userId: accountId,
     reversedSeconds,
   });
   return { ok: true as const, reversedSeconds };
+}
+
+async function keepMonthlyResetInCurrentPeriod(accountId: string) {
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return;
+  await db.query(
+    `
+    UPDATE accounts
+    SET monthly_minutes_reset_at = now(), updated_at = now()
+    WHERE user_id = $1
+      AND subscribed = true
+      AND (
+        monthly_minutes_reset_at IS NULL
+        OR monthly_minutes_reset_at < now() - interval '30 days'
+      )
+  `,
+    [accountId],
+  );
+}
+
+/**
+ * If the wallet is higher than unspent pack minutes, snap it down.
+ * Subscription leftover from a reloaded monthly grant does not stay on the page.
+ */
+export async function capAllottedMinutesToPacks(userId: string) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: true as const, voiceSeconds: 0 };
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return { ok: true as const, voiceSeconds: 0 };
+  const account = await findAccountRow(id);
+  if (!account?.user_id) return { ok: true as const, voiceSeconds: 0 };
+  const accountId = account.user_id;
+
+  const packRows = asRows<{ seconds?: number }>(
+    await db.query(
+      `
+      SELECT coalesce(sum(seconds), 0)::int AS seconds
+      FROM voice_credits
+      WHERE user_id = $1 AND seconds = ANY($2::int[])
+    `,
+      [accountId, PACK_SECONDS],
+    ),
+  );
+  const packSeconds = Math.max(0, Math.floor(Number(packRows[0]?.seconds) || 0));
+  const openRows = asRows<{ held?: number }>(
+    await db.query(
+      `
+      SELECT coalesce(sum(hold_seconds), 0)::int AS held
+      FROM voice_sessions
+      WHERE user_id = $1 AND settled_at IS NULL
+    `,
+      [accountId],
+    ),
+  );
+  const openHold = Math.max(0, Math.floor(Number(openRows[0]?.held) || 0));
+  const cap = Math.max(0, packSeconds - openHold);
+  await keepMonthlyResetInCurrentPeriod(accountId);
+
+  const current = (await readVoiceSeconds(accountId)) ?? 0;
+  if (current <= cap) return { ok: true as const, voiceSeconds: current, packSeconds, capped: false };
+  const updated = asRows<{ voice_seconds?: number }>(
+    await db.query(
+      `
+      UPDATE accounts
+      SET voice_seconds = $1, updated_at = now()
+      WHERE user_id = $2
+      RETURNING voice_seconds
+    `,
+      [cap, accountId],
+    ),
+  );
+  const voiceSeconds = Math.max(0, Math.floor(Number(updated[0]?.voice_seconds) || 0));
+  console.info("[stripe-minutes] capped allotted minutes to packs", {
+    userId: accountId,
+    from: current,
+    voiceSeconds,
+    packSeconds,
+  });
+  return { ok: true as const, voiceSeconds, packSeconds, capped: true };
 }
 
 /** checkout.session.completed for Lexi Pro: add 150 minutes and start the reset clock. */

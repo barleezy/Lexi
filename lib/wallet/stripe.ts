@@ -19,6 +19,7 @@ import {
   setSubscriptionByStripeId,
 } from "./subscription";
 import {
+  capAllottedMinutesToPacks,
   creditSubscriptionCheckoutMinutes,
   creditVoiceSeconds,
   reverseReconciledSubscriptionCredits,
@@ -406,6 +407,7 @@ export async function creditPaidCheckoutsForUser(
       console.error("[stripe-minutes] reconcile session failed", session.id, error);
     }
   }
+  await capAllottedMinutesToPacks(id);
   return { ok: true as const, creditedSeconds };
 }
 
