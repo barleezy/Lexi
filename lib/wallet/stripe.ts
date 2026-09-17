@@ -185,7 +185,10 @@ export async function handleStripeWebhook(input: {
       userId,
       subscribed: false,
     });
-    return { ok: true as const, subscribed: false, ...updated };
+    if (!updated.ok) {
+      return { ok: false as const, status: 500, error: updated.error };
+    }
+    return { ...updated, subscribed: false };
   }
 
   if (event.type === "customer.subscription.updated") {
@@ -201,7 +204,10 @@ export async function handleStripeWebhook(input: {
       userId,
       subscribed,
     });
-    return { ok: true as const, subscribed, ...updated };
+    if (!updated.ok) {
+      return { ok: false as const, status: 500, error: updated.error };
+    }
+    return { ...updated, subscribed };
   }
 
   if (event.type !== "checkout.session.completed") {
