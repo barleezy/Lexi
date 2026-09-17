@@ -31,6 +31,9 @@
 		A20000000000000000000016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000016 /* Assets.xcassets */; };
 		A20000000000000000000017 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000017 /* PrivacyInfo.xcprivacy */; };
 		A20000000000000000000018 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000001B /* SettingsView.swift */; };
+		A20000000000000000000019 /* TalkToLexiAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000001C /* TalkToLexiAppDelegate.swift */; };
+		A2000000000000000000001A /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000001D /* CarPlaySceneDelegate.swift */; };
+		A2000000000000000000001B /* CarPlay.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B2000000000000000000001E /* CarPlay.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +64,9 @@
 		B20000000000000000000019 /* TalkToLexi.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TalkToLexi.entitlements; sourceTree = "<group>"; };
 		B2000000000000000000001A /* Lexi.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Lexi.xcconfig; sourceTree = "<group>"; };
 		B2000000000000000000001B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B2000000000000000000001C /* TalkToLexiAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalkToLexiAppDelegate.swift; sourceTree = "<group>"; };
+		B2000000000000000000001D /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
+		B2000000000000000000001E /* CarPlay.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CarPlay.framework; path = System/Library/Frameworks/CarPlay.framework; sourceTree = SDKROOT; };
 		C20000000000000000000001 /* TalkToLexi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TalkToLexi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -69,6 +75,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A2000000000000000000001B /* CarPlay.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,8 +87,17 @@
 			children = (
 				E20000000000000000000014 /* Config */,
 				E20000000000000000000002 /* TalkToLexi */,
+				E20000000000000000000017 /* Frameworks */,
 				E20000000000000000000003 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		E20000000000000000000017 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B2000000000000000000001E /* CarPlay.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		E20000000000000000000002 /* TalkToLexi */ = {
@@ -110,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				B20000000000000000000001 /* TalkToLexiApp.swift */,
+				B2000000000000000000001C /* TalkToLexiAppDelegate.swift */,
 				B20000000000000000000002 /* LexiAppController.swift */,
 			);
 			path = App;
@@ -118,6 +135,7 @@
 		E20000000000000000000005 /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				E20000000000000000000016 /* CarPlay */,
 				E20000000000000000000007 /* Auth */,
 				E20000000000000000000008 /* Voice */,
 				E20000000000000000000009 /* Music */,
@@ -213,14 +231,6 @@
 			path = Toys;
 			sourceTree = "<group>";
 		};
-		E20000000000000000000015 /* Settings */ = {
-			isa = PBXGroup;
-			children = (
-				B2000000000000000000001B /* SettingsView.swift */,
-			);
-			path = Settings;
-			sourceTree = "<group>";
-		};
 		E2000000000000000000000F /* API */ = {
 			isa = PBXGroup;
 			children = (
@@ -243,6 +253,22 @@
 				B2000000000000000000001A /* Lexi.xcconfig */,
 			);
 			path = Config;
+			sourceTree = "<group>";
+		};
+		E20000000000000000000015 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				B2000000000000000000001B /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		E20000000000000000000016 /* CarPlay */ = {
+			isa = PBXGroup;
+			children = (
+				B2000000000000000000001D /* CarPlaySceneDelegate.swift */,
+			);
+			path = CarPlay;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -316,7 +342,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A20000000000000000000001 /* TalkToLexiApp.swift in Sources */,
+				A20000000000000000000019 /* TalkToLexiAppDelegate.swift in Sources */,
 				A20000000000000000000002 /* LexiAppController.swift in Sources */,
+				A2000000000000000000001A /* CarPlaySceneDelegate.swift in Sources */,
 				A20000000000000000000003 /* AccountStore.swift in Sources */,
 				A20000000000000000000004 /* SignInCoordinator.swift in Sources */,
 				A20000000000000000000005 /* RealtimeSession.swift in Sources */,
@@ -395,6 +423,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TalkToLexi/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -422,6 +451,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TalkToLexi/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

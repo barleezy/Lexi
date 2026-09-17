@@ -48,12 +48,15 @@ The stored PSN identity is the backup account **Barleezybaby** (login `barleezyf
 
 ## CarPlay
 
-Do not add a CarPlay scene, `CPTemplateApplicationScene`, or CarPlay entitlements until Apple grants the restricted capability. This target is phone UI only. After the entitlement lands, add the scene and entitlement in a separate change.
+Communication scene (`CPTemplateApplicationScene`, role `CPTemplateApplicationSceneSessionRoleApplication`) with entitlement `com.apple.developer.carplay-communication`. The CarPlay home screen shows Talk to Lexi only. A one-row list starts or ends the same voice call as **Connect** / **End** on iPhone (`LexiAppController.toggleCall()`). If nobody is signed in, CarPlay asks to sign in on iPhone — there is no head-unit keyboard. Hands-free only: no video, camera, photos, or watch.
+
+The App ID already has the Communication entitlement. After pulling this change, regenerate the iOS provisioning profile so it includes CarPlay Communication, set your Team in Xcode, and run on a device. Simulator: I/O → External Displays → CarPlay.
 
 ## Folder layout
 
 ```
 TalkToLexi/App
+TalkToLexi/Features/CarPlay
 TalkToLexi/Features/Voice
 TalkToLexi/Features/Music
 TalkToLexi/Features/Watch

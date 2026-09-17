@@ -4,6 +4,8 @@ import Foundation
 
 @MainActor
 final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelegate {
+    static let shared = LexiAppController()
+
     let account = AccountStore.shared
     let api = LexiAPIClient()
     let realtime = RealtimeSession()
@@ -419,14 +421,14 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
 
     func playAppleMusic() {
         Task {
-            await music.playFromUser(using: api)
+            await music.playFromUser(using: api, allowOurSong: account.isAdmin)
             syncDuck()
         }
     }
 
     func skipAppleMusic() {
         Task {
-            await music.skipNext(using: api)
+            await music.skipNext(using: api, allowOurSong: account.isAdmin)
             syncDuck()
         }
     }
@@ -519,6 +521,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
                 url: arguments["url"] as? String,
                 query: arguments["query"] as? String,
                 songId: (arguments["song_id"] as? String) ?? (arguments["songId"] as? String),
+                playlistId: (arguments["playlist_id"] as? String) ?? (arguments["playlistId"] as? String),
+                allowOurSong: account.isAdmin,
                 using: api
             )
             syncDuck()

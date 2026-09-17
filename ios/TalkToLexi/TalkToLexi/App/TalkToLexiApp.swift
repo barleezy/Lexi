@@ -2,7 +2,8 @@ import SwiftUI
 
 @main
 struct TalkToLexiApp: App {
-    @StateObject private var app = LexiAppController()
+    @UIApplicationDelegateAdaptor(TalkToLexiAppDelegate.self) private var appDelegate
+    @ObservedObject private var app = LexiAppController.shared
 
     var body: some Scene {
         WindowGroup {

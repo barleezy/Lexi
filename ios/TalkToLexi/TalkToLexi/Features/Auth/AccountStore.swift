@@ -43,6 +43,12 @@ final class AccountStore {
         !token.isEmpty && !userId.isEmpty
     }
 
+    /// Matches web `isAdminUserId`: Ian / Barleezy only.
+    var isAdmin: Bool {
+        let id = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return id == "ian" || id == "barleezy"
+    }
+
     /// Signed-in account, or a stable guest id so Connect works without login.
     var sessionUserId: String {
         if !userId.isEmpty { return userId }
