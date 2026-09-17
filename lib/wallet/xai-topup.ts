@@ -87,7 +87,7 @@ export function xaiPrepaidTopUpUrl(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function stripeXaiWebhookSecret(env: NodeJS.ProcessEnv = process.env) {
-  return env.STRIPE_XAI_WEBHOOK_SECRET?.trim() || env.STRIPE_WEBHOOK_SECRET?.trim() || "";
+  return env.STRIPE_WEBHOOK_SECRET?.trim() || "";
 }
 
 function sessionUserId(session: Stripe.Checkout.Session) {

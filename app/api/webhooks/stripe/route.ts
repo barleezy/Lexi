@@ -1,3 +1,4 @@
+import { stripeClient } from "@/lib/wallet/stripe";
 import { handleXaiStripeWebhook, XAI_STRIPE_WEBHOOK_URL } from "@/lib/wallet/xai-topup";
 
 export const runtime = "nodejs";
@@ -15,9 +16,8 @@ export const dynamic = "force-dynamic";
  *     Do not use a trailing slash (Next 308s to the non-slash URL).
  *  3. Events: checkout.session.completed
  *  4. Copy the signing secret: Stripe endpoint → Signing secret → Reveal (whsec_…).
- *     Vercel → Project → Settings → Environment Variables →
- *     STRIPE_XAI_WEBHOOK_SECRET (preferred; keeps voice-minutes STRIPE_WEBHOOK_SECRET intact)
- *     or STRIPE_WEBHOOK_SECRET. Also set XAI_MANAGEMENT_API_KEY and XAI_TEAM_ID.
+ *     Vercel → Project → Settings → Environment Variables → STRIPE_WEBHOOK_SECRET.
+ *     Also set XAI_MANAGEMENT_API_KEY and XAI_TEAM_ID.
  *
  * Top-up: POST https://management-api.x.ai/v1/billing/teams/{team_id}/prepaid/top-up
  * Header: Authorization: Bearer <XAI_MANAGEMENT_API_KEY>  (not XAI_API_KEY)
@@ -25,9 +25,19 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   const signature = request.headers.get("stripe-signature") ?? "";
-  const rawBody = await request.text();
+  const body = await request.text();
+  const stripe = stripeClient();
+  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
+    return Response.json({ error: "Billing is not configured." }, { status: 503 });
+  }
   try {
-    const result = await handleXaiStripeWebhook({ rawBody, signature });
+    stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (error) {
+    console.error("[stripe-xai-webhook] invalid signature", error);
+    return Response.json({ error: "Invalid Stripe signature." }, { status: 400 });
+  }
+  try {
+    const result = await handleXaiStripeWebhook({ rawBody: body, signature });
     if (!result.ok) {
       return Response.json({ error: result.error }, { status: result.status });
     }
