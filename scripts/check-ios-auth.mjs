@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   IOS_AUTH_PATH,
   IOS_CALLBACK_SCHEMES,
@@ -43,5 +44,17 @@ expect(
   callbackURLWithToken("talktolexi://auth", token, "Ian", "s1")?.includes("token="),
   "callback has token",
 );
+
+const chrome = readFileSync(new URL("../components/site-chrome.tsx", import.meta.url), "utf8");
+expect(chrome.includes('pathname.startsWith("/ios/")'), "site chrome skips /ios auth");
+expect(chrome.includes("{isIosAuth ? null : <SiteFooter />}"), "ios sign-in has no website footer");
+expect(chrome.includes("isHome || isWatch || isIosAuth"), "ios sign-in has no website header");
+
+const signIn = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/SignInCoordinator.swift", import.meta.url),
+  "utf8",
+);
+expect(!signIn.includes("SiteFooter"), "native sign-in does not import web footer");
+expect(signIn.includes("ios/signin"), "native sign-in still opens /ios/signin");
 
 console.log("ios auth ok");

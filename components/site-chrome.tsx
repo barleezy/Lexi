@@ -15,12 +15,13 @@ export function SiteChrome({
   const pathname = usePathname();
   const isHome = pathname === "/";
   const isWatch = pathname === "/watch";
+  const isIosAuth = pathname === "/ios/signin" || pathname.startsWith("/ios/");
 
   return (
     <>
-      {isHome || isWatch ? null : <SiteHeader signedIn={signedIn} />}
+      {isHome || isWatch || isIosAuth ? null : <SiteHeader signedIn={signedIn} />}
       <div className="flex flex-1 flex-col">{children}</div>
-      <SiteFooter />
+      {isIosAuth ? null : <SiteFooter />}
     </>
   );
 }
