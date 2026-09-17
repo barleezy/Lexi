@@ -442,11 +442,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     }
 
     private func requestMicrophone() async -> Bool {
-        await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                continuation.resume(returning: granted)
-            }
-        }
+        await AVAudioApplication.requestRecordPermission()
     }
 
     nonisolated func realtime(_ session: RealtimeSession, didChange phase: VoicePhase) {
