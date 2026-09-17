@@ -1,6 +1,7 @@
 import { handleXaiStripeWebhook, XAI_STRIPE_WEBHOOK_URL } from "@/lib/wallet/xai-topup";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /**
  * Stripe → xAI prepaid credit top-up.
@@ -9,9 +10,9 @@ export const runtime = "nodejs";
  *
  * Setup:
  *  1. Stripe Dashboard → Developers → Webhooks → Add endpoint
- *  2. URL: https://talktolexi.app/api/webhooks/stripe
- *     If apex 307s to www, use https://www.talktolexi.app/api/webhooks/stripe
- *     (Stripe will not follow redirects; no trailing slash).
+ *  2. URL: https://www.talktolexi.app/api/webhooks/stripe
+ *     Do not use the apex host (talktolexi.app → 307 to www; Stripe refuses redirects).
+ *     Do not use a trailing slash (Next 308s to the non-slash URL).
  *  3. Events: checkout.session.completed
  *  4. Copy the signing secret: Stripe endpoint → Signing secret → Reveal (whsec_…).
  *     Vercel → Project → Settings → Environment Variables →
