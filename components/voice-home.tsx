@@ -456,10 +456,6 @@ export function VoiceHome({
   }
 
   useEffect(() => {
-    setBuyIntent(new URLSearchParams(window.location.search).get("next") === "/buy");
-  }, []);
-
-  useEffect(() => {
     if (!callCapAtMs) return;
     const timer = window.setInterval(() => setCallTick((tick) => tick + 1), 1000);
     return () => window.clearInterval(timer);
@@ -1231,7 +1227,7 @@ export function VoiceHome({
     setCallLeftover(0);
   }
 
-  async function refreshVoiceBalance() {
+  async function refreshVoiceBalance(): Promise<number | null> {
     try {
       const response = await fetch("/api/billing/balance", {
         credentials: "include",
@@ -1241,8 +1237,7 @@ export function VoiceHome({
         setVoiceSeconds(null);
         setVoiceLabel("");
         setBuyPacks(catalogPacks);
-        setRehearsal(false);
-        return;
+        return null;
       }
       const body = (await response.json()) as {
         voiceSeconds?: number;
@@ -1250,15 +1245,15 @@ export function VoiceHome({
         stripeConfigured?: boolean;
         buyPacks?: BuyPackCard[];
       };
-      if (!response.ok) return;
+      if (!response.ok) return null;
       const seconds = typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0;
       setVoiceSeconds(seconds);
       setVoiceLabel(typeof body.label === "string" ? body.label : "");
       setStripeConfigured(body.stripeConfigured === true);
       setBuyPacks(Array.isArray(body.buyPacks) && body.buyPacks.length ? body.buyPacks : catalogPacks);
-      setRehearsal(seconds <= 0);
+      return seconds;
     } catch {
-      // ignore
+      return null;
     }
   }
 
@@ -1691,6 +1686,14 @@ export function VoiceHome({
       setError("Sign in first.");
       return null;
     }
+    const seconds = await refreshVoiceBalance();
+    if (seconds !== null && seconds <= 0) {
+      setRehearsal(true);
+      setBuyIntent(true);
+      return null;
+    }
+    setRehearsal(false);
+    setBuyIntent(false);
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: commitRows,
