@@ -192,6 +192,7 @@ export async function topUpXaiPrepaidCredits(input: {
   const url = xaiPrepaidTopUpUrl(env);
   const amount_total = input.amount_total;
   const requestBody = { amount: { val: String(amount_total) } };
+  const serializedBody = JSON.stringify(requestBody);
 
   if (!key) {
     return { ok: false as const, error: "XAI_MANAGEMENT_API_KEY is not configured." };
@@ -200,19 +201,19 @@ export async function topUpXaiPrepaidCredits(input: {
     return { ok: false as const, error: "XAI_TEAM_ID is not configured." };
   }
 
-  console.info("[xai-topup] request body", requestBody);
+  console.info("[xai-topup] request body", serializedBody);
   const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(requestBody),
+    body: serializedBody,
   });
   const body = await response.text();
   console.info("[xai-topup] response", { status: response.status, body });
 
-  if (!response.ok) {
+  if (response.status !== 200) {
     return {
       ok: false as const,
       status: response.status,
@@ -290,9 +291,9 @@ export async function handleXaiStripeWebhook(input: {
 
   try {
     const topped = await topUpXaiPrepaidCredits({ amount_total, env });
-    if (!topped.ok) {
+    if (!topped.ok || topped.status !== 200) {
       await releaseTopupClaim(event.id);
-      return { ok: false as const, status: 500, error: topped.error };
+      return { ok: false as const, status: 500, error: topped.ok ? `xAI top-up failed (${topped.status})` : topped.error };
     }
     await markTopupSucceeded(event.id, topped.status, topped.body);
     return {

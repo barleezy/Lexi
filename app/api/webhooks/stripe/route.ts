@@ -23,9 +23,9 @@ export const dynamic = "force-dynamic";
  * Header: Authorization: Bearer <XAI_MANAGEMENT_API_KEY>  (not XAI_API_KEY)
  * Body: { "amount": { "val": "<cents>" } }  — Stripe session.amount_total as a string.
  */
-export async function POST(request: Request) {
-  const signature = request.headers.get("stripe-signature") ?? "";
-  const body = await request.text();
+export async function POST(req: Request) {
+  const signature = req.headers.get("stripe-signature") ?? "";
+  const body = await req.text();
   const stripe = stripeClient();
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
     return Response.json({ error: "Billing is not configured." }, { status: 503 });
