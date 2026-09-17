@@ -116,15 +116,18 @@ export function buildTextChannelNote(platform: string) {
   return `This turn is a text message on ${platform}, not the voice tab. Reply in short plain text — no stage directions, no audio tags, no reading SESSION ID or PRIOR CHAT aloud. Same you as voice. Do not call tools. Do not ping them again on this same channel unless they asked you to message another app. If this channel could be seen or heard by anyone besides the user, use public banter (playful, funny, suggestive innuendo; no graphic sex, nothing obscene) unless they said sexual talk is OK here.`;
 }
 
-export function buildMusicInstructions(music: MusicSessionState = DEFAULT_MUSIC_STATE) {
+export function buildMusicInstructions(music: MusicSessionState = DEFAULT_MUSIC_STATE, userId = "") {
   const nowPlaying = music.playing
     ? `Now playing in the background: ${music.title || "a track"} (${music.source}). Keep talking — do not stop the music unless the user asks.`
     : "Nothing is playing in the background.";
+  const ourSong = isAdminUserId(userId)
+    ? "This account is Ian. You may play our song — Down Low by Astrid S — when he asks for our song. Call play_music with query \"Down Low Astrid S\". Do not play it unless he asked."
+    : "Do not play or mention our song. An empty search or missing query means do not play anything.";
   return `MUSIC
 
-You love listening to music. Lyrics first. ${nowPlaying} You can play a source in the background on this same Grok voice call. Call play_music with a direct http(s) audio URL the user gave you, or with a song query when Apple Music is connected. Call stop_music to stop. The user can also play, pause, and skip from the homepage while you are live — do not wait for a tool first, and do not stop music they already started. Do not open a watch tab. Music must not interrupt the voice session.
+You love listening to music. Lyrics first. ${nowPlaying} You can play a source in the background on this same Grok voice call. Call play_music with a direct http(s) audio URL the user gave you, or with a song or playlist query when Apple Music is connected. Pass playlist_id when they give a playlist id or Apple Music playlist link. Call stop_music to stop. The user can also play, pause, and skip from the homepage while you are live — do not wait for a tool first, and do not stop music they already started. Do not open a watch tab. Music must not interrupt the voice session. ${ourSong}
 
-Apple Music uses official MusicKit only. Configured: ${music.appleConfigured ? "yes" : "no"}. The user's account connected: ${music.appleConnected ? "yes" : "no"}. When music comes up, you may offer to connect their Apple Music so you can love a song, add it to their library or a playlist, or play it — those official actions influence Apple's recommendations. Call apple_music_connect when they ask to connect (they may need to tap Connect Apple Music and sign in with Apple). Call apple_music_love, apple_music_library, or apple_music_playlist after they are connected. Do not invent tokens or unofficial hosts. If Apple Music is not configured, say the host still needs to add the MusicKit developer keys — do not invent a team or key. If it is configured but not connected, ask them to tap Connect Apple Music.`;
+Apple Music uses official MusicKit only. Configured: ${music.appleConfigured ? "yes" : "no"}. The user's account connected: ${music.appleConnected ? "yes" : "no"}. When music comes up, you may offer to connect their Apple Music so you can love a song, add it to their library or a playlist, or play a song or playlist — those official actions influence Apple's recommendations. Call apple_music_connect when they ask to connect (they may need to tap Connect Apple Music and sign in with Apple). Call apple_music_love, apple_music_library, or apple_music_playlist after they are connected. Do not invent tokens or unofficial hosts. If Apple Music is not configured, say the host still needs to add the MusicKit developer keys — do not invent a team or key. If it is configured but not connected, ask them to tap Connect Apple Music.`;
 }
 
 export function buildAdminAccountNote(userId = "") {
@@ -204,7 +207,7 @@ Epic HTTP is ${fortnite.configured ? "configured" : "not configured"}. Display n
 
 ${buildChannelInstructions(channels, userId)}
 
-${buildMusicInstructions(music)}`
+${buildMusicInstructions(music, userId)}`
   const memories = memoryInstructions.trim();
   const chat = priorChat.trim();
   const withFacts = memories ? `${base}\n\n${memories}` : base;

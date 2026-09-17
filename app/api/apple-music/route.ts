@@ -4,8 +4,9 @@ import {
   appleMusicNotConfiguredResult,
   rateSong,
   requireDeveloperToken,
+  resolveCatalogPlaylist,
   resolveCatalogSong,
-  searchCatalogSongs,
+  searchCatalog,
 } from "@/lib/apple-music/api";
 import {
   APPLE_MUSIC_SETUP,
@@ -14,6 +15,7 @@ import {
   appleMusicStorefront,
   isAppleMusicConfigured,
   parseAppleMusicAction,
+  parseAppleMusicPlaylistId,
   parseAppleMusicQuery,
   parseAppleMusicSongId,
 } from "@/lib/apple-music/config";
@@ -88,6 +90,7 @@ export async function POST(request: Request) {
     songId?: unknown;
     id?: unknown;
     playlist?: unknown;
+    playlistId?: unknown;
     playlistName?: unknown;
   };
   try {
@@ -136,7 +139,25 @@ export async function POST(request: Request) {
 
   if (action === "search") {
     const query = parseAppleMusicQuery(body.query ?? body.song);
-    const found = await searchCatalogSongs({ query, developerToken: minted.token });
+    const playlistId = parseAppleMusicPlaylistId(body.playlistId);
+    if (playlistId && !query) {
+      const resolved = await resolveCatalogPlaylist({
+        playlistId,
+        developerToken: minted.token,
+      });
+      if (!resolved.ok) {
+        return Response.json({ ...resolved, configured: true }, { status: 404 });
+      }
+      return Response.json({
+        ok: true,
+        configured: true,
+        songs: [],
+        playlists: [resolved.playlist],
+        playlist: resolved.playlist,
+        query: playlistId,
+      });
+    }
+    const found = await searchCatalog({ query, developerToken: minted.token });
     if (!found.ok) {
       return Response.json({ ...found, configured: true }, { status: 404 });
     }

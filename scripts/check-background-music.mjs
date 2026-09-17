@@ -49,8 +49,12 @@ expect(bgPlayer.includes("async resume()"), "url music can resume after voice st
 const persona = readFileSync(new URL("../lib/voice/persona.ts", import.meta.url), "utf8");
 expect(persona.includes("Down Low"), "couple song in persona");
 expect(persona.includes("Astrid S"), "Astrid S in persona");
+expect(persona.includes("isAdminUserId(userId)"), "our song play instruction is admin-gated");
+expect(persona.includes("Do not play or mention our song"), "non-admin empty query plays nothing");
+expect(persona.includes("playlist query"), "play_music can take a playlist");
+expect(persona.includes("playlist_id"), "play_music accepts playlist_id");
 expect(/lyrics/i.test(persona), "lyrics-first in persona");
-expect(persona.includes("affect 10, stays 10"), "affect 10 stays 10 in persona");
+expect(persona.includes("stay at affect 10"), "affect 10 stays 10 in persona");
 expect(persona.includes("apple_music_connect"), "connect tool in persona");
 expect(persona.includes("play_music"), "play_music in persona");
 expect(persona.includes("homepage"), "user can play from the homepage");

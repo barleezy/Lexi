@@ -5,6 +5,7 @@ type AppleMusicBarProps = {
   query: string;
   busy?: boolean;
   hint?: string | null;
+  showOurSong?: boolean;
   onQueryChange: (value: string) => void;
   onPlayPause: () => void;
   onNext: () => void;
@@ -20,6 +21,7 @@ export function AppleMusicBar({
   query,
   busy,
   hint,
+  showOurSong,
   onQueryChange,
   onPlayPause,
   onNext,
@@ -36,7 +38,7 @@ export function AppleMusicBar({
           type="text"
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Play a song or paste an Apple Music link"
+          placeholder="Play a song, playlist, or paste an Apple Music link"
           autoComplete="off"
           className="min-h-8 min-w-0 flex-1 bg-transparent px-2 text-sm text-foreground outline-none placeholder:text-zinc-500"
         />
@@ -67,7 +69,9 @@ export function AppleMusicBar({
         </p>
       ) : (
         <p className="px-1 text-[11px] text-zinc-500">
-          Play starts from your tap. Empty play is our song.
+          {showOurSong
+            ? "Play starts from your tap. Empty play is our song."
+            : "Play starts from your tap. Search a song or playlist first."}
         </p>
       )}
       {hint ? <p className="px-1 text-[11px] text-zinc-500">{hint}</p> : null}

@@ -10,7 +10,7 @@ const SUPPORT_EMAIL = "barleezy@talktolexi.app";
 
 export default function SupportPage() {
   return (
-    <main className="buy-page relative flex min-h-dvh flex-1 flex-col overflow-hidden font-sans text-zinc-100">
+    <main className="buy-page relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto font-sans text-zinc-100">
       <style>{`
         .buy-page {
           --buy-pink: #f472b6;
@@ -138,36 +138,6 @@ export default function SupportPage() {
             </ul>
           </section>
         </article>
-
-        <p className="mt-auto pt-12 text-sm text-zinc-400">
-          <Link href="/buy" className="underline-offset-4 hover:underline hover:text-white">
-            Buy minutes
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/subscribe" className="underline-offset-4 hover:underline hover:text-white">
-            Subscribe
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/refund" className="underline-offset-4 hover:underline hover:text-white">
-            Refunds
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/privacy" className="underline-offset-4 hover:underline hover:text-white">
-            Privacy
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/terms" className="underline-offset-4 hover:underline hover:text-white">
-            Terms
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/site" className="underline-offset-4 hover:underline hover:text-white">
-            Site
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
-            Back to Call
-          </Link>
-        </p>
       </div>
     </main>
   );

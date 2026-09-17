@@ -86,13 +86,14 @@ export function iosRealtimeTools(includeFortnite = false) {
       type: "function",
       name: "play_music",
       description:
-        "Play background music on this same voice call. Direct http(s) audio URL or an Apple Music query/song_id. Does not open video. Voice stays up.",
+        "Play background music on this same voice call. Direct http(s) audio URL or an Apple Music song/playlist query, song_id, or playlist_id. Empty query plays nothing. Does not open video. Voice stays up.",
       parameters: {
         type: "object",
         properties: {
           url: { type: "string" },
           query: { type: "string" },
           song_id: { type: "string" },
+          playlist_id: { type: "string" },
         },
       },
     },

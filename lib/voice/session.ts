@@ -118,6 +118,11 @@ import {
   type ToysSessionState,
 } from "@/lib/voice/persona";
 import { parseAudioSourceUrl } from "@/lib/voice/background-music";
+import {
+  looksLikePlaylistQuery,
+  parseAppleMusicPlaylistId,
+  parseAppleMusicPlaylistIdFromInput,
+} from "@/lib/apple-music/config";
 import { fortniteRealtimeTools, sanitizeFortniteToolResult } from "@/lib/voice/fortnite-tools";
 
 export type { GeneratedMediaItem };
@@ -148,6 +153,10 @@ type SessionHandlers = {
   playBackgroundUrl?: (url: string, title?: string) => Promise<{ ok: boolean; title?: string; error?: string }>;
   playAppleMusicSong?: (
     songId: string,
+    title?: string,
+  ) => Promise<{ ok: boolean; title?: string; error?: string }>;
+  playAppleMusicPlaylist?: (
+    playlistId: string,
     title?: string,
   ) => Promise<{ ok: boolean; title?: string; error?: string }>;
   stopBackgroundMusic?: () => Promise<void>;
@@ -651,13 +660,14 @@ const PLAY_MUSIC_TOOL = {
   type: "function",
   name: "play_music",
   description:
-    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL the user gave you, or a song query to play on their connected Apple Music. The user can also play/pause/skip from the homepage without this tool. Does not open a watch tab. Voice stays up.",
+    "Play a music source in the background on this same voice call. Pass a direct http(s) audio URL the user gave you, or an Apple Music song or playlist query. Empty query plays nothing. The user can also play/pause/skip from the homepage without this tool. Does not open a watch tab. Voice stays up.",
   parameters: {
     type: "object",
     properties: {
       url: { type: "string", description: "Direct http(s) audio URL (mp3, m4a, aac, ogg, wav, flac)." },
-      query: { type: "string", description: "Song or artist to play on Apple Music when his account is connected." },
+      query: { type: "string", description: "Song, artist, or playlist to play on Apple Music when the account is connected." },
       song_id: { type: "string", description: "Optional Apple Music catalog song id." },
+      playlist_id: { type: "string", description: "Optional Apple Music catalog or library playlist id (pl.… or p.…)." },
     },
   },
 };
@@ -2973,10 +2983,33 @@ export class VoiceSession {
       }
       const query = typeof args.query === "string" ? args.query.trim() : "";
       const songId = typeof args.song_id === "string" ? args.song_id.trim() : "";
-      const searched = await this.postAppleMusic("search", { query, songId });
+      const playlistId =
+        parseAppleMusicPlaylistId(args.playlist_id) || parseAppleMusicPlaylistIdFromInput(query);
+      if (!query && !songId && !playlistId) {
+        return { ok: false, error: "Need a song, playlist, or audio URL." };
+      }
+      const searched = await this.postAppleMusic("search", { query, songId, playlistId });
       const song = (searched.song ?? (Array.isArray(searched.songs) ? searched.songs[0] : null)) as
         | { id?: string; title?: string; artist?: string }
         | null;
+      const playlist = (searched.playlist ??
+        (Array.isArray(searched.playlists) ? searched.playlists[0] : null)) as
+        | { id?: string; title?: string; curator?: string }
+        | null;
+      const resolvedPlaylistId = playlistId || (typeof playlist?.id === "string" ? playlist.id : "");
+      const wantPlaylist =
+        Boolean(playlistId) || looksLikePlaylistQuery(query) || (!songId && !song?.id && Boolean(resolvedPlaylistId));
+      if (wantPlaylist && resolvedPlaylistId) {
+        if (!this.handlers.playAppleMusicPlaylist) {
+          return { ok: false, error: "Apple Music playback is not available in this tab." };
+        }
+        const title =
+          [playlist?.title, playlist?.curator].filter(Boolean).join(" — ") || "Apple Music playlist";
+        const played = await this.handlers.playAppleMusicPlaylist(resolvedPlaylistId, title);
+        if (!played.ok) return { ok: false, error: played.error, playlist };
+        this.setMusicPlayback(true, played.title || title, "apple");
+        return { ok: true, playing: true, source: "apple", playlist };
+      }
       const id = songId || (typeof song?.id === "string" ? song.id : "");
       if (!searched.ok || !id) {
         return { ok: false, error: typeof searched.error === "string" ? searched.error : "No Apple Music match." };
@@ -3003,7 +3036,7 @@ export class VoiceSession {
 
   private async postAppleMusic(
     action: string,
-    input: { query?: string; songId?: string; playlist?: string },
+    input: { query?: string; songId?: string; playlist?: string; playlistId?: string },
   ) {
     const response = await fetch("/api/apple-music", {
       method: "POST",
@@ -3016,6 +3049,7 @@ export class VoiceSession {
         query: input.query,
         songId: input.songId,
         playlist: input.playlist,
+        playlistId: input.playlistId,
       }),
     });
     try {

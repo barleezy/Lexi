@@ -1,4 +1,10 @@
-import { MUSICKIT_SCRIPT, OUR_SONG_SEARCH, parseAppleMusicSongIdFromInput } from "./config";
+import {
+  looksLikePlaylistQuery,
+  MUSICKIT_SCRIPT,
+  OUR_SONG_SEARCH,
+  parseAppleMusicPlaylistIdFromInput,
+  parseAppleMusicSongIdFromInput,
+} from "./config";
 
 export { MUSICKIT_SCRIPT };
 
@@ -15,10 +21,16 @@ export type AppleMusicCatalogHit = {
   artist: string;
 };
 
+export type AppleMusicCatalogPlaylist = {
+  id: string;
+  title: string;
+  curator: string;
+};
+
 type MusicKitInstance = {
   authorize: () => Promise<string>;
   unauthorize: () => Promise<void> | void;
-  setQueue: (opts: { song?: string; songs?: string[] }) => Promise<unknown>;
+  setQueue: (opts: { song?: string; songs?: string[]; playlist?: string }) => Promise<unknown>;
   play: () => Promise<void>;
   stop: () => Promise<void> | void;
   pause?: () => Promise<void> | void;
@@ -55,6 +67,7 @@ declare global {
 
 const PLAYING_STATE = 2;
 const searchCache = new Map<string, AppleMusicCatalogHit[]>();
+const playlistCache = new Map<string, AppleMusicCatalogPlaylist[]>();
 const playbackListeners = new Set<(state: AppleMusicNowPlaying) => void>();
 
 let configuredToken = "";
@@ -152,6 +165,10 @@ function titleFromHit(hit: AppleMusicCatalogHit) {
   return [hit.title, hit.artist].filter(Boolean).join(" — ");
 }
 
+function titleFromPlaylist(playlist: AppleMusicCatalogPlaylist) {
+  return [playlist.title, playlist.curator].filter(Boolean).join(" — ") || "Apple Music playlist";
+}
+
 export function cacheAppleMusicSongs(query: string, songs: AppleMusicCatalogHit[]) {
   const key = query.trim().toLowerCase();
   if (!key || !songs.length) return;
@@ -162,32 +179,58 @@ export function cachedAppleMusicSongs(query: string) {
   return searchCache.get(query.trim().toLowerCase()) ?? [];
 }
 
+export function cacheAppleMusicPlaylists(query: string, playlists: AppleMusicCatalogPlaylist[]) {
+  const key = query.trim().toLowerCase();
+  if (!key || !playlists.length) return;
+  playlistCache.set(key, playlists);
+}
+
+export function cachedAppleMusicPlaylists(query: string) {
+  return playlistCache.get(query.trim().toLowerCase()) ?? [];
+}
+
 export async function searchAppleMusicCatalog(query: string): Promise<AppleMusicCatalogHit[]> {
+  const found = await searchAppleMusic(query);
+  return found.songs;
+}
+
+export async function searchAppleMusic(query: string): Promise<{
+  songs: AppleMusicCatalogHit[];
+  playlists: AppleMusicCatalogPlaylist[];
+}> {
   const term = query.trim();
-  if (!term) return [];
-  const cached = cachedAppleMusicSongs(term);
-  if (cached.length) return cached;
+  if (!term) return { songs: [], playlists: [] };
+  const cachedSongs = cachedAppleMusicSongs(term);
+  const cachedPlaylists = cachedAppleMusicPlaylists(term);
+  if (cachedSongs.length || cachedPlaylists.length) {
+    return { songs: cachedSongs, playlists: cachedPlaylists };
+  }
+  const playlistId = parseAppleMusicPlaylistIdFromInput(term);
   const response = await fetch("/api/apple-music", {
     method: "POST",
     headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
-    body: JSON.stringify({ action: "search", query: term }),
+    body: JSON.stringify({
+      action: "search",
+      query: playlistId ? "" : term,
+      playlistId: playlistId || undefined,
+    }),
   });
   const body = (await response.json()) as {
     ok?: boolean;
     songs?: AppleMusicCatalogHit[];
     song?: AppleMusicCatalogHit;
+    playlists?: AppleMusicCatalogPlaylist[];
+    playlist?: AppleMusicCatalogPlaylist;
     error?: string;
   };
-  const songs = body.songs?.length
-    ? body.songs
-    : body.song
-      ? [body.song]
-      : [];
-  if (!response.ok || !songs.length) {
+  const songs = body.songs?.length ? body.songs : body.song ? [body.song] : [];
+  const playlists = body.playlists?.length ? body.playlists : body.playlist ? [body.playlist] : [];
+  if (!response.ok || (!songs.length && !playlists.length)) {
     throw new Error(body.error || "No Apple Music match.");
   }
   cacheAppleMusicSongs(term, songs);
-  return songs;
+  cacheAppleMusicPlaylists(term, playlists);
+  return { songs, playlists };
 }
 
 export async function prefetchOurSong() {
@@ -201,8 +244,25 @@ export async function prefetchOurSong() {
 function songIdsForInput(input = "") {
   const pasted = parseAppleMusicSongIdFromInput(input);
   if (pasted) return [pasted];
-  const query = input.trim() || OUR_SONG_SEARCH;
+  const query = input.trim();
+  if (!query) return [];
   return cachedAppleMusicSongs(query).map((song) => song.id);
+}
+
+function playlistIdForInput(input = "") {
+  const pasted = parseAppleMusicPlaylistIdFromInput(input);
+  if (pasted) return pasted;
+  const query = input.trim();
+  if (!query) return "";
+  return cachedAppleMusicPlaylists(query)[0]?.id ?? "";
+}
+
+function shouldPlayPlaylist(input = "") {
+  if (parseAppleMusicPlaylistIdFromInput(input)) return true;
+  if (looksLikePlaylistQuery(input)) return true;
+  const query = input.trim();
+  if (!query) return false;
+  return cachedAppleMusicPlaylists(query).length > 0 && cachedAppleMusicSongs(query).length === 0;
 }
 
 function hasQueue(music: MusicKitInstance) {
@@ -223,12 +283,13 @@ async function ensureAuthorized(music: MusicKitInstance) {
  * gesture — do not fetch/search before calling it.
  */
 export function appleMusicCanPlayFromGesture(input = "") {
-  if (parseAppleMusicSongIdFromInput(input)) return true;
+  if (parseAppleMusicPlaylistIdFromInput(input) || parseAppleMusicSongIdFromInput(input)) return true;
   if (!input.trim()) {
     const music = getMusicKitInstance();
     if (music && hasQueue(music)) return true;
+    return false;
   }
-  return songIdsForInput(input).length > 0;
+  return playlistIdForInput(input).length > 0 || songIdsForInput(input).length > 0;
 }
 
 async function musicForGesture(developerToken: string) {
@@ -242,14 +303,32 @@ async function musicForGesture(developerToken: string) {
 export async function playAppleMusicFromGesture(developerToken: string, input = "") {
   const music = await musicForGesture(developerToken);
   await ensureAuthorized(music);
-  const ids = songIdsForInput(input);
   if (!input.trim() && hasQueue(music)) {
     await music.play();
     emitPlayback();
     const now = readAppleMusicNowPlaying();
     return { ok: true as const, title: [now.title, now.artist].filter(Boolean).join(" — ") || "Apple Music" };
   }
+  const playlistId = shouldPlayPlaylist(input) ? playlistIdForInput(input) : "";
+  if (playlistId) {
+    await music.setQueue({ playlist: playlistId });
+    await music.play();
+    emitPlayback();
+    const cached = cachedAppleMusicPlaylists(input.trim())[0];
+    const now = readAppleMusicNowPlaying();
+    return {
+      ok: true as const,
+      title:
+        [now.title, now.artist].filter(Boolean).join(" — ") ||
+        (cached ? titleFromPlaylist(cached) : "Apple Music"),
+    };
+  }
+  const ids = songIdsForInput(input);
   if (!ids.length) {
+    if (!input.trim()) {
+      emitPlayback();
+      throw new Error("Search a song or playlist first.");
+    }
     try {
       await music.play();
     } catch {
@@ -261,7 +340,7 @@ export async function playAppleMusicFromGesture(developerToken: string, input = 
   await music.setQueue(ids.length > 1 ? { songs: ids } : { song: ids[0] });
   await music.play();
   emitPlayback();
-  const cached = cachedAppleMusicSongs(input.trim() || OUR_SONG_SEARCH)[0];
+  const cached = cachedAppleMusicSongs(input.trim())[0];
   const now = readAppleMusicNowPlaying();
   return {
     ok: true as const,
@@ -321,7 +400,7 @@ export async function skipAppleMusicFromGesture(developerToken: string, input = 
   const ids = songIdsForInput(input);
   const current = readAppleMusicNowPlaying().songId;
   const next = ids.find((id) => id !== current) || ids[1] || ids[0];
-  if (!next) throw new Error("Nothing else is queued. Search a song, then tap Next.");
+  if (!next) throw new Error("Nothing else is queued. Search a song or playlist, then tap Next.");
   await music.setQueue({ song: next });
   await music.play();
   emitPlayback();
@@ -353,6 +432,16 @@ export async function playAppleMusicSong(developerToken: string, songId: string)
     throw new Error("Connect Apple Music first — tap Connect Apple Music and sign in.");
   }
   await music.setQueue({ song: songId });
+  await music.play();
+  emitPlayback();
+}
+
+export async function playAppleMusicPlaylist(developerToken: string, playlistId: string) {
+  const music = await configureMusicKit(developerToken);
+  if (!music.isAuthorized) {
+    throw new Error("Connect Apple Music first — tap Connect Apple Music and sign in.");
+  }
+  await music.setQueue({ playlist: playlistId });
   await music.play();
   emitPlayback();
 }

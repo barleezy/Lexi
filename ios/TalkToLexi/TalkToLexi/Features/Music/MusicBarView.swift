@@ -6,13 +6,14 @@ struct MusicBarView: View {
     var title: String
     var busy: Bool
     var hint: String
+    var showOurSong: Bool
     var onPlayPause: () -> Void
     var onNext: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                TextField("Play a song or paste an Apple Music link", text: $query)
+                TextField("Play a song, playlist, or paste an Apple Music link", text: $query)
                     .textFieldStyle(.plain)
                     .foregroundStyle(.white)
                     .tint(.white)
@@ -46,7 +47,9 @@ struct MusicBarView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(LexiTheme.muted)
             } else {
-                Text("Play starts from your tap. Empty play is our song.")
+                Text(showOurSong
+                     ? "Play starts from your tap. Empty play is our song."
+                     : "Play starts from your tap. Search a song or playlist first.")
                     .font(.system(size: 11))
                     .foregroundStyle(LexiTheme.muted)
             }

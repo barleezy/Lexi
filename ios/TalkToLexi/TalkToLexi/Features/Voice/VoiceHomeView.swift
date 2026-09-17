@@ -156,6 +156,7 @@ struct VoiceHomeView: View {
                     title: app.music.source == "apple" ? app.music.title : "",
                     busy: app.music.busy,
                     hint: app.music.hint,
+                    showOurSong: app.account.isAdmin,
                     onPlayPause: { app.playAppleMusic() },
                     onNext: { app.skipAppleMusic() }
                 )

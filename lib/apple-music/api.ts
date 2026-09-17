@@ -3,6 +3,8 @@ import {
   APPLE_MUSIC_SETUP,
   appleMusicStorefront,
   isAppleMusicConfigured,
+  parseAppleMusicPlaylistId,
+  parseAppleMusicPlaylistIdFromInput,
   parseAppleMusicQuery,
   parseAppleMusicSongId,
 } from "./config";
@@ -12,6 +14,12 @@ export type CatalogSong = {
   id: string;
   title: string;
   artist: string;
+};
+
+export type CatalogPlaylist = {
+  id: string;
+  title: string;
+  curator: string;
 };
 
 async function appleFetch(
@@ -41,17 +49,29 @@ function songFromData(row: {
   };
 }
 
-export async function searchCatalogSongs(input: {
+function playlistFromData(row: {
+  id?: string;
+  attributes?: { name?: string; curatorName?: string };
+}): CatalogPlaylist | null {
+  if (!row.id) return null;
+  return {
+    id: row.id,
+    title: row.attributes?.name?.trim() || "Untitled playlist",
+    curator: row.attributes?.curatorName?.trim() || "",
+  };
+}
+
+export async function searchCatalog(input: {
   query: string;
   developerToken: string;
   storefront?: string;
   limit?: number;
 }) {
   const term = parseAppleMusicQuery(input.query);
-  if (!term) return { ok: false as const, error: "A song title or artist is required." };
+  if (!term) return { ok: false as const, error: "A song, playlist, or artist is required." };
   const storefront = (input.storefront || appleMusicStorefront()).toLowerCase();
   const limit = Math.min(8, Math.max(1, input.limit ?? 5));
-  const url = `/catalog/${encodeURIComponent(storefront)}/search?term=${encodeURIComponent(term)}&types=songs&limit=${limit}`;
+  const url = `/catalog/${encodeURIComponent(storefront)}/search?term=${encodeURIComponent(term)}&types=songs,playlists&limit=${limit}`;
   const response = await appleFetch(url, { method: "GET", developerToken: input.developerToken });
   if (!response.ok) {
     return {
@@ -61,13 +81,75 @@ export async function searchCatalogSongs(input: {
     };
   }
   const body = (await response.json()) as {
-    results?: { songs?: { data?: Array<{ id?: string; attributes?: { name?: string; artistName?: string } }> } };
+    results?: {
+      songs?: { data?: Array<{ id?: string; attributes?: { name?: string; artistName?: string } }> };
+      playlists?: { data?: Array<{ id?: string; attributes?: { name?: string; curatorName?: string } }> };
+    };
   };
   const songs = (body.results?.songs?.data ?? [])
     .map(songFromData)
     .filter((song): song is CatalogSong => Boolean(song));
-  if (!songs.length) return { ok: false as const, error: `No Apple Music songs matched “${term}”.` };
-  return { ok: true as const, songs, query: term };
+  const playlists = (body.results?.playlists?.data ?? [])
+    .map(playlistFromData)
+    .filter((playlist): playlist is CatalogPlaylist => Boolean(playlist));
+  if (!songs.length && !playlists.length) {
+    return { ok: false as const, error: `No Apple Music songs or playlists matched “${term}”.` };
+  }
+  return { ok: true as const, songs, playlists, query: term };
+}
+
+export async function searchCatalogSongs(input: {
+  query: string;
+  developerToken: string;
+  storefront?: string;
+  limit?: number;
+}) {
+  const found = await searchCatalog(input);
+  if (!found.ok) {
+    if (found.error === "A song, playlist, or artist is required.") {
+      return { ok: false as const, error: "A song title or artist is required." };
+    }
+    if (found.error.startsWith("No Apple Music songs or playlists matched")) {
+      const term = parseAppleMusicQuery(input.query);
+      return { ok: false as const, error: `No Apple Music songs matched “${term}”.` };
+    }
+    return found;
+  }
+  if (!found.songs.length) return { ok: false as const, error: `No Apple Music songs matched “${found.query}”.` };
+  return { ok: true as const, songs: found.songs, query: found.query };
+}
+
+export async function resolveCatalogPlaylist(input: {
+  query?: string;
+  playlistId?: string;
+  developerToken: string;
+  storefront?: string;
+}) {
+  const id =
+    parseAppleMusicPlaylistId(input.playlistId) || parseAppleMusicPlaylistIdFromInput(input.query);
+  const storefront = (input.storefront || appleMusicStorefront()).toLowerCase();
+  if (id) {
+    const url = `/catalog/${encodeURIComponent(storefront)}/playlists/${encodeURIComponent(id)}`;
+    const response = await appleFetch(url, { method: "GET", developerToken: input.developerToken });
+    if (response.ok) {
+      const body = (await response.json()) as {
+        data?: Array<{ id?: string; attributes?: { name?: string; curatorName?: string } }>;
+      };
+      const playlist = playlistFromData(body.data?.[0] ?? {});
+      if (playlist) return { ok: true as const, playlist };
+    }
+    return { ok: true as const, playlist: { id, title: "", curator: "" } };
+  }
+  const found = await searchCatalog({
+    query: input.query ?? "",
+    developerToken: input.developerToken,
+    limit: 5,
+  });
+  if (!found.ok) return found;
+  if (!found.playlists.length) {
+    return { ok: false as const, error: `No Apple Music playlists matched “${found.query}”.` };
+  }
+  return { ok: true as const, playlist: found.playlists[0] };
 }
 
 export async function resolveCatalogSong(input: {

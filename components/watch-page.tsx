@@ -485,7 +485,7 @@ export function WatchPage() {
   }, [hlsSrc]);
 
   return (
-    <div className="flex min-h-dvh flex-col bg-black font-sans text-white">
+    <div className="flex min-h-0 flex-1 flex-col bg-black font-sans text-white">
       <header className="flex items-center justify-between gap-3 px-4 py-3">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">
           {WATCH_UI_ENABLED ? "Watch" : "Lexi"}

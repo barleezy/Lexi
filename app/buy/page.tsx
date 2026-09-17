@@ -13,7 +13,7 @@ export default async function BuyPage() {
   const stripeReady = isStripeConfigured();
 
   return (
-    <main className="flex min-h-dvh flex-1 flex-col font-sans text-zinc-100">
+    <main className="flex min-h-0 flex-1 flex-col font-sans text-zinc-100">
       <BuyClient packs={packs} signedIn={Boolean(session)} stripeReady={stripeReady} />
     </main>
   );

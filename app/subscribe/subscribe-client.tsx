@@ -2,7 +2,6 @@
 
 import { useState, type FormEvent } from "react";
 import Image from "next/image";
-import Link from "next/link";
 
 export function SubscribeClient({
   signedIn = false,
@@ -109,7 +108,7 @@ export function SubscribeClient({
   }
 
   return (
-    <div className="buy-page relative flex min-h-dvh flex-1 flex-col overflow-hidden">
+    <div className="buy-page relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
       <style>{`
         .buy-page {
           --buy-pink: #f472b6;
@@ -292,36 +291,6 @@ export function SubscribeClient({
             {error}
           </p>
         ) : null}
-
-        <p className="mt-auto pt-12 text-sm text-zinc-400">
-          <Link href="/buy" className="underline-offset-4 hover:underline hover:text-white">
-            Buy minutes instead
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/refund" className="underline-offset-4 hover:underline hover:text-white">
-            Refunds
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/privacy" className="underline-offset-4 hover:underline hover:text-white">
-            Privacy
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/terms" className="underline-offset-4 hover:underline hover:text-white">
-            Terms
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/support" className="underline-offset-4 hover:underline hover:text-white">
-            Support
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/site" className="underline-offset-4 hover:underline hover:text-white">
-            Site
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
-            Back to Call
-          </Link>
-        </p>
       </div>
     </div>
   );

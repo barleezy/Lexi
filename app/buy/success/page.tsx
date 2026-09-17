@@ -8,7 +8,7 @@ export const metadata = {
 
 export default function BuySuccessPage() {
   return (
-    <main className="relative flex min-h-dvh flex-1 flex-col overflow-hidden font-sans text-zinc-100">
+    <main className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto font-sans text-zinc-100">
       <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-black">
         <Image
           src="/lexi.jpg"
@@ -35,27 +35,6 @@ export default function BuySuccessPage() {
             Back to Call
           </Link>
         </div>
-        <p className="mt-12 text-sm text-zinc-400">
-          <Link href="/refund" className="underline-offset-4 hover:underline hover:text-white">
-            Refunds
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/privacy" className="underline-offset-4 hover:underline hover:text-white">
-            Privacy
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/terms" className="underline-offset-4 hover:underline hover:text-white">
-            Terms
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/support" className="underline-offset-4 hover:underline hover:text-white">
-            Support
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/site" className="underline-offset-4 hover:underline hover:text-white">
-            Site
-          </Link>
-        </p>
       </div>
     </main>
   );

@@ -28,7 +28,7 @@ export default async function ResetPasswordPage({
   const nextHref = safeNext(firstString(params.next));
 
   return (
-    <main className="mx-auto flex min-h-full w-full max-w-md flex-col justify-center gap-6 px-6 py-16">
+    <main className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col justify-center gap-6 px-6 py-16">
       <div className="space-y-2">
         <p className="text-sm uppercase tracking-[0.2em] text-neutral-500">Lexi</p>
         <h1 className="text-3xl font-semibold tracking-tight">Reset password</h1>

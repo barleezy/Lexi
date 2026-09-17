@@ -82,3 +82,41 @@ export function parseAppleMusicSongIdFromInput(raw: unknown) {
   }
   return "";
 }
+
+/** Catalog (`pl.…`) or library (`p.…`) playlist id. */
+export function parseAppleMusicPlaylistId(raw: unknown) {
+  if (typeof raw !== "string" && typeof raw !== "number") return "";
+  const value = String(raw).trim();
+  if (!/^(pl|p)\.[A-Za-z0-9._-]+$/.test(value)) return "";
+  return value;
+}
+
+/** Playlist id from a typed id, or an official music.apple.com playlist link. */
+export function parseAppleMusicPlaylistIdFromInput(raw: unknown) {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) return "";
+  const direct = parseAppleMusicPlaylistId(text);
+  if (direct) return direct;
+  try {
+    const url = new URL(text);
+    const host = url.hostname.toLowerCase();
+    if (host !== "music.apple.com" && host !== "itunes.apple.com" && !host.endsWith(".music.apple.com")) {
+      return "";
+    }
+    const playlistMatch = url.pathname.match(/\/playlist\/(?:[^/]+\/)?((?:pl|p)\.[A-Za-z0-9._-]+)/i);
+    if (playlistMatch?.[1] && parseAppleMusicPlaylistId(playlistMatch[1])) return playlistMatch[1];
+    const libraryMatch = url.pathname.match(/\/library\/playlist\/((?:pl|p)\.[A-Za-z0-9._-]+)/i);
+    if (libraryMatch?.[1] && parseAppleMusicPlaylistId(libraryMatch[1])) return libraryMatch[1];
+    const last = url.pathname.split("/").filter(Boolean).at(-1) ?? "";
+    if (parseAppleMusicPlaylistId(last)) return last;
+  } catch {
+    // not a URL
+  }
+  return "";
+}
+
+export function looksLikePlaylistQuery(raw: unknown) {
+  if (parseAppleMusicPlaylistIdFromInput(raw)) return true;
+  if (typeof raw !== "string") return false;
+  return /\bplaylists?\b/i.test(raw);
+}

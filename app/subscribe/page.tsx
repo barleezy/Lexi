@@ -11,7 +11,7 @@ export default async function SubscribePage() {
   const session = await readIncomingAuthSession();
 
   return (
-    <main className="flex min-h-dvh flex-1 flex-col font-sans text-zinc-100">
+    <main className="flex min-h-0 flex-1 flex-col font-sans text-zinc-100">
       <SubscribeClient
         signedIn={Boolean(session)}
         planReady={isSubscriptionConfigured()}

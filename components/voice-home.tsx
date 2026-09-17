@@ -75,15 +75,17 @@ import {
 } from "@/lib/voice/location";
 import {
   authorizeAppleMusic,
+  cacheAppleMusicPlaylists,
   cacheAppleMusicSongs,
   configureMusicKit,
   pauseAppleMusicPlayback,
   playAppleMusicFromGesture,
+  playAppleMusicPlaylist,
   playAppleMusicSong,
   resumeAppleMusicPlayback,
   prefetchOurSong,
   readAppleMusicNowPlaying,
-  searchAppleMusicCatalog,
+  searchAppleMusic,
   skipAppleMusicFromGesture,
   stopAppleMusicPlayback,
   subscribeAppleMusicPlayback,
@@ -501,7 +503,7 @@ export function VoiceHome({
           } catch {
             // Play tap will configure again
           }
-          void prefetchOurSong();
+          if (isAdminUserId(signedIn)) void prefetchOurSong();
           applyApplePlayback(readAppleMusicNowPlaying());
         }
       })
@@ -617,14 +619,21 @@ export function VoiceHome({
 
   useEffect(() => {
     if (!music.appleConnected) return;
-    const term = musicQuery.trim() || OUR_SONG_SEARCH;
+    const term = musicQuery.trim();
+    if (!term) {
+      if (isAdminUserId(accountId)) void prefetchOurSong();
+      return;
+    }
     const timer = window.setTimeout(() => {
-      void searchAppleMusicCatalog(term)
-        .then((songs) => cacheAppleMusicSongs(term, songs))
+      void searchAppleMusic(term)
+        .then((found) => {
+          cacheAppleMusicSongs(term, found.songs);
+          cacheAppleMusicPlaylists(term, found.playlists);
+        })
         .catch(() => {});
     }, 280);
     return () => window.clearTimeout(timer);
-  }, [music.appleConnected, musicQuery]);
+  }, [accountId, music.appleConnected, musicQuery]);
 
   useEffect(() => {
     if (!videoSrc) return;
@@ -1362,9 +1371,9 @@ export function VoiceHome({
       }
       setMusic((current) => ({ ...current, appleConfigured: true, appleConnected: true }));
       sessionRef.current?.setAppleMusicConnected(true);
-      void prefetchOurSong();
+      if (isAdminUserId(accountId) || isAdminUserId(readBrowserUserId())) void prefetchOurSong();
       applyApplePlayback(readAppleMusicNowPlaying());
-      setAppleHint("Apple Music connected. Tap Play to start a song.");
+      setAppleHint("Apple Music connected. Search a song or playlist, then tap Play.");
       return { ok: true, connected: true };
     } catch (error) {
       const message =
@@ -1421,6 +1430,12 @@ export function VoiceHome({
     startLocationWatch(true);
   }
 
+  function appleMusicPlayInput() {
+    const term = musicQuery.trim();
+    if (term) return term;
+    return isAdminUserId(accountId) ? OUR_SONG_SEARCH : "";
+  }
+
   function notifyUserMusic(title: string) {
     setAppleHint(null);
     setMusic((current) => ({
@@ -1453,7 +1468,7 @@ export function VoiceHome({
     }
     backgroundAudio.current.stop();
     setMediaSessionYield(true);
-    void playAppleMusicFromGesture(token, musicQuery)
+    void playAppleMusicFromGesture(token, appleMusicPlayInput())
       .then((played) => {
         notifyUserMusic(played.title);
       })
@@ -1471,7 +1486,7 @@ export function VoiceHome({
     }
     backgroundAudio.current.stop();
     setMediaSessionYield(true);
-    void skipAppleMusicFromGesture(token, musicQuery)
+    void skipAppleMusicFromGesture(token, appleMusicPlayInput())
       .then((played) => {
         notifyUserMusic(played.title);
       })
@@ -1721,6 +1736,24 @@ export function VoiceHome({
           };
         }
       },
+      playAppleMusicPlaylist: async (playlistId, title) => {
+        try {
+          const status = appleDeveloperToken.current
+            ? { developerToken: appleDeveloperToken.current, configured: true }
+            : await refreshAppleDeveloperToken();
+          if (!status.developerToken) {
+            return { ok: false, error: "Apple Music is not configured." };
+          }
+          backgroundAudio.current.stop();
+          await playAppleMusicPlaylist(status.developerToken, playlistId);
+          return { ok: true, title: title || "Apple Music playlist" };
+        } catch (error) {
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : "Could not play that playlist.",
+          };
+        }
+      },
       stopBackgroundMusic: async () => {
         backgroundAudio.current.stop();
         if (appleDeveloperToken.current) {
@@ -1898,7 +1931,7 @@ export function VoiceHome({
       : "Start talking";
 
   return (
-    <div className="relative flex min-h-dvh flex-1 flex-col overflow-hidden bg-background font-sans text-foreground">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background font-sans text-foreground">
       <style>{`
         @keyframes lexi-wave {
           0%, 100% { transform: scaleY(0.4); }
@@ -1944,36 +1977,6 @@ export function VoiceHome({
             >
               Subscribe
             </a>
-            <a
-              href="/refund"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Refunds
-            </a>
-            <a
-              href="/privacy"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Privacy
-            </a>
-            <a
-              href="/terms"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Terms
-            </a>
-            <a
-              href="/support"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Support
-            </a>
-            <a
-              href="/site"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Site
-            </a>
             <button
               type="button"
               onClick={signOutAccount}
@@ -1996,37 +1999,13 @@ export function VoiceHome({
             >
               Subscribe
             </a>
-            <a
-              href="/refund"
+            <button
+              type="button"
+              onClick={() => openAccountAuth("signin")}
               className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
             >
-              Refunds
-            </a>
-            <a
-              href="/privacy"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Privacy
-            </a>
-            <a
-              href="/terms"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Terms
-            </a>
-            <a
-              href="/support"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Support
-            </a>
-            <a
-              href="/site"
-              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-            >
-              Site
-            </a>
-            <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
+              Sign in
+            </button>
           </div>
         )}
       </header>
@@ -2650,6 +2629,7 @@ export function VoiceHome({
               query={musicQuery}
               busy={appleBusy}
               hint={appleHint}
+              showOurSong={isAdminUserId(accountId)}
               onQueryChange={setMusicQuery}
               onPlayPause={onApplePlayPause}
               onNext={onAppleNext}
