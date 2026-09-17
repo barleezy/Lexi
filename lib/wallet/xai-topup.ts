@@ -183,14 +183,15 @@ async function releaseTopupClaim(stripeEventId: string) {
 }
 
 export async function topUpXaiPrepaidCredits(input: {
-  amountCents: number;
+  amount_total: number;
   env?: NodeJS.ProcessEnv;
 }) {
   const env = input.env ?? process.env;
   const key = xaiManagementApiKey(env);
   const teamId = xaiTeamId(env);
   const url = xaiPrepaidTopUpUrl(env);
-  const cents = String(Math.floor(input.amountCents));
+  const amount_total = input.amount_total;
+  const requestBody = { amount: { val: String(amount_total) } };
 
   if (!key) {
     return { ok: false as const, error: "XAI_MANAGEMENT_API_KEY is not configured." };
@@ -199,16 +200,17 @@ export async function topUpXaiPrepaidCredits(input: {
     return { ok: false as const, error: "XAI_TEAM_ID is not configured." };
   }
 
+  console.info("[xai-topup] request body", requestBody);
   const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ amount: { val: cents } }),
+    body: JSON.stringify(requestBody),
   });
   const body = await response.text();
-  console.info("[xai-topup] response", { status: response.status, body, teamId, cents, url });
+  console.info("[xai-topup] response", { status: response.status, body });
 
   if (!response.ok) {
     return {
@@ -251,20 +253,20 @@ export async function handleXaiStripeWebhook(input: {
   }
 
   const session = event.data.object as Stripe.Checkout.Session;
-  const amountCents = Math.floor(Number(session.amount_total));
+  const amount_total = session.amount_total;
   const userId = sessionUserId(session);
   const email = sessionEmail(session);
 
   console.info("[stripe-xai-webhook] checkout.session.completed", {
     eventId: event.id,
     sessionId: session.id,
-    amountTotal: session.amount_total,
+    amount_total,
     currency: session.currency,
     userId,
     email,
   });
 
-  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+  if (amount_total == null || !Number.isFinite(amount_total) || amount_total <= 0) {
     return {
       ok: true as const,
       ignored: true as const,
@@ -277,7 +279,7 @@ export async function handleXaiStripeWebhook(input: {
     stripeSessionId: session.id,
     userId,
     email,
-    amountCents,
+    amountCents: amount_total,
   });
   if (!claimed.ok) {
     return { ok: false as const, status: 500, error: claimed.error };
@@ -287,7 +289,7 @@ export async function handleXaiStripeWebhook(input: {
   }
 
   try {
-    const topped = await topUpXaiPrepaidCredits({ amountCents, env });
+    const topped = await topUpXaiPrepaidCredits({ amount_total, env });
     if (!topped.ok) {
       await releaseTopupClaim(event.id);
       return { ok: false as const, status: 500, error: topped.error };
@@ -296,7 +298,7 @@ export async function handleXaiStripeWebhook(input: {
     return {
       ok: true as const,
       toppedUp: true as const,
-      amountCents,
+      amountCents: amount_total,
       eventId: event.id,
       userId,
       email,
