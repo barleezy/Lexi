@@ -2,13 +2,13 @@ import Image from "next/image";
 import Link from "next/link";
 
 export const metadata = {
-  title: "Refund and Return Policy · Talk To Lexi",
-  description: "Refund and return policy for Talk to Lexi minute packs and the monthly plan.",
+  title: "Privacy Policy · Talk To Lexi",
+  description: "Privacy policy for Talk to Lexi on the web, iPhone, and CarPlay.",
 };
 
-const SUPPORT_EMAIL = "barleezy@talktolexi.app";
+const SUPPORT_EMAIL = "support@talktolexi.app";
 
-export default function RefundPage() {
+export default function PrivacyPage() {
   return (
     <main className="buy-page relative flex min-h-dvh flex-1 flex-col overflow-hidden font-sans text-zinc-100">
       <style>{`
@@ -66,7 +66,7 @@ export default function RefundPage() {
         <header className="buy-title space-y-3 text-center">
           <p className="text-sm font-medium uppercase tracking-[0.22em] text-pink-300/80">Talk To Lexi</p>
           <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl md:text-6xl">
-            Refund and Return Policy
+            Privacy Policy
           </h1>
           <p
             className="buy-subtitle text-base tracking-wide sm:text-lg"
@@ -78,90 +78,123 @@ export default function RefundPage() {
 
         <article className="buy-card mt-12 w-full space-y-8 rounded-[1.75rem] px-6 py-8 text-sm leading-7 text-zinc-200 sm:mt-16 sm:px-10 sm:py-10 sm:text-base sm:leading-8">
           <p>
-            Talk to Lexi sells digital access only. There is nothing physical to ship or mail back.
-            “Return” means a refund of unused paid access.
+            Talk to Lexi is operated by Ian Barlow. Contact:{" "}
+            <a className="text-pink-300 underline-offset-4 hover:underline" href={`mailto:${SUPPORT_EMAIL}`}>
+              {SUPPORT_EMAIL}
+            </a>
           </p>
+          <p>This policy covers talktolexi.app and the Talk to Lexi iPhone / CarPlay app.</p>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">What you can buy</h2>
+            <h2 className="text-lg font-medium tracking-wide">What we collect</h2>
             <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
-              <li>Minute packs (Whisper, Murmur, Echo): one-time prepaid voice seconds</li>
-              <li>Monthly plan: $9.99 / month, recurring until you cancel</li>
-            </ul>
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">Minute packs</h2>
-            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
-              <li>Unused packs: request a full refund within 14 days of purchase</li>
-              <li>Partly used packs: we refund unused seconds only, same 14-day window</li>
-              <li>Used seconds are not refundable</li>
-              <li>After 14 days, pack purchases are final</li>
-            </ul>
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">Monthly plan</h2>
-            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
-              <li>Cancel anytime. Access stays through the end of the paid period</li>
+              <li>Account: username, password (hashed), optional email</li>
+              <li>Session: signed-in cookie or iOS token</li>
               <li>
-                Full refund if you ask within 7 days of the charge and you have not used live voice
-                that period
+                Billing: Stripe customer and checkout IDs, pack and subscription status, voice-second
+                balance. We do not store full card numbers
               </li>
-              <li>If you used live voice that period, that charge is not refunded</li>
-              <li>We do not prorate leftover days after the 7-day window</li>
-              <li>Canceling stops the next charge. It does not automatically refund the current month</li>
+              <li>Voice and chat: what you say or type to Lexi, short call summaries, memory facts you want kept</li>
+              <li>Optional location: only if you tap Share location, used for local weather</li>
+              <li>Optional Apple Music: only if you connect it</li>
+              <li>Device basics: app version, iPhone or CarPlay, crash/error logs</li>
+              <li>Emails we send: sign-in, password reset, billing receipts</li>
             </ul>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">How to cancel</h2>
-            <p style={{ color: "var(--buy-muted)" }}>
-              Sign in → Subscribe → cancel, or email support. Cancel before the renewal date if you
-              do not want the next charge.
-            </p>
+            <h2 className="text-lg font-medium tracking-wide">What we do not collect</h2>
+            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
+              <li>Card PAN / CVC (Stripe handles that)</li>
+              <li>An xAI key on the phone</li>
+              <li>Location in the background</li>
+              <li>CarPlay video or photos of the road</li>
+            </ul>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">How to request a refund</h2>
+            <h2 className="text-lg font-medium tracking-wide">How we use it</h2>
+            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
+              <li>Run the product</li>
+              <li>Meter live voice minutes and settle the wallet</li>
+              <li>Charge packs and the monthly plan through Stripe</li>
+              <li>Send reset codes and receipts</li>
+              <li>Fix bugs and stop abuse</li>
+              <li>Weather, only after you share location</li>
+            </ul>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium tracking-wide">Who else sees it</h2>
+            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
+              <li>Stripe — payments</li>
+              <li>xAI — voice and text</li>
+              <li>Vercel — hosts the site</li>
+              <li>Our database host — accounts, balances, memories</li>
+              <li>Resend — transactional email</li>
+              <li>Apple — App Store, Sign in with Apple, Apple Music, or CarPlay if you use them</li>
+            </ul>
+          </section>
+
+          <p>We do not sell your personal information. We do not sell voice recordings.</p>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium tracking-wide">Memory</h2>
             <p style={{ color: "var(--buy-muted)" }}>
-              Email{" "}
+              Lexi keeps short facts and call summaries so the next call is not a blank slate. Email{" "}
               <a className="text-pink-300 underline-offset-4 hover:underline" href={`mailto:${SUPPORT_EMAIL}`}>
                 {SUPPORT_EMAIL}
               </a>{" "}
-              from the account email with username, date of charge, pack name or “Monthly”, and last
-              four of the card if available.
-            </p>
-            <p style={{ color: "var(--buy-muted)" }}>
-              We aim to answer in 3 business days. Approved refunds go back to the original payment
-              method through Stripe. Bank timing is 5–10 business days.
+              to delete stored memory. Deleting the account deletes memory with it.
             </p>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">What we will not refund</h2>
+            <h2 className="text-lg font-medium tracking-wide">Retention</h2>
             <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
-              <li>Rehearsal / no-spend mode (no charge)</li>
-              <li>Minutes or days already used</li>
-              <li>Failed calls caused by the user’s network, device, or hanging up</li>
-              <li>Chargebacks filed before emailing us</li>
-              <li>Taxes and payment-processor fees we cannot recover</li>
+              <li>Account and billing: while open, then as long as tax/fraud rules require</li>
+              <li>Voice minutes ledger: while the account is open</li>
+              <li>Call summaries / memory: until you delete them or close the account</li>
+              <li>Logs: a short window unless needed for security</li>
             </ul>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-medium tracking-wide">Chargebacks</h2>
+            <h2 className="text-lg font-medium tracking-wide">Your choices</h2>
+            <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
+              <li>Do not share location</li>
+              <li>Do not connect Apple Music</li>
+              <li>Stay in rehearsal / no-spend mode</li>
+              <li>Email us to export or delete your account</li>
+              <li>
+                Cancel the monthly plan on{" "}
+                <Link href="/subscribe" className="text-pink-300 underline-offset-4 hover:underline">
+                  /subscribe
+                </Link>
+              </li>
+            </ul>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium tracking-wide">Kids</h2>
             <p style={{ color: "var(--buy-muted)" }}>
-              Email us first. A chargeback on a valid charge can freeze the account until it is
-              resolved.
+              Talk to Lexi is for people 18 or older. We do not knowingly collect data from children.
+            </p>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium tracking-wide">Security</h2>
+            <p style={{ color: "var(--buy-muted)" }}>
+              Passwords are hashed. Live voice tokens are short-lived and minted on the server. The xAI
+              key never ships in the iPhone app.
             </p>
           </section>
 
           <section className="space-y-3">
             <h2 className="text-lg font-medium tracking-wide">Changes</h2>
             <p style={{ color: "var(--buy-muted)" }}>
-              We can update this page. The version on talktolexi.app on the date of purchase applies
-              to that purchase.
+              We will update this page when the product changes. Continued use means you accept the
+              current version.
             </p>
           </section>
 
@@ -182,12 +215,8 @@ export default function RefundPage() {
             Subscribe
           </Link>
           <span className="px-2">·</span>
-          <Link href="/privacy" className="underline-offset-4 hover:underline hover:text-white">
-            Privacy
-          </Link>
-          <span className="px-2">·</span>
-          <Link href="/terms" className="underline-offset-4 hover:underline hover:text-white">
-            Terms
+          <Link href="/refund" className="underline-offset-4 hover:underline hover:text-white">
+            Refunds
           </Link>
           <span className="px-2">·</span>
           <Link href="/" className="underline-offset-4 hover:underline hover:text-white">

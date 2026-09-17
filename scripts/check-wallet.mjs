@@ -223,8 +223,14 @@ assert.ok(packsSrc.includes("STRIPE_PRICE_SUBSCRIPTION"), "subscription price en
 assert.ok(homeSrc.includes('href="/subscribe"'), "home nav links to /subscribe");
 assert.ok(homeSrc.includes('href="/refund"'), "home nav links to /refund");
 assert.ok(homeSrc.includes("Refunds"), "home nav labels Refunds");
+assert.ok(homeSrc.includes('href="/privacy"'), "home nav links to /privacy");
+assert.ok(homeSrc.includes("Privacy"), "home nav labels Privacy");
+assert.ok(homeSrc.includes('href="/terms"'), "home nav links to /terms");
+assert.ok(homeSrc.includes("Terms"), "home nav labels Terms");
 assert.ok(buyClient.includes('href="/subscribe"'), "buy page links to /subscribe");
 assert.ok(buyClient.includes('href="/refund"'), "buy footer links to Refunds");
+assert.ok(buyClient.includes('href="/privacy"'), "buy footer links to Privacy");
+assert.ok(buyClient.includes('href="/terms"'), "buy footer links to Terms");
 
 const refundPage = readFileSync(new URL("../app/refund/page.tsx", import.meta.url), "utf8");
 assert.ok(refundPage.includes("Refund and Return Policy"), "refund title");
@@ -242,6 +248,31 @@ const returnPolicyAlias = readFileSync(new URL("../app/return-policy/page.tsx", 
 assert.ok(returnPolicyAlias.includes('../refund/page'), "/return-policy aliases /refund");
 
 assert.ok(subscribeClient.includes('href="/refund"'), "subscribe footer links to Refunds");
+assert.ok(subscribeClient.includes('href="/privacy"'), "subscribe footer links to Privacy");
+assert.ok(subscribeClient.includes('href="/terms"'), "subscribe footer links to Terms");
+assert.ok(refundPage.includes('href="/privacy"'), "refund footer links to Privacy");
+assert.ok(refundPage.includes('href="/terms"'), "refund footer links to Terms");
+
+const privacyPage = readFileSync(new URL("../app/privacy/page.tsx", import.meta.url), "utf8");
+assert.ok(privacyPage.includes("Privacy Policy"), "privacy title");
+assert.ok(privacyPage.includes("Effective date: September 17, 2026"), "privacy effective date");
+assert.ok(privacyPage.includes("support@talktolexi.app"), "privacy support email");
+assert.ok(!privacyPage.includes("readIncomingAuthSession"), "privacy is not behind sign-in");
+assert.ok(!privacyPage.includes("redirect"), "privacy is public");
+assert.ok(!privacyPage.includes("/api/checkout"), "privacy has no checkout");
+assert.ok(!privacyPage.includes("createCheckout"), "privacy has no Stripe checkout");
+assert.ok(privacyPage.includes("Talk to Lexi is operated by Ian Barlow"), "privacy intro copy");
+
+const termsPage = readFileSync(new URL("../app/terms/page.tsx", import.meta.url), "utf8");
+assert.ok(termsPage.includes("Terms of Service"), "terms title");
+assert.ok(termsPage.includes("Effective date: September 17, 2026"), "terms effective date");
+assert.ok(termsPage.includes("support@talktolexi.app"), "terms support email");
+assert.ok(termsPage.includes("/refund"), "terms mentions /refund");
+assert.ok(termsPage.includes("/privacy"), "terms mentions /privacy");
+assert.ok(!termsPage.includes("readIncomingAuthSession"), "terms is not behind sign-in");
+assert.ok(!termsPage.includes("redirect"), "terms is public");
+assert.ok(!termsPage.includes("/api/checkout"), "terms has no checkout");
+assert.ok(!termsPage.includes("createCheckout"), "terms has no Stripe checkout");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutRoute.includes("packId"), "legacy checkout takes packId");
