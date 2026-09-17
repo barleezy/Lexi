@@ -19,7 +19,7 @@ export function SiteChrome({
   return (
     <>
       {isHome || isWatch ? null : <SiteHeader signedIn={signedIn} />}
-      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+      <div className="flex flex-1 flex-col">{children}</div>
       <SiteFooter />
     </>
   );
