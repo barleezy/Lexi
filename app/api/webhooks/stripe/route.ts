@@ -1,5 +1,7 @@
+import { connection } from "next/server";
 import { stripeClient } from "@/lib/wallet/stripe";
 import { handleXaiStripeWebhook, XAI_STRIPE_WEBHOOK_URL } from "@/lib/wallet/xai-topup";
+import { stripeWebhookSecret } from "@/lib/xai/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,14 +26,16 @@ export const dynamic = "force-dynamic";
  * Body: { "amount": { "val": "<cents>" } }  — Stripe session.amount_total as a string.
  */
 export async function POST(req: Request) {
+  await connection();
   const signature = req.headers.get("stripe-signature") ?? "";
   const body = await req.text();
   const stripe = stripeClient();
-  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
+  const webhookSecret = stripeWebhookSecret();
+  if (!stripe || !webhookSecret) {
     return Response.json({ error: "Billing is not configured." }, { status: 503 });
   }
   try {
-    stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
+    stripe.webhooks.constructEvent(body, signature, webhookSecret);
   } catch (error) {
     console.error("[stripe-xai-webhook] invalid signature", error);
     return Response.json({ error: "Invalid Stripe signature." }, { status: 400 });

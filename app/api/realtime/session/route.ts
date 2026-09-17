@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import {
   createOrResumeSession,
   endSession,
@@ -21,49 +22,15 @@ import {
   shrinkVoiceHold,
   sweepStaleVoiceSessions,
 } from "@/lib/wallet/voice";
+import { logVoiceEnv, readMintError, voiceMintFailureMessage, xaiInferenceKey } from "@/lib/xai/env";
+import { mintXaiClientSecret } from "@/lib/xai/client-secret";
 
-const UPSTREAM = "https://api.x.ai/v1/realtime/client_secrets";
-
-type SecretBody = {
-  value?: unknown;
-  client_secret?: { value?: unknown } | string;
-};
-
-function readToken(data: SecretBody) {
-  if (typeof data.value === "string" && data.value) return data.value;
-  if (typeof data.client_secret === "string" && data.client_secret) {
-    return data.client_secret;
-  }
-  if (
-    data.client_secret &&
-    typeof data.client_secret === "object" &&
-    typeof data.client_secret.value === "string"
-  ) {
-    return data.client_secret.value;
-  }
-  return null;
-}
-
-async function mintEphemeralToken(key: string, ttlSeconds: number) {
-  const ttl = Math.max(30, Math.min(3600, Math.floor(ttlSeconds)));
-  const upstream = await fetch(UPSTREAM, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ expires_after: { seconds: ttl } }),
-  });
-  let data: SecretBody = {};
-  try {
-    data = (await upstream.json()) as SecretBody;
-  } catch {
-    data = {};
-  }
-  return { upstream, data, token: readToken(data), ttl };
-}
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  await connection();
+  logVoiceEnv("realtime-session");
   const started = Date.now();
   let sessionId = "";
   let logSessionId = "";
@@ -124,7 +91,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const key = process.env.XAI_API_KEY;
+  const key = xaiInferenceKey();
   if (!key) {
     if (isVoiceLogEnabled() && isValidSessionId(logSessionId)) {
       await appendVoiceLog(logSessionId, [
@@ -198,7 +165,7 @@ export async function POST(request: Request) {
     capAtMs = hold.capAtMs;
   }
 
-  const minted = await mintEphemeralToken(key, mintTtl);
+  const minted = await mintXaiClientSecret(key, mintTtl);
   const ms = Date.now() - started;
 
   if (isVoiceLogEnabled() && isValidSessionId(logSessionId)) {
@@ -207,29 +174,20 @@ export async function POST(request: Request) {
         src: "server",
         ts: Date.now(),
         kind: "server.token",
-        ok: minted.upstream.ok && Boolean(minted.token),
-        status: minted.upstream.status,
+        ok: minted.ok && Boolean(minted.token),
+        status: minted.status,
         ms,
-        upstream: minted.upstream.ok ? "client_secrets" : `http ${minted.upstream.status}`,
+        upstream: minted.ok ? "client_secrets" : `http ${minted.status}`,
         hold_seconds: holdSeconds,
         voice_session: voiceSessionId,
       },
     ]);
   }
 
-  if (!minted.upstream.ok || !minted.token) {
+  if (!minted.ok || !minted.token) {
     if (extended?.ok) await shrinkVoiceHold(userId, extended.voiceSessionId, extended.addedSeconds ?? 0);
     else if (hold?.ok) await releaseVoiceHold(userId, hold.voiceSessionId);
-    const raw =
-      minted.data &&
-      typeof minted.data === "object" &&
-      "error" in minted.data &&
-      typeof (minted.data as { error?: unknown }).error === "string"
-        ? (minted.data as { error: string }).error
-        : "";
-    const error = /credit|spending limit|permission-denied|does not have permission/i.test(raw)
-      ? "xAI is out of credits or at its monthly spend limit. Add credits at console.x.ai, then start voice again."
-      : "Could not start a voice session.";
+    const error = voiceMintFailureMessage(readMintError(minted.data));
     return Response.json({ error }, { status: 502 });
   }
 

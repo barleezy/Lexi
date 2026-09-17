@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import Stripe from "stripe";
+import { stripeWebhookSecret, xaiManagementApiKey, xaiTeamId } from "@/lib/xai/env";
 import { stripeClient } from "./stripe";
 
 /** Official xAI Management API. Inference `XAI_API_KEY` is not accepted here. */
@@ -67,14 +68,8 @@ export async function ensureXaiTopupSchema() {
   return db;
 }
 
-export function xaiManagementApiKey(env: NodeJS.ProcessEnv = process.env) {
-  return env.XAI_MANAGEMENT_API_KEY?.trim() || "";
-}
-
-/** Team id from env only — never invent a placeholder. Copy from xAI Console → Team settings. */
-export function xaiTeamId(env: NodeJS.ProcessEnv = process.env) {
-  return env.XAI_TEAM_ID?.trim() || "";
-}
+/** Management key from XAI_MANAGEMENT_API_KEY. Team from XAI_TEAM_ID. */
+export { xaiManagementApiKey, xaiTeamId };
 
 export function xaiPrepaidTopUpUrl(env: NodeJS.ProcessEnv = process.env) {
   const teamId = xaiTeamId(env);
@@ -86,8 +81,9 @@ export function xaiPrepaidTopUpUrl(env: NodeJS.ProcessEnv = process.env) {
   return `${XAI_MANAGEMENT_API_BASE}/v1/billing/teams/${encodeURIComponent(teamId)}/prepaid/top-up`;
 }
 
+/** Same STRIPE_WEBHOOK_SECRET the Stripe Dashboard already has. */
 function stripeXaiWebhookSecret(env: NodeJS.ProcessEnv = process.env) {
-  return env.STRIPE_WEBHOOK_SECRET?.trim() || "";
+  return stripeWebhookSecret(env);
 }
 
 function sessionUserId(session: Stripe.Checkout.Session) {

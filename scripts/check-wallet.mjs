@@ -184,7 +184,8 @@ const xaiWebhookRoute = readFileSync(new URL("../app/api/webhooks/stripe/route.t
 assert.ok(xaiWebhookRoute.includes("export async function POST"), "xAI webhook POST handler");
 assert.ok(xaiWebhookRoute.includes("req.text()"), "xAI webhook reads raw body");
 assert.ok(!xaiWebhookRoute.includes("req.json()"), "xAI webhook never parses JSON before constructEvent");
-assert.ok(xaiWebhookRoute.includes("process.env.STRIPE_WEBHOOK_SECRET"), "xAI webhook uses shared Stripe signing secret");
+assert.ok(xaiWebhookRoute.includes("stripeWebhookSecret"), "xAI webhook uses shared Stripe signing secret");
+assert.ok(xaiWebhookRoute.includes("await connection()"), "xAI webhook reads live env at runtime");
 assert.ok(!xaiWebhookRoute.includes("STRIPE_XAI_WEBHOOK_SECRET"), "xAI webhook does not use a separate secret name");
 assert.ok(xaiWebhookRoute.includes("XAI_MANAGEMENT_API_KEY"), "xAI webhook documents management key");
 assert.ok(!/Bearer <XAI_API_KEY>|Bearer \$\{.*XAI_API_KEY/.test(xaiWebhookRoute), "xAI webhook must not use inference key");
@@ -205,7 +206,7 @@ assert.ok(xaiTopupSrc.includes("xai_credit_topups"), "idempotent top-up table");
 assert.ok(xaiTopupSrc.includes("stripe_event_id"), "idempotent on Stripe event id");
 assert.ok(!xaiTopupSrc.includes("env.XAI_API_KEY"), "top-up must not fall back to XAI_API_KEY");
 assert.ok(xaiTopupSrc.includes("constructEvent"), "xAI webhook verifies Stripe signature");
-assert.ok(xaiTopupSrc.includes("STRIPE_WEBHOOK_SECRET"), "xAI constructEvent uses shared Stripe signing secret");
+assert.ok(xaiTopupSrc.includes("stripeWebhookSecret"), "xAI constructEvent uses shared Stripe signing secret");
 assert.ok(!xaiTopupSrc.includes("STRIPE_XAI_WEBHOOK_SECRET"), "xAI top-up does not use a separate secret name");
 
 const sessionSrc = readFileSync(new URL("../lib/auth/session.ts", import.meta.url), "utf8");
@@ -238,6 +239,11 @@ const subscriptionSrc = readFileSync(new URL("../lib/wallet/subscription.ts", im
 assert.ok(subscriptionSrc.includes("monthly_minutes_reset_at"), "subscription schema has monthly reset column");
 
 const realtimeSrc = readFileSync(new URL("../app/api/realtime/session/route.ts", import.meta.url), "utf8");
+assert.ok(realtimeSrc.includes("xaiInferenceKey"), "web mint reads live XAI_API_KEY");
+assert.ok(realtimeSrc.includes("await connection()"), "web mint waits for runtime env");
+assert.ok(realtimeSrc.includes("mintXaiClientSecret"), "web mint shares the xAI client-secret helper");
+assert.ok(realtimeSrc.includes("@/lib/xai/client-secret"), "web mint does not import the iOS session graph");
+assert.ok(!realtimeSrc.includes("process.env.XAI_API_KEY"), "web mint does not inline process.env.XAI_API_KEY");
 assert.ok(realtimeSrc.includes("requireAuthSessionUserId"), "mint uses signed session");
 assert.ok(realtimeSrc.includes("placeVoiceHold"), "mint holds");
 assert.ok(realtimeSrc.includes('rehearsal === true') || realtimeSrc.includes("rehearsal === true"), "rehearsal skips mint");

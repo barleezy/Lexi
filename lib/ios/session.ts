@@ -23,34 +23,17 @@ import {
   type MusicSessionState,
 } from "@/lib/voice/persona";
 
+import { buildInputAudio } from "@/lib/voice/listen";
+import { buildTurnDetection } from "@/lib/voice/realtime-latency";
+import { mintXaiClientSecret } from "@/lib/xai/client-secret";
+
 import { IOS_REALTIME_URL, IOS_TARGET_RATE, IOS_VOICE, readXaiClientSecret } from "./config";
 
-export { IOS_REALTIME_URL, IOS_TARGET_RATE, IOS_VOICE, readXaiClientSecret };
-const UPSTREAM = "https://api.x.ai/v1/realtime/client_secrets";
+export { IOS_REALTIME_URL, IOS_TARGET_RATE, IOS_VOICE, readXaiClientSecret, mintXaiClientSecret };
 
 const PHONE_NOTE = `IOS PHONE
 
 This turn is the native iPhone app, not the website tab. Hold the voice call here. There is no CarPlay scene. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not the user. Adults only: porn 18+, voice roleplay 21+, refuse minors.`;
-
-export async function mintXaiClientSecret(apiKey: string, ttlSeconds = 3600) {
-  const ttl = Math.max(30, Math.min(3600, Math.floor(ttlSeconds)));
-  const upstream = await fetch(UPSTREAM, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ expires_after: { seconds: ttl } }),
-  });
-  let data: Parameters<typeof readXaiClientSecret>[0] = {};
-  try {
-    data = (await upstream.json()) as Parameters<typeof readXaiClientSecret>[0];
-  } catch {
-    data = {};
-  }
-  const token = readXaiClientSecret(data);
-  return { ok: upstream.ok && Boolean(token), token, status: upstream.status, ttl };
-}
 
 export function iosRealtimeTools(includeFortnite = false) {
   return [
@@ -228,32 +211,10 @@ export function iosSessionUpdatePayload(input: {
       voice: IOS_VOICE,
       instructions: input.instructions,
       reasoning: { effort: "none" },
-      turn_detection: {
-        type: "server_vad",
-        threshold: 0.4,
-        silence_duration_ms: 300,
-        prefix_padding_ms: 350,
-      },
+      turn_detection: buildTurnDetection(),
       tools: iosRealtimeTools(input.includeFortnite === true),
       audio: {
-        input: {
-          format: { type: "audio/pcm", rate: IOS_TARGET_RATE },
-          transcription: {
-            model: "grok-transcribe",
-            language_hint: "en",
-            keyterms: [
-              "Ian",
-              "daddy",
-              "barleezy",
-              "menace",
-              "barleezus",
-              "leezy",
-              "TTBarleezy",
-              "TalkToLexi",
-              "Lexi",
-            ],
-          },
-        },
+        input: buildInputAudio(IOS_TARGET_RATE),
         output: { format: { type: "audio/pcm", rate: IOS_TARGET_RATE } },
       },
     },

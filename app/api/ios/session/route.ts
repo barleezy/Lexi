@@ -1,6 +1,9 @@
-import { buildIosSession, IOS_REALTIME_URL, IOS_TARGET_RATE, mintXaiClientSecret } from "@/lib/ios/session";
+import { connection } from "next/server";
+import { buildIosSession, IOS_REALTIME_URL, IOS_TARGET_RATE } from "@/lib/ios/session";
+import { mintXaiClientSecret } from "@/lib/xai/client-secret";
 import { readIosSession } from "@/lib/ios/auth";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
+import { logVoiceEnv, readMintError, voiceMintFailureMessage, xaiInferenceKey } from "@/lib/xai/env";
 import type { DeviceLocationState } from "@/lib/voice/location";
 import type { MusicSessionState } from "@/lib/voice/persona";
 import {
@@ -14,6 +17,8 @@ import {
   sweepStaleVoiceSessions,
 } from "@/lib/wallet/voice";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 function parseLocation(raw: unknown): DeviceLocationState | null {
@@ -36,6 +41,8 @@ function parseLocation(raw: unknown): DeviceLocationState | null {
 }
 
 export async function POST(request: Request) {
+  await connection();
+  logVoiceEnv("ios-session");
   let body: {
     sessionId?: unknown;
     previousSessionId?: unknown;
@@ -78,7 +85,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const key = process.env.XAI_API_KEY;
+  const key = xaiInferenceKey();
   if (!key) {
     return Response.json({ error: "Voice is not configured." }, { status: 500 });
   }
@@ -108,7 +115,8 @@ export async function POST(request: Request) {
     } else {
       await releaseVoiceHold(userId, hold.voiceSessionId);
     }
-    return Response.json({ error: "Could not start a voice session." }, { status: 502 });
+    const error = voiceMintFailureMessage(readMintError(minted.data));
+    return Response.json({ error }, { status: 502 });
   }
 
   const musicSource = body.musicSource;

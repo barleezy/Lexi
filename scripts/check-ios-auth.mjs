@@ -1,5 +1,12 @@
 import { readFileSync } from "node:fs";
 import {
+  describeSecret,
+  voiceMintFailureMessage,
+  xaiInferenceKey,
+  xaiManagementApiKey,
+  xaiTeamId,
+} from "../lib/xai/env.ts";
+import {
   IOS_AUTH_PATH,
   IOS_CALLBACK_SCHEMES,
   IOS_REALTIME_URL,
@@ -56,5 +63,46 @@ const signIn = readFileSync(
 );
 expect(!signIn.includes("SiteFooter"), "native sign-in does not import web footer");
 expect(signIn.includes("ios/signin"), "native sign-in still opens /ios/signin");
+
+const iosSession = readFileSync(new URL("../app/api/ios/session/route.ts", import.meta.url), "utf8");
+expect(iosSession.includes("xaiInferenceKey"), "iOS mint reads live XAI_API_KEY");
+expect(iosSession.includes("await connection()"), "iOS mint waits for runtime env");
+expect(!iosSession.includes("process.env.XAI_API_KEY"), "iOS mint does not inline process.env.XAI_API_KEY");
+expect(iosSession.includes("mintXaiClientSecret"), "iOS mint uses shared client-secret helper");
+expect(iosSession.includes("@/lib/xai/client-secret"), "iOS mint shares the web client-secret helper");
+
+const realtimeSwift = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/RealtimeSession.swift", import.meta.url),
+  "utf8",
+);
+expect(
+  realtimeSwift.includes('webSocketTask(with: url, protocols: ["xai-client-secret.\\(token)"])'),
+  "iOS WS uses the same client-secret subprotocol as web",
+);
+expect(
+  !realtimeSwift.includes("setValue(\"xai-client-secret"),
+  "iOS does not set the WS protocol as an HTTP header",
+);
+
+const envSrc = readFileSync(new URL("../lib/xai/env.ts", import.meta.url), "utf8");
+expect(envSrc.includes('env[name]'), "runtime env uses dynamic lookup");
+expect(envSrc.includes("XAI_MANAGEMENT_API_KEY"), "management key is named");
+expect(envSrc.includes("Never fall back"), "inference and management keys stay separate");
+
+const live = {
+  XAI_API_KEY: "xai-live-inference",
+  XAI_MANAGEMENT_API_KEY: "xai-mgmt",
+  XAI_TEAM_ID: "team-1",
+};
+expect(xaiInferenceKey(live) === "xai-live-inference", "inference key is XAI_API_KEY");
+expect(xaiManagementApiKey(live) === "xai-mgmt", "management key is separate");
+expect(xaiTeamId(live) === "team-1", "team id from env");
+expect(xaiInferenceKey({ XAI_MANAGEMENT_API_KEY: "xai-mgmt" }) === "", "inference never falls back to management");
+expect(describeSecret("STRIPE_SECRET_KEY", "sk_test_abc").kind === "stripe_test", "detect stripe test key");
+expect(describeSecret("STRIPE_SECRET_KEY", "sk_live_abc").kind === "stripe_live", "detect stripe live key");
+expect(
+  voiceMintFailureMessage("An internal error occurred").includes("live inference key"),
+  "maps xAI internal error to inference-key hint",
+);
 
 console.log("ios auth ok");

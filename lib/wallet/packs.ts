@@ -129,5 +129,5 @@ export function buyPagePacks(env: NodeJS.ProcessEnv = process.env) {
 }
 
 export function isStripeConfigured(env: NodeJS.ProcessEnv = process.env) {
-  return Boolean(env.STRIPE_SECRET_KEY?.trim() && env.STRIPE_WEBHOOK_SECRET?.trim());
+  return Boolean(env["STRIPE_SECRET_KEY"]?.trim() && env["STRIPE_WEBHOOK_SECRET"]?.trim());
 }

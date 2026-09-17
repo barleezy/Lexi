@@ -143,14 +143,11 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         }
         connectHost = url.host ?? ""
         Self.log.info("ws.connect host=\(self.connectHost, privacy: .public) path=\(url.path, privacy: .public)")
-        var request = URLRequest(url: url)
-        request.timeoutInterval = Self.openTimeout
-        // URLSession often drops Authorization on the WS handshake. Match the web client.
-        request.setValue("xai-client-secret.\(token)", forHTTPHeaderField: "Sec-WebSocket-Protocol")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // URLSession drops a manual Sec-WebSocket-Protocol header. Match the web
+        // client: pass the ephemeral secret as the WS subprotocol.
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         urlSession = session
-        let task = session.webSocketTask(with: request)
+        let task = session.webSocketTask(with: url, protocols: ["xai-client-secret.\(token)"])
         socket = task
         task.resume()
         receiveLoop(generation: gen)
@@ -415,6 +412,13 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
                 ?? "Realtime error"
             Self.log.error("ws.event type=error error=\(message, privacy: .public)")
             if Self.isIgnorable(message) { return }
+            if Self.isInternalError(message) {
+                failOpen(
+                    "xAI rejected the voice session. Confirm the server is using the live inference key, then try Connect again.",
+                    auth: true
+                )
+                return
+            }
             if Self.isAuthMessage(message) {
                 failOpen(message, auth: true)
                 return
@@ -607,6 +611,10 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
 
     private static func isAuthMessage(_ message: String) -> Bool {
         message.range(of: #"401|403|unauthor|expired|invalid.?token|forbidden"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func isInternalError(_ message: String) -> Bool {
+        message.range(of: "internal error", options: .caseInsensitive) != nil
     }
 
     private static func isIgnorable(_ message: String) -> Bool {

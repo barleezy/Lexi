@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { stripeSecretKey, stripeWebhookSecret } from "@/lib/xai/env";
 import {
   BUY_CANCEL_URL,
   BUY_SUCCESS_URL,
@@ -20,7 +21,7 @@ import {
 import { creditSubscriptionCheckoutMinutes, creditVoiceSeconds } from "./voice";
 
 export function stripeClient(env: NodeJS.ProcessEnv = process.env) {
-  const key = env.STRIPE_SECRET_KEY?.trim();
+  const key = stripeSecretKey(env);
   if (!key) return null;
   return new Stripe(key, { apiVersion: "2025-02-24.acacia" });
 }
@@ -309,7 +310,7 @@ export async function handleStripeWebhook(input: {
   env?: NodeJS.ProcessEnv;
 }) {
   const env = input.env ?? process.env;
-  const secret = env.STRIPE_WEBHOOK_SECRET?.trim();
+  const secret = stripeWebhookSecret(env);
   const stripe = stripeClient(env);
   if (!stripe || !secret) {
     return { ok: false as const, status: 503, error: "Billing is not configured." };
