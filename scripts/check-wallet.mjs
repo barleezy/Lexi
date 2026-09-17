@@ -227,10 +227,13 @@ assert.ok(homeSrc.includes('href="/privacy"'), "home nav links to /privacy");
 assert.ok(homeSrc.includes("Privacy"), "home nav labels Privacy");
 assert.ok(homeSrc.includes('href="/terms"'), "home nav links to /terms");
 assert.ok(homeSrc.includes("Terms"), "home nav labels Terms");
+assert.ok(homeSrc.includes('href="/support"'), "home nav links to /support");
+assert.ok(homeSrc.includes("Support"), "home nav labels Support");
 assert.ok(buyClient.includes('href="/subscribe"'), "buy page links to /subscribe");
 assert.ok(buyClient.includes('href="/refund"'), "buy footer links to Refunds");
 assert.ok(buyClient.includes('href="/privacy"'), "buy footer links to Privacy");
 assert.ok(buyClient.includes('href="/terms"'), "buy footer links to Terms");
+assert.ok(buyClient.includes('href="/support"'), "buy footer links to Support");
 
 const refundPage = readFileSync(new URL("../app/refund/page.tsx", import.meta.url), "utf8");
 assert.ok(refundPage.includes("Refund and Return Policy"), "refund title");
@@ -250,8 +253,10 @@ assert.ok(returnPolicyAlias.includes('../refund/page'), "/return-policy aliases 
 assert.ok(subscribeClient.includes('href="/refund"'), "subscribe footer links to Refunds");
 assert.ok(subscribeClient.includes('href="/privacy"'), "subscribe footer links to Privacy");
 assert.ok(subscribeClient.includes('href="/terms"'), "subscribe footer links to Terms");
+assert.ok(subscribeClient.includes('href="/support"'), "subscribe footer links to Support");
 assert.ok(refundPage.includes('href="/privacy"'), "refund footer links to Privacy");
 assert.ok(refundPage.includes('href="/terms"'), "refund footer links to Terms");
+assert.ok(refundPage.includes('href="/support"'), "refund footer links to Support");
 
 const privacyPage = readFileSync(new URL("../app/privacy/page.tsx", import.meta.url), "utf8");
 assert.ok(privacyPage.includes("Privacy Policy"), "privacy title");
@@ -273,6 +278,27 @@ assert.ok(!termsPage.includes("readIncomingAuthSession"), "terms is not behind s
 assert.ok(!termsPage.includes("redirect"), "terms is public");
 assert.ok(!termsPage.includes("/api/checkout"), "terms has no checkout");
 assert.ok(!termsPage.includes("createCheckout"), "terms has no Stripe checkout");
+
+const supportPage = readFileSync(new URL("../app/support/page.tsx", import.meta.url), "utf8");
+assert.ok(supportPage.includes("Support"), "support title");
+assert.ok(supportPage.includes("Questions, billing, or a broken call — email Ian."), "support intro");
+assert.ok(supportPage.includes("barleezy@talktolexi.app"), "support email");
+assert.ok(!supportPage.includes("support@talktolexi.app"), "support does not use old support inbox");
+assert.ok(!supportPage.includes("readIncomingAuthSession"), "support is not behind sign-in");
+assert.ok(!supportPage.includes("redirect"), "support is public");
+assert.ok(!supportPage.includes("<form"), "support has no form");
+assert.ok(!supportPage.includes("fetch("), "support has no fetch");
+assert.ok(!/ticket/i.test(supportPage), "support has no ticket");
+assert.ok(supportPage.includes('href="/refund"'), "support links to /refund");
+assert.ok(supportPage.includes('href="/privacy"'), "support links to /privacy");
+assert.ok(supportPage.includes('href="/terms"'), "support links to /terms");
+assert.ok(supportPage.includes('href="/buy"'), "support links to /buy");
+assert.ok(supportPage.includes('href="/subscribe"'), "support links to /subscribe");
+
+const helpAlias = readFileSync(new URL("../app/help/page.tsx", import.meta.url), "utf8");
+assert.ok(helpAlias.includes("../support/page"), "/help aliases /support");
+const contactAlias = readFileSync(new URL("../app/contact/page.tsx", import.meta.url), "utf8");
+assert.ok(contactAlias.includes("../support/page"), "/contact aliases /support");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutRoute.includes("packId"), "legacy checkout takes packId");

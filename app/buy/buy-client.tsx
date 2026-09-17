@@ -86,6 +86,10 @@ export function BuyClient({
             Terms
           </Link>
           <span className="px-2">·</span>
+          <Link href="/support" className="underline-offset-4 hover:underline hover:text-white">
+            Support
+          </Link>
+          <span className="px-2">·</span>
           <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
             Back to Call
           </Link>
