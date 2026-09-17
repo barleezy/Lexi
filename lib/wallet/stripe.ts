@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { normalizeUserId } from "@/lib/memory/user";
 import { stripeSecretKey, stripeWebhookSecret } from "@/lib/xai/env";
 import {
   BUY_CANCEL_URL,
@@ -384,30 +385,43 @@ export async function creditPaidCheckoutsForUser(
   userId: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const id = userId.trim();
+  const id = normalizeUserId(userId);
   if (!id) return { ok: true as const, creditedSeconds: 0 };
-  await reverseReconciledSubscriptionCredits(id);
-  const stripe = stripeClient(env);
-  if (!stripe) return { ok: true as const, creditedSeconds: 0 };
-  const sessions = await listCompletedCheckoutsForUser(stripe, id);
-  let creditedSeconds = 0;
-  for (const session of sessions) {
-    if (isSubscriptionCheckout(session)) continue;
-    try {
-      const result = await creditCompletedCheckoutSession({
-        session,
-        stripe,
-        env,
-        stripeEventId: `cs:${session.id}`,
-      });
-      if (result.ok && "credited" in result && typeof result.credited === "number") {
-        creditedSeconds += result.credited;
-      }
-    } catch (error) {
-      console.error("[stripe-minutes] reconcile session failed", session.id, error);
-    }
+  try {
+    await reverseReconciledSubscriptionCredits(id);
+  } catch (error) {
+    console.error("[stripe-minutes] reverse reconciled subscription failed", error);
   }
-  await capAllottedMinutesToPacks(id);
+  let creditedSeconds = 0;
+  try {
+    const stripe = stripeClient(env);
+    if (stripe) {
+      const sessions = await listCompletedCheckoutsForUser(stripe, id);
+      for (const session of sessions) {
+        if (isSubscriptionCheckout(session)) continue;
+        try {
+          const result = await creditCompletedCheckoutSession({
+            session,
+            stripe,
+            env,
+            stripeEventId: `cs:${session.id}`,
+          });
+          if (result.ok && "credited" in result && typeof result.credited === "number") {
+            creditedSeconds += result.credited;
+          }
+        } catch (error) {
+          console.error("[stripe-minutes] reconcile session failed", session.id, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[stripe-minutes] reconcile paid checkouts failed", error);
+  }
+  try {
+    await capAllottedMinutesToPacks(id);
+  } catch (error) {
+    console.error("[stripe-minutes] cap allotted minutes failed", error);
+  }
   return { ok: true as const, creditedSeconds };
 }
 
@@ -545,14 +559,15 @@ function isSubscriptionCheckout(session: Stripe.Checkout.Session) {
 
 function checkoutBelongsToUser(session: Stripe.Checkout.Session, userId: string) {
   const owner = checkoutUserId(session);
-  return Boolean(owner) && owner.toLowerCase() === userId.toLowerCase();
+  if (!owner) return false;
+  return normalizeUserId(owner).toLowerCase() === normalizeUserId(userId).toLowerCase();
 }
 
 async function listCompletedCheckoutsForUser(stripe: Stripe, userId: string) {
   const listed = await stripe.checkout.sessions.list({
-    limit: 40,
+    limit: 100,
     status: "complete",
-    created: { gte: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 14 },
+    created: { gte: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 90 },
   });
   return listed.data.filter(
     (session) => checkoutBelongsToUser(session, userId) && !isSubscriptionCheckout(session),

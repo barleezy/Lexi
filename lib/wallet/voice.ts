@@ -3,7 +3,8 @@ import { findAccountRow, isAccountStoreConfigured } from "../auth/accounts";
 import { normalizeUserId } from "../memory/user";
 import { SUBSCRIPTION_PLAN, VOICE_PACKS } from "./packs";
 
-const PACK_SECONDS = VOICE_PACKS.map((pack) => pack.seconds);
+const PACK_SECONDS: number[] = VOICE_PACKS.map((pack) => pack.seconds);
+const PACK_SECONDS_SQL = PACK_SECONDS.filter((seconds) => Number.isFinite(seconds) && seconds > 0).join(", ");
 
 /** Minimum balance to start a Call. */
 export const VOICE_MIN_SECONDS = 30;
@@ -258,12 +259,12 @@ export async function reverseReconciledSubscriptionCredits(userId: string) {
       `
       SELECT id, seconds
       FROM voice_credits
-      WHERE user_id = $1
+      WHERE ${WALLET_USER_SQL}
         AND source = 'stripe'
         AND seconds = $2
         AND stripe_event_id LIKE 'cs:%'
     `,
-      [accountId, SUBSCRIPTION_PLAN.seconds],
+      [id, SUBSCRIPTION_PLAN.seconds],
     ),
   );
   if (!rows.length) return { ok: true as const, reversedSeconds: 0 };
@@ -311,6 +312,95 @@ async function keepMonthlyResetInCurrentPeriod(accountId: string) {
   );
 }
 
+/** $1 is the signed-in id. Ian/Barleezy share one wallet. No JS array binds. */
+const WALLET_USER_SQL = `(
+  lower(user_id) = lower($1)
+  OR (
+    lower($1) IN ('ian', 'barleezy')
+    AND lower(user_id) IN ('ian', 'barleezy')
+  )
+)`;
+
+function packCreditDedupeKey(row: {
+  id?: string;
+  stripe_event_id?: string | null;
+  stripe_session_id?: string | null;
+}) {
+  const session = row.stripe_session_id?.trim();
+  if (session) return `sid:${session}`;
+  const event = row.stripe_event_id?.trim();
+  if (event?.startsWith("cs:")) return `sid:${event.slice(3)}`;
+  if (event) return `eid:${event}`;
+  return `id:${row.id ?? ""}`;
+}
+
+function uniquePackSeconds(
+  rows: Array<{
+    id?: string;
+    seconds?: number;
+    stripe_event_id?: string | null;
+    stripe_session_id?: string | null;
+  }>,
+) {
+  const packSet = new Set(PACK_SECONDS);
+  const ordered = [...rows].sort((left, right) => {
+    const leftEvt = left.stripe_event_id?.startsWith("evt_") ? 0 : 1;
+    const rightEvt = right.stripe_event_id?.startsWith("evt_") ? 0 : 1;
+    return leftEvt - rightEvt;
+  });
+  const seen = new Map<string, number>();
+  for (const row of ordered) {
+    const seconds = Math.max(0, Math.floor(Number(row.seconds) || 0));
+    if (!packSet.has(seconds)) continue;
+    const key = packCreditDedupeKey(row);
+    if (!seen.has(key)) seen.set(key, seconds);
+  }
+  return [...seen.values()].reduce((sum, seconds) => sum + seconds, 0);
+}
+
+async function loadPackCreditRows(
+  db: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+  userId: string,
+) {
+  const id = normalizeUserId(userId);
+  try {
+    return asRows<{
+      id?: string;
+      seconds?: number;
+      stripe_event_id?: string | null;
+      stripe_session_id?: string | null;
+    }>(
+      await db.query(
+        `
+        SELECT id, seconds, stripe_event_id, stripe_session_id
+        FROM voice_credits
+        WHERE ${WALLET_USER_SQL}
+          AND seconds IN (${PACK_SECONDS_SQL})
+      `,
+        [id],
+      ),
+    );
+  } catch (error) {
+    console.error("[stripe-minutes] pack credit query failed", error);
+    const rows = asRows<{
+      id?: string;
+      seconds?: number;
+      stripe_event_id?: string | null;
+      stripe_session_id?: string | null;
+    }>(
+      await db.query(
+        `
+        SELECT id, seconds, stripe_event_id, stripe_session_id
+        FROM voice_credits
+        WHERE ${WALLET_USER_SQL}
+      `,
+        [id],
+      ),
+    );
+    return rows.filter((row) => PACK_SECONDS.includes(Math.max(0, Math.floor(Number(row.seconds) || 0))));
+  }
+}
+
 /**
  * If the wallet is higher than unspent pack minutes, snap it down.
  * Subscription leftover from a reloaded monthly grant does not stay on the page.
@@ -324,25 +414,21 @@ export async function capAllottedMinutesToPacks(userId: string) {
   if (!account?.user_id) return { ok: true as const, voiceSeconds: 0 };
   const accountId = account.user_id;
 
-  const packRows = asRows<{ seconds?: number }>(
-    await db.query(
-      `
-      SELECT coalesce(sum(seconds), 0)::int AS seconds
-      FROM voice_credits
-      WHERE user_id = $1 AND seconds = ANY($2::int[])
-    `,
-      [accountId, PACK_SECONDS],
-    ),
-  );
-  const packSeconds = Math.max(0, Math.floor(Number(packRows[0]?.seconds) || 0));
+  let packSeconds = 0;
+  try {
+    packSeconds = uniquePackSeconds(await loadPackCreditRows(db, id));
+  } catch (error) {
+    console.error("[stripe-minutes] pack credit lookup failed", error);
+    throw error;
+  }
   const openRows = asRows<{ held?: number }>(
     await db.query(
       `
       SELECT coalesce(sum(hold_seconds), 0)::int AS held
       FROM voice_sessions
-      WHERE user_id = $1 AND settled_at IS NULL
+      WHERE ${WALLET_USER_SQL} AND settled_at IS NULL
     `,
-      [accountId],
+      [id],
     ),
   );
   const openHold = Math.max(0, Math.floor(Number(openRows[0]?.held) || 0));

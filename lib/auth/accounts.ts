@@ -85,12 +85,17 @@ function asRows<T>(result: unknown): T[] {
   return [];
 }
 
-function lookupIds(userId: string) {
+/** Ian and Barleezy share one wallet. Lookups must include both casings. */
+export function accountLookupIds(userId: string) {
   const ids = new Set([userId, userId.toLowerCase()]);
   if (isIanUserId(userId)) {
     for (const alias of ["Ian", "ian", "Barleezy", "barleezy"]) ids.add(alias);
   }
   return [...ids];
+}
+
+function lookupIds(userId: string) {
+  return accountLookupIds(userId);
 }
 
 export function hashPassword(password: string) {
