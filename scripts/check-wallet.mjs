@@ -182,7 +182,10 @@ assert.ok(webhookRoute.includes("www.talktolexi.app"), "webhook docs www URL");
 
 const xaiWebhookRoute = readFileSync(new URL("../app/api/webhooks/stripe/route.ts", import.meta.url), "utf8");
 assert.ok(xaiWebhookRoute.includes("export async function POST"), "xAI webhook POST handler");
-assert.ok(xaiWebhookRoute.includes("request.text()"), "xAI webhook reads raw body");
+assert.ok(xaiWebhookRoute.includes("req.text()"), "xAI webhook reads raw body");
+assert.ok(!xaiWebhookRoute.includes("req.json()"), "xAI webhook never parses JSON before constructEvent");
+assert.ok(xaiWebhookRoute.includes("process.env.STRIPE_WEBHOOK_SECRET"), "xAI webhook uses shared Stripe signing secret");
+assert.ok(!xaiWebhookRoute.includes("STRIPE_XAI_WEBHOOK_SECRET"), "xAI webhook does not use a separate secret name");
 assert.ok(xaiWebhookRoute.includes("XAI_MANAGEMENT_API_KEY"), "xAI webhook documents management key");
 assert.ok(!/Bearer <XAI_API_KEY>|Bearer \$\{.*XAI_API_KEY/.test(xaiWebhookRoute), "xAI webhook must not use inference key");
 assert.ok(xaiWebhookRoute.includes("checkout.session.completed"), "xAI webhook event list");
@@ -194,13 +197,16 @@ assert.ok(xaiTopupSrc.includes("XAI_MANAGEMENT_API_KEY"), "top-up uses managemen
 assert.ok(xaiTopupSrc.includes("XAI_TEAM_ID"), "top-up requires team id env");
 assert.ok(xaiTopupSrc.includes("management-api.x.ai"), "top-up hits management API");
 assert.ok(xaiTopupSrc.includes("/prepaid/top-up"), "top-up path");
-assert.ok(xaiTopupSrc.includes('amount: { val: cents }'), "top-up body is amount.val cents string");
+assert.ok(xaiTopupSrc.includes("{ amount: { val: String(amount_total) } }"), "top-up body is amount.val cents string");
+assert.ok(xaiTopupSrc.includes("[xai-topup] request body"), "logs full xAI request body");
 assert.ok(xaiTopupSrc.includes("[xai-topup] response"), "logs full xAI response");
 assert.ok(xaiTopupSrc.includes("response.status"), "logs xAI status");
 assert.ok(xaiTopupSrc.includes("xai_credit_topups"), "idempotent top-up table");
 assert.ok(xaiTopupSrc.includes("stripe_event_id"), "idempotent on Stripe event id");
 assert.ok(!xaiTopupSrc.includes("env.XAI_API_KEY"), "top-up must not fall back to XAI_API_KEY");
 assert.ok(xaiTopupSrc.includes("constructEvent"), "xAI webhook verifies Stripe signature");
+assert.ok(xaiTopupSrc.includes("STRIPE_WEBHOOK_SECRET"), "xAI constructEvent uses shared Stripe signing secret");
+assert.ok(!xaiTopupSrc.includes("STRIPE_XAI_WEBHOOK_SECRET"), "xAI top-up does not use a separate secret name");
 
 const sessionSrc = readFileSync(new URL("../lib/auth/session.ts", import.meta.url), "utf8");
 assert.ok(sessionSrc.includes('export const LEXI_SESSION_COOKIE = "lexi_session"'), "session cookie");
