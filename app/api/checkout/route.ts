@@ -1,9 +1,12 @@
+import { connection } from "next/server";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
 import { createCheckoutByPriceId } from "@/lib/wallet/stripe";
 
+export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function POST(request: Request) {
+  await connection();
   let body: { priceId?: unknown } = {};
   try {
     body = (await request.json()) as typeof body;

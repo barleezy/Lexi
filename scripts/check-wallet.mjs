@@ -89,6 +89,7 @@ assert.ok(!buyPage.includes("redirect"), "buy catalog is public");
 assert.ok(buyPage.includes("buyPagePacks"), "buy always loads packs");
 assert.ok(buyPage.includes("BuyClient"), "buy renders pack client");
 assert.ok(buyPage.includes("readIncomingAuthSession"), "buy HTML uses shared session helper");
+assert.ok(buyPage.includes("await connection()"), "buy page reads live Stripe price env");
 
 const buyClient = readFileSync(new URL("../app/buy/buy-client.tsx", import.meta.url), "utf8");
 assert.ok(buyClient.includes("Talk To Lexi"), "buy brand hero");
@@ -146,6 +147,7 @@ assert.ok(homeSrc.includes("live && music.appleConnected"), "Apple Music search 
 
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs");
+assert.ok(homePage.includes("await connection()"), "home reads live Stripe price env");
 
 const balanceSrc = readFileSync(new URL("../app/api/billing/balance/route.ts", import.meta.url), "utf8");
 assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
@@ -173,6 +175,7 @@ const checkoutApi = readFileSync(new URL("../app/api/checkout/route.ts", import.
 assert.ok(checkoutApi.includes("priceId"), "checkout takes priceId");
 assert.ok(checkoutApi.includes("createCheckoutByPriceId"), "checkout by price");
 assert.ok(checkoutApi.includes("await requireAuthSessionUserId"), "checkout uses shared session helper");
+assert.ok(checkoutApi.includes("await connection()"), "checkout reads live Stripe price env");
 assert.ok(!checkoutApi.includes("body.seconds"), "checkout ignores client seconds");
 
 const resetSrc = readFileSync(new URL("../lib/auth/reset.ts", import.meta.url), "utf8");
@@ -187,6 +190,7 @@ assert.ok(webhookRoute.includes("export async function POST"), "webhook POST han
 assert.ok(webhookRoute.includes("export async function GET"), "webhook GET probe");
 assert.ok(webhookRoute.includes("www.talktolexi.app"), "webhook docs www URL");
 assert.ok(webhookRoute.includes("await connection()"), "minutes webhook reads live Stripe env");
+assert.ok(webhookRoute.includes("handleXaiStripeWebhook"), "minutes webhook also tops up xAI");
 
 const xaiWebhookRoute = readFileSync(new URL("../app/api/webhooks/stripe/route.ts", import.meta.url), "utf8");
 assert.ok(xaiWebhookRoute.includes("export async function POST"), "xAI webhook POST handler");
@@ -200,6 +204,7 @@ assert.ok(!/Bearer <XAI_API_KEY>|Bearer \$\{.*XAI_API_KEY/.test(xaiWebhookRoute)
 assert.ok(xaiWebhookRoute.includes("checkout.session.completed"), "xAI webhook event list");
 assert.ok(xaiWebhookRoute.includes("/api/webhooks/stripe"), "xAI webhook URL");
 assert.ok(xaiWebhookRoute.includes("www.talktolexi.app"), "xAI webhook docs www URL");
+assert.ok(xaiWebhookRoute.includes("handleStripeWebhook"), "xAI webhook credits voice minutes");
 
 const xaiTopupSrc = readFileSync(new URL("../lib/wallet/xai-topup.ts", import.meta.url), "utf8");
 assert.ok(xaiTopupSrc.includes("XAI_MANAGEMENT_API_KEY"), "top-up uses management key env");
@@ -297,8 +302,11 @@ assert.ok(stripeSrc.includes("creditSubscriptionCheckoutMinutes"), "subscription
 assert.ok(stripeSrc.includes("customer.subscription.deleted"), "webhook clears canceled subscriptions");
 assert.ok(stripeSrc.includes("subscription_data"), "subscribe checkout stamps subscription metadata");
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
+assert.ok(stripeSrc.includes("resolveVoicePackFromCheckout"), "webhook falls back to Stripe price id");
+assert.ok(stripeSrc.includes("price_id: input.priceId"), "checkout stamps price_id metadata");
 
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
+assert.ok(subscribePage.includes("await connection()"), "subscribe page reads live Stripe price env");
 assert.ok(subscribePage.includes("SubscribeClient"), "subscribe page renders client");
 assert.ok(subscribePage.includes("SUBSCRIPTION_PLAN"), "subscribe shows monthly plan");
 assert.ok(subscribePage.includes("readIncomingAuthSession"), "subscribe HTML uses shared session helper");

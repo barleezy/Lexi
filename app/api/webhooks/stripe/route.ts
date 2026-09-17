@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { stripeClient } from "@/lib/wallet/stripe";
+import { handleStripeWebhook, stripeClient } from "@/lib/wallet/stripe";
 import { handleXaiStripeWebhook, XAI_STRIPE_WEBHOOK_URL } from "@/lib/wallet/xai-topup";
 import { stripeWebhookSecret } from "@/lib/xai/env";
 
@@ -7,9 +7,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Stripe → xAI prepaid credit top-up.
+ * Stripe → voice minutes + xAI prepaid credit top-up.
  *
- * Separate from the voice-minutes webhook at /api/billing/webhook.
+ * Same handlers as /api/billing/webhook so pack minutes credit whichever URL Stripe hits.
  *
  * Setup:
  *  1. Stripe Dashboard → Developers → Webhooks → Add endpoint
@@ -41,11 +41,15 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid Stripe signature." }, { status: 400 });
   }
   try {
+    const minutes = await handleStripeWebhook({ rawBody: body, signature });
+    if (!minutes.ok) {
+      return Response.json({ error: minutes.error }, { status: minutes.status });
+    }
     const result = await handleXaiStripeWebhook({ rawBody: body, signature });
     if (!result.ok) {
       return Response.json({ error: result.error }, { status: result.status });
     }
-    return Response.json({ received: true, ...result });
+    return Response.json({ received: true, ...result, minutes });
   } catch (error) {
     console.error("[stripe-xai-webhook] processing error", error);
     return Response.json({ error: "Webhook processing failed." }, { status: 500 });
@@ -57,6 +61,6 @@ export async function GET() {
   return Response.json({
     ok: true,
     webhook: XAI_STRIPE_WEBHOOK_URL,
-    note: "xAI prepaid top-up. Voice minutes stay on /api/billing/webhook.",
+    note: "Credits voice minutes and xAI prepaid. Same handlers as /api/billing/webhook.",
   });
 }

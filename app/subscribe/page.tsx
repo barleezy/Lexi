@@ -1,6 +1,9 @@
+import { connection } from "next/server";
 import { readIncomingAuthSession } from "@/lib/auth/session";
 import { isSubscriptionConfigured, SUBSCRIPTION_PLAN } from "@/lib/wallet/packs";
 import { SubscribeClient } from "./subscribe-client";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Subscribe · Talk To Lexi",
@@ -8,6 +11,7 @@ export const metadata = {
 };
 
 export default async function SubscribePage() {
+  await connection();
   const session = await readIncomingAuthSession();
 
   return (

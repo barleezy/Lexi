@@ -62,6 +62,7 @@ async function createCheckoutForPack(input: {
     metadata: {
       user_id: input.userId,
       pack: input.pack.id,
+      price_id: input.priceId,
     },
   });
   if (!session.url) return { ok: false as const, status: 502, error: "Could not start Checkout." };
@@ -365,11 +366,7 @@ export async function handleStripeWebhook(input: {
   }
 
   const session = event.data.object as Stripe.Checkout.Session;
-  const userId =
-    (typeof session.metadata?.user_id === "string" && session.metadata.user_id.trim()) ||
-    (typeof session.metadata?.userId === "string" && session.metadata.userId.trim()) ||
-    (typeof session.client_reference_id === "string" && session.client_reference_id.trim()) ||
-    "";
+  const userId = checkoutUserId(session);
   const subscriptionCheckout =
     session.mode === "subscription" || session.metadata?.plan === SUBSCRIPTION_PLAN.id;
   if (subscriptionCheckout) {
@@ -407,11 +404,16 @@ export async function handleStripeWebhook(input: {
   }
 
   // Seconds always from server pack map — never trust a client-invented amount.
-  const pack = voicePackById(session.metadata?.pack ?? session.metadata?.packId);
+  const pack = await resolveVoicePackFromCheckout(session, stripe, env);
   const seconds = pack?.seconds ?? 0;
-  // Stripe Dashboard / CLI test events often omit our metadata. Ack 200 so Stripe
-  // marks delivery success; only real Checkout sessions with user+pack credit.
   if (!userId || seconds <= 0) {
+    console.warn("[stripe-minutes] ignored checkout.session.completed", {
+      eventId: event.id,
+      sessionId: session.id,
+      userId: userId || null,
+      pack: pack?.id ?? null,
+      mode: session.mode,
+    });
     return {
       ok: true as const,
       ignored: true as const,
@@ -427,12 +429,60 @@ export async function handleStripeWebhook(input: {
     stripeSessionId: session.id,
   });
   if (!credited.ok) {
+    console.error("[stripe-minutes] credit failed", credited.error, {
+      eventId: event.id,
+      userId,
+      pack: pack.id,
+      seconds,
+    });
     return { ok: false as const, status: 500, error: credited.error };
   }
+  console.info("[stripe-minutes] credited", {
+    eventId: event.id,
+    userId,
+    pack: pack.id,
+    seconds,
+    credited: credited.credited,
+    voiceSeconds: credited.voiceSeconds,
+  });
   return {
     ok: true as const,
     credited: credited.credited,
     voiceSeconds: credited.voiceSeconds,
     userId,
+    pack: pack.id,
   };
+}
+
+function checkoutUserId(session: Stripe.Checkout.Session) {
+  return (
+    (typeof session.metadata?.user_id === "string" && session.metadata.user_id.trim()) ||
+    (typeof session.metadata?.userId === "string" && session.metadata.userId.trim()) ||
+    (typeof session.client_reference_id === "string" && session.client_reference_id.trim()) ||
+    ""
+  );
+}
+
+async function resolveVoicePackFromCheckout(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe,
+  env: NodeJS.ProcessEnv,
+) {
+  const fromMeta = voicePackById(session.metadata?.pack ?? session.metadata?.packId);
+  if (fromMeta) return fromMeta;
+  const fromPriceMeta = voicePackByPriceId(
+    session.metadata?.price_id ?? session.metadata?.priceId,
+    env,
+  );
+  if (fromPriceMeta) return fromPriceMeta;
+  try {
+    const full = await stripe.checkout.sessions.retrieve(session.id, {
+      expand: ["line_items.data.price"],
+    });
+    const priceId = full.line_items?.data?.[0]?.price?.id;
+    return voicePackByPriceId(priceId, env);
+  } catch (error) {
+    console.error("[stripe-minutes] could not resolve pack from line items", error);
+    return null;
+  }
 }

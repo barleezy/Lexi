@@ -1,6 +1,9 @@
+import { connection } from "next/server";
 import { readIncomingAuthSession } from "@/lib/auth/session";
 import { buyPagePacks, isStripeConfigured } from "@/lib/wallet/packs";
 import { BuyClient } from "./buy-client";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Buy minutes · Talk To Lexi",
@@ -8,6 +11,7 @@ export const metadata = {
 };
 
 export default async function BuyPage() {
+  await connection();
   const session = await readIncomingAuthSession();
   const packs = buyPagePacks();
   const stripeReady = isStripeConfigured();
