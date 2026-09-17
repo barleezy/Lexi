@@ -105,6 +105,9 @@ const HINTS: Record<VoicePhase, string> = {
   speaking: "Speaking…",
 };
 
+const showRehearsalBadge =
+  process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_STRIPE_MODE === "test";
+
 function StrokedWaveformIcon() {
   return (
     <svg
@@ -2033,9 +2036,15 @@ export function VoiceHome({
         </p>
         {(rehearsal && accountId && !live) || (buyIntent && !live) ? (
           <section className="mt-6 flex w-full max-w-4xl flex-col items-center" aria-label="Rehearsal">
-            <p className="text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
-              {rehearsal && accountId ? "Rehearsal" : "Minutes"}
-            </p>
+            {rehearsal && accountId && showRehearsalBadge ? (
+              <p className="text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
+                Rehearsal
+              </p>
+            ) : rehearsal && accountId ? null : (
+              <p className="text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
+                Minutes
+              </p>
+            )}
             <Link
               href="/buy"
               className="mt-4 rounded-full bg-pink-400 px-6 py-3 text-sm font-semibold text-zinc-950"
