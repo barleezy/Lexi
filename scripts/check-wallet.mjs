@@ -243,6 +243,8 @@ assert.ok(voiceSrc.includes("sweepStaleVoiceSessions"), "sweeper");
 assert.ok(voiceSrc.includes("stripe_event_id"), "idempotent stripe event");
 assert.ok(voiceSrc.includes("voice_credits_stripe_session_uidx"), "idempotent stripe checkout session");
 assert.ok(voiceSrc.includes("creditSubscriptionCheckoutMinutes"), "subscription checkout credits 150 minutes");
+assert.ok(voiceSrc.includes("reverseReconciledSubscriptionCredits"), "can undo a reloaded subscription grant");
+assert.ok(voiceSrc.includes("stripe_event_id LIKE 'cs:%'"), "reconcile subscription rows use cs: event ids");
 assert.ok(voiceSrc.includes("maybeRefillMonthlyMinutes"), "call start can refill monthly minutes");
 assert.ok(voiceSrc.includes("await maybeRefillMonthlyMinutes(accountId)"), "placeVoiceHold refills before debit");
 assert.ok(voiceSrc.includes("interval '30 days'"), "monthly refill is a 30-day window");
@@ -309,6 +311,8 @@ assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.
 assert.ok(stripeSrc.includes("resolveVoicePackFromCheckout"), "webhook falls back to Stripe price id");
 assert.ok(stripeSrc.includes("price_id: input.priceId"), "checkout stamps price_id metadata");
 assert.ok(stripeSrc.includes("creditPaidCheckoutsForUser"), "page load can credit paid Checkout sessions");
+assert.ok(stripeSrc.includes("isSubscriptionCheckout(session)) continue"), "page load does not reload subscription minutes");
+assert.ok(stripeSrc.includes("reverseReconciledSubscriptionCredits"), "page load undoes a reloaded subscription grant");
 
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
 assert.ok(subscribePage.includes("await connection()"), "subscribe page reads live Stripe price env");

@@ -18,7 +18,11 @@ import {
   readAccountSubscriptionIds,
   setSubscriptionByStripeId,
 } from "./subscription";
-import { creditSubscriptionCheckoutMinutes, creditVoiceSeconds } from "./voice";
+import {
+  creditSubscriptionCheckoutMinutes,
+  creditVoiceSeconds,
+  reverseReconciledSubscriptionCredits,
+} from "./voice";
 
 export function stripeClient(env: NodeJS.ProcessEnv = process.env) {
   const key = stripeSecretKey(env);
@@ -374,17 +378,20 @@ export async function handleStripeWebhook(input: {
   });
 }
 
-/** Pull paid Checkout sessions for this user so the page can show minutes if the webhook only topped up xAI. */
+/** Pull paid pack Checkout sessions so the page can show minutes if the webhook only topped up xAI. */
 export async function creditPaidCheckoutsForUser(
   userId: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const stripe = stripeClient(env);
   const id = userId.trim();
-  if (!stripe || !id) return { ok: true as const, creditedSeconds: 0 };
+  if (!id) return { ok: true as const, creditedSeconds: 0 };
+  await reverseReconciledSubscriptionCredits(id);
+  const stripe = stripeClient(env);
+  if (!stripe) return { ok: true as const, creditedSeconds: 0 };
   const sessions = await listCompletedCheckoutsForUser(stripe, id);
   let creditedSeconds = 0;
   for (const session of sessions) {
+    if (isSubscriptionCheckout(session)) continue;
     try {
       const result = await creditCompletedCheckoutSession({
         session,
@@ -410,8 +417,7 @@ async function creditCompletedCheckoutSession(input: {
 }) {
   const { session, stripe, env } = input;
   const userId = checkoutUserId(session);
-  const subscriptionCheckout =
-    session.mode === "subscription" || session.metadata?.plan === SUBSCRIPTION_PLAN.id;
+  const subscriptionCheckout = isSubscriptionCheckout(session);
   if (subscriptionCheckout) {
     if (!userId) {
       return {
@@ -531,6 +537,10 @@ async function resolveVoicePackFromCheckout(
   }
 }
 
+function isSubscriptionCheckout(session: Stripe.Checkout.Session) {
+  return session.mode === "subscription" || session.metadata?.plan === SUBSCRIPTION_PLAN.id;
+}
+
 function checkoutBelongsToUser(session: Stripe.Checkout.Session, userId: string) {
   const owner = checkoutUserId(session);
   return Boolean(owner) && owner.toLowerCase() === userId.toLowerCase();
@@ -542,5 +552,7 @@ async function listCompletedCheckoutsForUser(stripe: Stripe, userId: string) {
     status: "complete",
     created: { gte: Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 14 },
   });
-  return listed.data.filter((session) => checkoutBelongsToUser(session, userId));
+  return listed.data.filter(
+    (session) => checkoutBelongsToUser(session, userId) && !isSubscriptionCheckout(session),
+  );
 }

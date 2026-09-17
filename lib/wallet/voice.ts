@@ -238,6 +238,79 @@ export async function stampMonthlyMinutesReset(userId: string) {
   );
 }
 
+/**
+ * Undo page-load reconcile that re-granted the monthly 150 minutes.
+ * Those rows use stripe_event_id `cs:<checkout session>` — real webhooks use `evt_`.
+ */
+export async function reverseReconciledSubscriptionCredits(userId: string) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: true as const, reversedSeconds: 0 };
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return { ok: true as const, reversedSeconds: 0 };
+  const account = await findAccountRow(id);
+  if (!account?.user_id) return { ok: true as const, reversedSeconds: 0 };
+  const accountId = account.user_id;
+
+  const rows = asRows<{ id?: string; seconds?: number }>(
+    await db.query(
+      `
+      SELECT id, seconds
+      FROM voice_credits
+      WHERE user_id = $1
+        AND source = 'stripe'
+        AND seconds = $2
+        AND stripe_event_id LIKE 'cs:%'
+    `,
+      [accountId, SUBSCRIPTION_PLAN.seconds],
+    ),
+  );
+  if (!rows.length) return { ok: true as const, reversedSeconds: 0 };
+
+  let reversedSeconds = 0;
+  for (const row of rows) {
+    const seconds = Math.max(0, Math.floor(Number(row.seconds) || 0));
+    if (!row.id || seconds <= 0) continue;
+    await db.query(`DELETE FROM voice_credits WHERE id = $1`, [row.id]);
+    await db.query(
+      `
+      UPDATE accounts
+      SET voice_seconds = GREATEST(0, voice_seconds - $1), updated_at = now()
+      WHERE user_id = $2
+    `,
+      [seconds, accountId],
+    );
+    reversedSeconds += seconds;
+  }
+
+  const original = asRows<{ created_at?: string }>(
+    await db.query(
+      `
+      SELECT created_at
+      FROM voice_credits
+      WHERE user_id = $1
+        AND source = 'stripe'
+        AND seconds = $2
+        AND (stripe_event_id IS NULL OR stripe_event_id NOT LIKE 'cs:%')
+      ORDER BY created_at ASC
+      LIMIT 1
+    `,
+      [accountId, SUBSCRIPTION_PLAN.seconds],
+    ),
+  );
+  if (original[0]?.created_at) {
+    await db.query(
+      `UPDATE accounts SET monthly_minutes_reset_at = $1, updated_at = now() WHERE user_id = $2`,
+      [original[0].created_at, accountId],
+    );
+  }
+
+  console.info("[stripe-minutes] reversed reconciled subscription grant", {
+    userId: accountId,
+    reversedSeconds,
+  });
+  return { ok: true as const, reversedSeconds };
+}
+
 /** checkout.session.completed for Lexi Pro: add 150 minutes and start the reset clock. */
 export async function creditSubscriptionCheckoutMinutes(input: {
   userId: string;
