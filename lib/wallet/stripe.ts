@@ -14,9 +14,10 @@ import {
 } from "./packs";
 import {
   markAccountSubscribed,
+  readAccountSubscriptionIds,
   setSubscriptionByStripeId,
 } from "./subscription";
-import { creditVoiceSeconds } from "./voice";
+import { creditSubscriptionCheckoutMinutes, creditVoiceSeconds } from "./voice";
 
 export function stripeClient(env: NodeJS.ProcessEnv = process.env) {
   const key = env.STRIPE_SECRET_KEY?.trim();
@@ -64,6 +65,154 @@ async function createCheckoutForPack(input: {
   });
   if (!session.url) return { ok: false as const, status: 502, error: "Could not start Checkout." };
   return { ok: true as const, url: session.url, sessionId: session.id };
+}
+
+function isActiveStripeStatus(status: string | null | undefined) {
+  return status === "active" || status === "trialing";
+}
+
+/** Cancel at period end so the current month stays usable. */
+export async function cancelAccountSubscriptionAtPeriodEnd(input: {
+  userId: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const env = input.env ?? process.env;
+  const stripe = stripeClient(env);
+  if (!stripe) return { ok: false as const, status: 503, error: "Billing is not configured." };
+
+  const ids = await readAccountSubscriptionIds(input.userId);
+  const customerIds = new Set<string>();
+  if (ids.customerId) customerIds.add(ids.customerId);
+  if (ids.email) {
+    try {
+      const customers = await stripe.customers.list({ email: ids.email, limit: 5 });
+      for (const customer of customers.data) {
+        if (customer.id) customerIds.add(customer.id);
+      }
+    } catch {
+      // Fall through to the stored subscription id.
+    }
+  }
+
+  let subscription: Stripe.Subscription | null = null;
+  if (ids.subscriptionId) {
+    try {
+      const stored = await stripe.subscriptions.retrieve(ids.subscriptionId);
+      if (isActiveStripeStatus(stored.status) || stored.cancel_at_period_end) {
+        subscription = stored;
+      }
+    } catch {
+      subscription = null;
+    }
+  }
+
+  if (!subscription) {
+    for (const customerId of customerIds) {
+      try {
+        const subscriptions = await stripe.subscriptions.list({ customer: customerId, limit: 10 });
+        const match =
+          subscriptions.data.find((item) => isActiveStripeStatus(item.status)) ||
+          subscriptions.data.find((item) => item.cancel_at_period_end);
+        if (match) {
+          subscription = match;
+          break;
+        }
+      } catch {
+        // Keep checking other customers.
+      }
+    }
+  }
+
+  if (!subscription) {
+    return { ok: false as const, status: 404, error: "No active subscription to cancel." };
+  }
+
+  try {
+    const updated = subscription.cancel_at_period_end
+      ? subscription
+      : await stripe.subscriptions.update(subscription.id, { cancel_at_period_end: true });
+
+    await markAccountSubscribed({
+      userId: input.userId,
+      customerId: typeof updated.customer === "string" ? updated.customer : ids.customerId,
+      subscriptionId: updated.id,
+      subscribed: isActiveStripeStatus(updated.status),
+    });
+
+    return {
+      ok: true as const,
+      cancelAtPeriodEnd: updated.cancel_at_period_end === true,
+      currentPeriodEnd: updated.current_period_end ?? null,
+      alreadyScheduled: subscription.cancel_at_period_end === true,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not cancel subscription.";
+    console.error("[subscription-cancel] Stripe update failed", error);
+    return { ok: false as const, status: 502, error: message };
+  }
+}
+
+export async function readAccountSubscriptionCancelState(input: {
+  userId: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const env = input.env ?? process.env;
+  const stripe = stripeClient(env);
+  const ids = await readAccountSubscriptionIds(input.userId);
+  if (!stripe) {
+    return {
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: null as number | null,
+      subscriptionId: ids.subscriptionId,
+    };
+  }
+
+  try {
+    if (ids.subscriptionId) {
+      const stored = await stripe.subscriptions.retrieve(ids.subscriptionId);
+      return {
+        cancelAtPeriodEnd: stored.cancel_at_period_end === true,
+        currentPeriodEnd: stored.current_period_end ?? null,
+        subscriptionId: stored.id,
+      };
+    }
+    if (ids.customerId) {
+      const subscriptions = await stripe.subscriptions.list({ customer: ids.customerId, limit: 10 });
+      const match =
+        subscriptions.data.find((item) => isActiveStripeStatus(item.status)) ||
+        subscriptions.data.find((item) => item.cancel_at_period_end);
+      if (match) {
+        return {
+          cancelAtPeriodEnd: match.cancel_at_period_end === true,
+          currentPeriodEnd: match.current_period_end ?? null,
+          subscriptionId: match.id,
+        };
+      }
+    }
+  } catch {
+    // Surface the stored flag without Stripe details.
+  }
+
+  return {
+    cancelAtPeriodEnd: false,
+    currentPeriodEnd: null as number | null,
+    subscriptionId: ids.subscriptionId,
+  };
+}
+
+/** Alias for /api/billing/cancel — same period-end cancel. */
+export async function cancelAccountSubscription(input: {
+  userId: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const canceled = await cancelAccountSubscriptionAtPeriodEnd(input);
+  if (!canceled.ok) return canceled;
+  return {
+    ok: true as const,
+    cancelAtPeriodEnd: canceled.cancelAtPeriodEnd,
+    alreadyCanceling: canceled.alreadyScheduled,
+    currentPeriodEnd: canceled.currentPeriodEnd,
+  };
 }
 
 /** /api/checkout/subscribe — recurring monthly Checkout. Returns stay on /subscribe. */
@@ -239,7 +388,21 @@ export async function handleStripeWebhook(input: {
     if (!marked.ok) {
       return { ok: false as const, status: 500, error: marked.error };
     }
-    return { ok: true as const, subscribed: true, userId: marked.userId };
+    const credited = await creditSubscriptionCheckoutMinutes({
+      userId,
+      stripeEventId: event.id,
+      stripeSessionId: session.id,
+    });
+    if (!credited.ok) {
+      return { ok: false as const, status: 500, error: credited.error };
+    }
+    return {
+      ok: true as const,
+      subscribed: true,
+      userId: marked.userId,
+      credited: credited.credited,
+      voiceSeconds: credited.voiceSeconds,
+    };
   }
 
   // Seconds always from server pack map — never trust a client-invented amount.

@@ -139,6 +139,7 @@ async function ensureAccountsTable() {
       await db.query(
         `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscribed boolean NOT NULL DEFAULT false`,
       );
+      await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_minutes_reset_at timestamptz`);
       await db.query(
         `
         CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_lower_idx

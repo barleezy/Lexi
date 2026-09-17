@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { TEXT_FAST_MODEL, TEXT_FAST_MAX_TOKENS, textFastModelFromEnv } from "../lib/wallet/models.ts";
-import { VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
+import { SUBSCRIPTION_PLAN, VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
 import { DEFAULT_CHAT_MODEL, chatModelFromEnv } from "../lib/channels/parse.ts";
 import { VIDEO_CONTEXT_MODEL, VIDEO_CONTEXT_MAX_TOKENS } from "../lib/voice/video-context.ts";
 import { IOS_REALTIME_URL } from "../lib/ios/config.ts";
@@ -123,10 +123,22 @@ assert.ok(
   "rehearsal badge is development-only",
 );
 assert.ok(!homeSrc.includes("NEXT_PUBLIC_STRIPE_MODE"), "rehearsal badge ignores Stripe test mode");
+assert.ok(!homeSrc.includes("STRIPE_MODE"), "rehearsal badge ignores Stripe mode env");
+assert.ok(
+  (homeSrc.match(/setRehearsal\(true\)/g) || []).length ===
+    (homeSrc.match(/process\.env\.NODE_ENV === "development"\) setRehearsal\(true\)/g) || []).length,
+  "setRehearsal(true) is development-only",
+);
+assert.ok(
+  homeSrc.includes('process.env.NODE_ENV === "development" && rehearsal'),
+  "rehearsal copy and badge stay behind NODE_ENV",
+);
 assert.ok(!/setRehearsal\(seconds/.test(homeSrc), "balance refresh does not open rehearsal");
 assert.ok(!homeSrc.includes('get("next") === "/buy"'), "home does not auto-open buy from ?next=");
 assert.ok(homeSrc.includes("buyIntent && !live"), "buy section is click-intent only");
-assert.ok(homeSrc.includes("!subscribed"), "home hides Subscribe when subscribed");
+assert.ok(homeSrc.includes("Manage subscription"), "home shows Manage subscription when subscribed");
+assert.ok(homeSrc.includes('href="/account"'), "home manage/account links to /account");
+assert.ok(homeSrc.includes('subscribed ? "/account" : "/subscribe"'), "home Subscribe follows billing status");
 assert.ok(homeSrc.includes("catalogPacks"), "home receives public catalog");
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
 assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
@@ -175,6 +187,7 @@ assert.ok(xaiWebhookRoute.includes("XAI_MANAGEMENT_API_KEY"), "xAI webhook docum
 assert.ok(!/Bearer <XAI_API_KEY>|Bearer \$\{.*XAI_API_KEY/.test(xaiWebhookRoute), "xAI webhook must not use inference key");
 assert.ok(xaiWebhookRoute.includes("checkout.session.completed"), "xAI webhook event list");
 assert.ok(xaiWebhookRoute.includes("/api/webhooks/stripe"), "xAI webhook URL");
+assert.ok(xaiWebhookRoute.includes("www.talktolexi.app"), "xAI webhook docs www URL");
 
 const xaiTopupSrc = readFileSync(new URL("../lib/wallet/xai-topup.ts", import.meta.url), "utf8");
 assert.ok(xaiTopupSrc.includes("XAI_MANAGEMENT_API_KEY"), "top-up uses management key env");
@@ -199,11 +212,24 @@ assert.ok(sessionSrc.includes("x-lexi-user-id is not auth") || sessionSrc.includ
 const voiceSrc = readFileSync(new URL("../lib/wallet/voice.ts", import.meta.url), "utf8");
 assert.ok(voiceSrc.includes("CREATE TABLE IF NOT EXISTS voice_sessions"), "voice_sessions table");
 assert.ok(voiceSrc.includes("voice_seconds"), "voice_seconds column");
+assert.ok(voiceSrc.includes("monthly_minutes_reset_at"), "monthly reset column");
 assert.ok(voiceSrc.includes("VOICE_HOLD_SECONDS = 90"), "hold 90");
 assert.ok(voiceSrc.includes("VOICE_MIN_SECONDS = 30"), "min 30");
 assert.ok(voiceSrc.includes("export async function extendVoiceHold"), "extend hold while leftover remains");
 assert.ok(voiceSrc.includes("sweepStaleVoiceSessions"), "sweeper");
 assert.ok(voiceSrc.includes("stripe_event_id"), "idempotent stripe event");
+assert.ok(voiceSrc.includes("creditSubscriptionCheckoutMinutes"), "subscription checkout credits 150 minutes");
+assert.ok(voiceSrc.includes("maybeRefillMonthlyMinutes"), "call start can refill monthly minutes");
+assert.ok(voiceSrc.includes("await maybeRefillMonthlyMinutes(accountId)"), "placeVoiceHold refills before debit");
+assert.ok(voiceSrc.includes("interval '30 days'"), "monthly refill is a 30-day window");
+assert.ok(voiceSrc.includes("SUBSCRIPTION_PLAN.seconds"), "monthly refill uses plan seconds");
+assert.ok(!voiceSrc.includes("interval '1 day'"), "no daily subscription grant");
+
+const accountsSrc = readFileSync(new URL("../lib/auth/accounts.ts", import.meta.url), "utf8");
+assert.ok(accountsSrc.includes("monthly_minutes_reset_at"), "accounts schema has monthly reset column");
+
+const subscriptionSrc = readFileSync(new URL("../lib/wallet/subscription.ts", import.meta.url), "utf8");
+assert.ok(subscriptionSrc.includes("monthly_minutes_reset_at"), "subscription schema has monthly reset column");
 
 const realtimeSrc = readFileSync(new URL("../app/api/realtime/session/route.ts", import.meta.url), "utf8");
 assert.ok(realtimeSrc.includes("requireAuthSessionUserId"), "mint uses signed session");
@@ -247,6 +273,7 @@ assert.ok(stripeSrc.includes("createSubscriptionCheckout"), "subscription checko
 assert.ok(stripeSrc.includes('mode: "subscription"'), "subscription checkout is recurring");
 assert.ok(stripeSrc.includes("[subscribe-checkout]"), "subscription checkout logs Stripe failures");
 assert.ok(stripeSrc.includes("markAccountSubscribed"), "webhook marks monthly subscribers");
+assert.ok(stripeSrc.includes("creditSubscriptionCheckoutMinutes"), "subscription checkout adds 150 minutes");
 assert.ok(stripeSrc.includes("customer.subscription.deleted"), "webhook clears canceled subscriptions");
 assert.ok(stripeSrc.includes("subscription_data"), "subscribe checkout stamps subscription metadata");
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
@@ -270,21 +297,62 @@ assert.ok(subscribeApi.includes("await requireAuthSessionUserId"), "subscribe us
 assert.ok(subscribeApi.includes("console.error"), "subscribe route logs checkout failures");
 assert.ok(subscribeApi.includes("console.warn"), "subscribe route logs unsigned 401");
 
+const headerSrc = readFileSync(new URL("../components/site-header.tsx", import.meta.url), "utf8");
+assert.ok(headerSrc.includes("Manage subscription"), "header shows Manage subscription when subscribed");
+assert.ok(headerSrc.includes('href={signedIn ? "/account" : "/"}'), "signed-in header Account goes to /account");
+assert.ok(headerSrc.includes('subscribed ? "/account" : "/subscribe"'), "header Subscribe follows billing status");
+
+const layoutSrc = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
+assert.ok(layoutSrc.includes("readStoredSubscribed"), "layout reads stored subscription for the header");
+assert.ok(layoutSrc.includes("subscribed={subscribed}"), "layout passes subscribed to SiteChrome");
+
+const accountPage = readFileSync(new URL("../app/account/page.tsx", import.meta.url), "utf8");
+assert.ok(accountPage.includes("readIncomingAuthSession"), "account page uses shared session helper");
+assert.ok(accountPage.includes("readAccountSubscribed"), "account page loads subscription status");
+assert.ok(accountPage.includes("readVoiceSeconds"), "account page loads minute balance");
+assert.ok(accountPage.includes("findAccountRow"), "account page loads email");
+assert.ok(accountPage.includes("AccountClient"), "account page renders client");
+assert.ok(accountPage.includes("cancelAtPeriodEnd"), "account page passes cancel state");
+
+const accountClient = readFileSync(new URL("../app/account/account-client.tsx", import.meta.url), "utf8");
+assert.ok(accountClient.includes("Cancel subscription"), "account has cancel button");
+assert.ok(accountClient.includes("/api/billing/cancel"), "account cancel posts to billing cancel");
+assert.ok(accountClient.includes("active") && accountClient.includes("none"), "account shows active or none");
+assert.ok(accountClient.includes("Sign in"), "unsigned account shows sign-in");
+assert.ok(accountClient.includes('href="/"'), "unsigned account can go home");
+
+const cancelApi = readFileSync(new URL("../app/api/billing/cancel/route.ts", import.meta.url), "utf8");
+assert.ok(cancelApi.includes("requireAuthSessionUserId"), "cancel uses shared session helper");
+assert.ok(cancelApi.includes("cancelAccountSubscriptionAtPeriodEnd"), "cancel uses period-end helper");
+assert.ok(cancelApi.includes("POST"), "cancel is POST");
+
+assert.ok(stripeSrc.includes("cancel_at_period_end: true"), "Stripe cancel is at period end");
+assert.ok(stripeSrc.includes("cancelAccountSubscriptionAtPeriodEnd"), "stripe helper cancels at period end");
+
+assert.equal(SUBSCRIPTION_PLAN.minutes, 150);
+assert.equal(SUBSCRIPTION_PLAN.seconds, 9000);
+assert.equal(SUBSCRIPTION_PLAN.cadence, "per month");
 assert.ok(packsSrc.includes("STRIPE_PRICE_SUBSCRIPTION"), "subscription price env");
+assert.ok(packsSrc.includes("minutes: 150"), "Lexi Pro is 150 minutes per month");
+assert.ok(packsSrc.includes("seconds: 9000"), "Lexi Pro is 9000 seconds");
+assert.ok(!packsSrc.includes("per day"), "subscription is not a daily grant");
 assert.ok(homeSrc.includes('href="/subscribe"'), "home nav links to /subscribe");
-assert.ok(homeSrc.includes('href="/refund"'), "home nav links to /refund");
-assert.ok(homeSrc.includes("Refunds"), "home nav labels Refunds");
-assert.ok(homeSrc.includes('href="/privacy"'), "home nav links to /privacy");
-assert.ok(homeSrc.includes("Privacy"), "home nav labels Privacy");
-assert.ok(homeSrc.includes('href="/terms"'), "home nav links to /terms");
-assert.ok(homeSrc.includes("Terms"), "home nav labels Terms");
-assert.ok(homeSrc.includes('href="/support"'), "home nav links to /support");
-assert.ok(homeSrc.includes("Support"), "home nav labels Support");
-assert.ok(buyClient.includes('href="/subscribe"'), "buy page links to /subscribe");
-assert.ok(buyClient.includes('href="/refund"'), "buy footer links to Refunds");
-assert.ok(buyClient.includes('href="/privacy"'), "buy footer links to Privacy");
-assert.ok(buyClient.includes('href="/terms"'), "buy footer links to Terms");
-assert.ok(buyClient.includes('href="/support"'), "buy footer links to Support");
+const footerSrc = readFileSync(new URL("../components/site-footer.tsx", import.meta.url), "utf8");
+assert.ok(footerSrc.includes('href: "/refund"') || footerSrc.includes('href="/refund"'), "site footer links to /refund");
+assert.ok(footerSrc.includes("Refunds"), "site footer labels Refunds");
+assert.ok(footerSrc.includes('href: "/privacy"') || footerSrc.includes('href="/privacy"'), "site footer links to /privacy");
+assert.ok(footerSrc.includes("Privacy"), "site footer labels Privacy");
+assert.ok(footerSrc.includes('href: "/terms"') || footerSrc.includes('href="/terms"'), "site footer links to /terms");
+assert.ok(footerSrc.includes("Terms"), "site footer labels Terms");
+assert.ok(footerSrc.includes('href: "/support"') || footerSrc.includes('href="/support"'), "site footer links to /support");
+assert.ok(footerSrc.includes("Support"), "site footer labels Support");
+assert.ok(footerSrc.includes('href: "/site"') || footerSrc.includes('href="/site"'), "site footer links to /site");
+assert.ok(footerSrc.includes("Site"), "site footer labels Site");
+assert.ok(headerSrc.includes('href="/subscribe"') || headerSrc.includes('"/subscribe"'), "buy/subscribe chrome links Subscribe");
+assert.ok(footerSrc.includes('href: "/refund"') || footerSrc.includes('href="/refund"'), "buy chrome footer links to Refunds");
+assert.ok(footerSrc.includes('href: "/privacy"') || footerSrc.includes('href="/privacy"'), "buy chrome footer links to Privacy");
+assert.ok(footerSrc.includes('href: "/terms"') || footerSrc.includes('href="/terms"'), "buy chrome footer links to Terms");
+assert.ok(footerSrc.includes('href: "/support"') || footerSrc.includes('href="/support"'), "buy chrome footer links to Support");
 
 const refundPage = readFileSync(new URL("../app/refund/page.tsx", import.meta.url), "utf8");
 assert.ok(refundPage.includes("Refund and Return Policy"), "refund title");
@@ -301,13 +369,13 @@ assert.ok(refundsAlias.includes('../refund/page'), " /refunds aliases /refund");
 const returnPolicyAlias = readFileSync(new URL("../app/return-policy/page.tsx", import.meta.url), "utf8");
 assert.ok(returnPolicyAlias.includes('../refund/page'), "/return-policy aliases /refund");
 
-assert.ok(subscribeClient.includes('href="/refund"'), "subscribe footer links to Refunds");
-assert.ok(subscribeClient.includes('href="/privacy"'), "subscribe footer links to Privacy");
-assert.ok(subscribeClient.includes('href="/terms"'), "subscribe footer links to Terms");
-assert.ok(subscribeClient.includes('href="/support"'), "subscribe footer links to Support");
-assert.ok(refundPage.includes('href="/privacy"'), "refund footer links to Privacy");
-assert.ok(refundPage.includes('href="/terms"'), "refund footer links to Terms");
-assert.ok(refundPage.includes('href="/support"'), "refund footer links to Support");
+assert.ok(footerSrc.includes('href: "/refund"') || footerSrc.includes('href="/refund"'), "subscribe chrome footer links to Refunds");
+assert.ok(footerSrc.includes('href: "/privacy"') || footerSrc.includes('href="/privacy"'), "subscribe chrome footer links to Privacy");
+assert.ok(footerSrc.includes('href: "/terms"') || footerSrc.includes('href="/terms"'), "subscribe chrome footer links to Terms");
+assert.ok(footerSrc.includes('href: "/support"') || footerSrc.includes('href="/support"'), "subscribe chrome footer links to Support");
+assert.ok(footerSrc.includes('href: "/privacy"') || footerSrc.includes('href="/privacy"'), "refund chrome footer links to Privacy");
+assert.ok(footerSrc.includes('href: "/terms"') || footerSrc.includes('href="/terms"'), "refund chrome footer links to Terms");
+assert.ok(footerSrc.includes('href: "/support"') || footerSrc.includes('href="/support"'), "refund chrome footer links to Support");
 
 const privacyPage = readFileSync(new URL("../app/privacy/page.tsx", import.meta.url), "utf8");
 assert.ok(privacyPage.includes("Privacy Policy"), "privacy title");
@@ -361,6 +429,8 @@ assert.ok(sitePage.includes('href="/"'), "site links Home /");
 assert.ok(sitePage.includes('href="/buy"'), "site links Buy minutes");
 assert.ok(sitePage.includes('href="/buy/success"'), "site links Checkout success");
 assert.ok(sitePage.includes('href="/subscribe"'), "site links Subscribe");
+assert.ok(sitePage.includes('href="/account"'), "site links Account");
+assert.ok(sitePage.includes("Account"), "site labels Account");
 assert.ok(sitePage.includes('href="/support"'), "site links Support");
 assert.ok(sitePage.includes('href="/help"'), "site links Help");
 assert.ok(sitePage.includes('href="/contact"'), "site links Contact");
@@ -389,23 +459,9 @@ assert.ok(directoryAlias.includes("../site/page"), "/directory aliases /site");
 const linksAlias = readFileSync(new URL("../app/links/page.tsx", import.meta.url), "utf8");
 assert.ok(linksAlias.includes("../site/page"), "/links aliases /site");
 
-assert.ok(homeSrc.includes('href="/site"'), "home nav links to /site");
-assert.ok(homeSrc.includes("Site"), "home nav labels Site");
-assert.ok(buyClient.includes('href="/site"'), "buy footer links to Site");
-assert.ok(buyClient.includes("Site"), "buy footer labels Site");
-assert.ok(subscribeClient.includes('href="/site"'), "subscribe footer links to Site");
-assert.ok(subscribeClient.includes("Site"), "subscribe footer labels Site");
-assert.ok(refundPage.includes('href="/site"'), "refund footer links to Site");
-assert.ok(refundPage.includes("Site"), "refund footer labels Site");
-assert.ok(privacyPage.includes('href="/site"'), "privacy footer links to Site");
-assert.ok(privacyPage.includes("Site"), "privacy footer labels Site");
-assert.ok(termsPage.includes('href="/site"'), "terms footer links to Site");
-assert.ok(termsPage.includes("Site"), "terms footer labels Site");
-assert.ok(supportPage.includes('href="/site"'), "support footer links to Site");
-assert.ok(supportPage.includes("Site"), "support footer labels Site");
-assert.ok(buySuccess.includes('href="/site"'), "buy success footer links to Site");
-assert.ok(buySuccess.includes("Site"), "buy success footer labels Site");
-assert.ok(sitePage.includes("Site"), "site footer labels Site");
+assert.ok(footerSrc.includes('href: "/site"') || footerSrc.includes('href="/site"'), "site footer links to Site");
+assert.ok(footerSrc.includes("Site"), "site footer labels Site");
+assert.ok(sitePage.includes("Site"), "site page labels Site");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutRoute.includes("packId"), "legacy checkout takes packId");

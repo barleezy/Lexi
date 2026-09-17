@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { SiteChrome } from "@/components/site-chrome";
 import { readIncomingAuthSession } from "@/lib/auth/session";
+import { readStoredSubscribed } from "@/lib/wallet/subscription";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,6 +26,7 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const session = await readIncomingAuthSession();
+  const subscribed = session ? await readStoredSubscribed(session.userId) : false;
 
   return (
     <html
@@ -32,7 +34,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} min-h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <SiteChrome signedIn={Boolean(session)}>{children}</SiteChrome>
+        <SiteChrome signedIn={Boolean(session)} subscribed={subscribed}>
+          {children}
+        </SiteChrome>
       </body>
     </html>
   );

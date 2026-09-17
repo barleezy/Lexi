@@ -16,6 +16,8 @@ export const SUBSCRIPTION_PLAN = {
   label: "Monthly",
   priceLabel: "$9.99",
   cadence: "per month",
+  minutes: 150,
+  seconds: 9000,
   envPrice: "STRIPE_PRICE_SUBSCRIPTION",
 } as const;
 

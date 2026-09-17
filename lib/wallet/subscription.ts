@@ -37,6 +37,7 @@ export async function ensureSubscriptionSchema() {
       await db.query(
         `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscribed boolean NOT NULL DEFAULT false`,
       );
+      await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_minutes_reset_at timestamptz`);
       await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text`);
       await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id text`);
     })().catch((error) => {
@@ -57,7 +58,7 @@ type SubscriptionRow = {
   stripe_subscription_id?: string | null;
 };
 
-async function readSubscriptionRow(userId: string): Promise<SubscriptionRow | null> {
+export async function readSubscriptionRow(userId: string): Promise<SubscriptionRow | null> {
   const id = normalizeUserId(userId);
   if (!id) return null;
   const db = await ensureSubscriptionSchema();
@@ -209,4 +210,24 @@ export async function readAccountSubscribed(userId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** DB flag only — no Stripe round trip. Used by the site header. */
+export async function readStoredSubscribed(userId: string): Promise<boolean> {
+  try {
+    const row = await readSubscriptionRow(userId);
+    return Boolean(row?.subscribed || row?.paid);
+  } catch {
+    return false;
+  }
+}
+
+export async function readAccountSubscriptionIds(userId: string) {
+  const row = await readSubscriptionRow(userId);
+  return {
+    email: typeof row?.email === "string" ? row.email.trim() : "",
+    customerId: row?.stripe_customer_id?.trim() || "",
+    subscriptionId: row?.stripe_subscription_id?.trim() || "",
+    subscribed: Boolean(row?.subscribed || row?.paid),
+  };
 }

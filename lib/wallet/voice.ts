@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import { findAccountRow, isAccountStoreConfigured } from "../auth/accounts";
 import { normalizeUserId } from "../memory/user";
+import { SUBSCRIPTION_PLAN } from "./packs";
 
 /** Minimum balance to start a Call. */
 export const VOICE_MIN_SECONDS = 30;
@@ -40,7 +41,8 @@ let ensured: Promise<void> | null = null;
 
 /**
  * accounts.voice_seconds on the user row + voice_sessions ledger.
- * Stripe webhook is the only production writer that increments voice_seconds.
+ * Stripe webhook increments voice_seconds (packs and first subscription grant).
+ * Subscribers are refilled TO 150 minutes when monthly_minutes_reset_at is due.
  */
 export async function ensureVoiceWalletSchema() {
   const db = sql();
@@ -67,6 +69,7 @@ export async function ensureVoiceWalletSchema() {
       await db.query(
         `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscribed boolean NOT NULL DEFAULT false`,
       );
+      await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_minutes_reset_at timestamptz`);
       await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text`);
       await db.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id text`);
       await db.query(
@@ -204,6 +207,73 @@ export async function creditVoiceSeconds(input: {
   };
 }
 
+/** Start the 30-day monthly-minutes clock after a subscription checkout credit. */
+export async function stampMonthlyMinutesReset(userId: string) {
+  const id = normalizeUserId(userId);
+  if (!id) return;
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return;
+  const account = await findAccountRow(id);
+  const accountId = account?.user_id ?? id;
+  await db.query(
+    `UPDATE accounts SET monthly_minutes_reset_at = now(), updated_at = now() WHERE user_id = $1`,
+    [accountId],
+  );
+}
+
+/** checkout.session.completed for Lexi Pro: add 150 minutes and start the reset clock. */
+export async function creditSubscriptionCheckoutMinutes(input: {
+  userId: string;
+  stripeEventId?: string | null;
+  stripeSessionId?: string | null;
+}) {
+  const credited = await creditVoiceSeconds({
+    userId: input.userId,
+    seconds: SUBSCRIPTION_PLAN.seconds,
+    source: "stripe",
+    stripeEventId: input.stripeEventId,
+    stripeSessionId: input.stripeSessionId,
+  });
+  if (!credited.ok) return credited;
+  if (credited.credited > 0) {
+    await stampMonthlyMinutesReset(input.userId);
+  }
+  return credited;
+}
+
+/**
+ * If subscribed and monthly_minutes_reset_at is null or older than 30 days,
+ * SET balance to 150 minutes (does not stack leftover) and stamp now().
+ */
+export async function maybeRefillMonthlyMinutes(userId: string): Promise<boolean> {
+  const id = normalizeUserId(userId);
+  if (!id) return false;
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return false;
+  const account = await findAccountRow(id);
+  const accountId = account?.user_id ?? id;
+  const rows = asRows<{ voice_seconds?: number }>(
+    await db.query(
+      `
+      UPDATE accounts
+      SET
+        voice_seconds = $2,
+        monthly_minutes_reset_at = now(),
+        updated_at = now()
+      WHERE user_id = $1
+        AND subscribed = true
+        AND (
+          monthly_minutes_reset_at IS NULL
+          OR monthly_minutes_reset_at < now() - interval '30 days'
+        )
+      RETURNING voice_seconds
+    `,
+      [accountId, SUBSCRIPTION_PLAN.seconds],
+    ),
+  );
+  return Boolean(rows[0]);
+}
+
 export type VoiceHoldOk = {
   ok: true;
   voiceSessionId: string;
@@ -251,6 +321,8 @@ export async function placeVoiceHold(userId: string): Promise<VoiceHoldOk | Voic
   if (open[0]?.id) {
     return { ok: false, code: "busy", error: "A Call is already open. Hang up first." };
   }
+
+  await maybeRefillMonthlyMinutes(accountId);
 
   const balance = (await readVoiceSeconds(accountId)) ?? 0;
   if (balance < VOICE_MIN_SECONDS) {

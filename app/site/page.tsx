@@ -97,6 +97,9 @@ export default function SitePage() {
               <li>
                 • <Link href="/subscribe">Subscribe</Link> — /subscribe
               </li>
+              <li>
+                • <Link href="/account">Account</Link> — /account
+              </li>
             </ul>
           </section>
 

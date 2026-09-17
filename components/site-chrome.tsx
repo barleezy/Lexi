@@ -8,9 +8,11 @@ import { SiteHeader } from "@/components/site-header";
 export function SiteChrome({
   children,
   signedIn = false,
+  subscribed = false,
 }: {
   children: ReactNode;
   signedIn?: boolean;
+  subscribed?: boolean;
 }) {
   const pathname = usePathname();
   const isHome = pathname === "/";
@@ -19,7 +21,9 @@ export function SiteChrome({
 
   return (
     <>
-      {isHome || isWatch || isIosAuth ? null : <SiteHeader signedIn={signedIn} />}
+      {isHome || isWatch || isIosAuth ? null : (
+        <SiteHeader signedIn={signedIn} subscribed={subscribed} />
+      )}
       <div className="flex flex-1 flex-col">{children}</div>
       {isIosAuth ? null : <SiteFooter />}
     </>

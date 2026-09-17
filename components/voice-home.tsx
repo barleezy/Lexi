@@ -1985,14 +1985,18 @@ export function VoiceHome({
             >
               Buy minutes
             </a>
-            {!subscribed ? (
-              <a
-                href="/subscribe"
-                className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
-              >
-                Subscribe
-              </a>
-            ) : null}
+            <a
+              href={subscribed ? "/account" : "/subscribe"}
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              {subscribed ? "Manage subscription" : "Subscribe"}
+            </a>
+            <a
+              href="/account"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Account
+            </a>
             <button
               type="button"
               onClick={signOutAccount}

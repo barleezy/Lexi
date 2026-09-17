@@ -116,7 +116,7 @@ export default function RefundPage() {
           <section className="space-y-3">
             <h2 className="text-lg font-medium tracking-wide">How to cancel</h2>
             <p style={{ color: "var(--buy-muted)" }}>
-              Sign in → Subscribe → cancel, or email support. Cancel before the renewal date if you
+              Sign in → Account → cancel, or email support. Cancel before the renewal date if you
               do not want the next charge.
             </p>
           </section>

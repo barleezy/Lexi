@@ -94,7 +94,11 @@ export default function SupportPage() {
             <h2 className="text-lg font-medium tracking-wide">What I can help with</h2>
             <ul className="space-y-2" style={{ color: "var(--buy-muted)" }}>
               <li>• Sign-in, password reset, account delete</li>
-              <li>• Minute packs and the $9.99 monthly plan</li>
+              <li>
+                • Minute packs (
+                <Link href="/buy">/buy</Link>) and the $9.99 monthly plan (see{" "}
+                <Link href="/subscribe">/subscribe</Link>)
+              </li>
               <li>
                 • Refunds (see{" "}
                 <Link href="/refund">/refund</Link>)
@@ -121,7 +125,7 @@ export default function SupportPage() {
               </li>
               <li>
                 • Packs are one-time minutes. Monthly is recurring until you cancel on{" "}
-                <Link href="/subscribe">/subscribe</Link>
+                <Link href="/account">/account</Link>
               </li>
               <li>
                 • Refunds:{" "}

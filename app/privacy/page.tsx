@@ -168,8 +168,8 @@ export default function PrivacyPage() {
               <li>Email us to export or delete your account</li>
               <li>
                 Cancel the monthly plan on{" "}
-                <Link href="/subscribe" className="text-pink-300 underline-offset-4 hover:underline">
-                  /subscribe
+                <Link href="/account" className="text-pink-300 underline-offset-4 hover:underline">
+                  /account
                 </Link>
               </li>
             </ul>
