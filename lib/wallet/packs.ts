@@ -7,6 +7,8 @@ export const STRIPE_WEBHOOK_URL = `${CANONICAL_APP_ORIGIN}${STRIPE_WEBHOOK_PATH}
 
 export const BUY_SUCCESS_URL = `${CANONICAL_APP_ORIGIN}/buy/success`;
 export const BUY_CANCEL_URL = `${CANONICAL_APP_ORIGIN}/buy`;
+/** Cancel from /subscribe returns to the subscribe page (absolute www URL). */
+export const SUBSCRIBE_CANCEL_URL = `${CANONICAL_APP_ORIGIN}/subscribe`;
 
 /** Recurring monthly tier. Stripe price ID is STRIPE_PRICE_SUBSCRIPTION. */
 export const SUBSCRIPTION_PLAN = {
@@ -14,6 +16,7 @@ export const SUBSCRIPTION_PLAN = {
   label: "Monthly",
   priceLabel: "$9.99",
   cadence: "per month",
+  /** Must be a Stripe Price with type=recurring (month or year) — never a one-time pack price. */
   envPrice: "STRIPE_PRICE_SUBSCRIPTION",
 } as const;
 

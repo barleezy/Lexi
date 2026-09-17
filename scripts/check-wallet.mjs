@@ -199,7 +199,22 @@ assert.ok(stripeSrc.includes("BUY_CANCEL_URL"), "checkout cancel → /buy");
 assert.ok(stripeSrc.includes("createCheckoutByPriceId"), "priceId checkout helper");
 assert.ok(stripeSrc.includes("createSubscriptionCheckout"), "subscription checkout helper");
 assert.ok(stripeSrc.includes('mode: "subscription"'), "subscription checkout is recurring");
+assert.ok(stripeSrc.includes("assertRecurringSubscriptionPrice"), "validates recurring price before session");
+assert.ok(stripeSrc.includes("SUBSCRIBE_CANCEL_URL"), "subscribe cancel is absolute /subscribe");
+assert.ok(stripeSrc.includes("[stripe] subscription checkout.sessions.create failed"), "logs Stripe create errors");
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
+
+assert.ok(packsSrc.includes("SUBSCRIBE_CANCEL_URL"), "packs exports subscribe cancel URL");
+assert.ok(
+  packsSrc.includes("${CANONICAL_APP_ORIGIN}/subscribe") ||
+    packsSrc.includes("https://www.talktolexi.app/subscribe"),
+  "subscribe cancel URL is absolute www production",
+);
+assert.ok(
+  packsSrc.includes("${CANONICAL_APP_ORIGIN}/buy/success") ||
+    packsSrc.includes("https://www.talktolexi.app/buy/success"),
+  "buy/subscribe success URL is absolute www production",
+);
 
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
 assert.ok(subscribePage.includes("SubscribeClient"), "subscribe page renders client");

@@ -11,6 +11,7 @@ export async function POST(request: Request) {
 
   const created = await createSubscriptionCheckout({ userId });
   if (!created.ok) {
+    console.error("[api/checkout/subscribe] failed:", created.error);
     return Response.json({ error: created.error }, { status: created.status });
   }
   return Response.json({ ok: true, url: created.url, sessionId: created.sessionId });
