@@ -74,6 +74,10 @@ export function BuyClient({
             Subscribe monthly
           </Link>
           <span className="px-2">·</span>
+          <Link href="/refund" className="underline-offset-4 hover:underline hover:text-white">
+            Refunds
+          </Link>
+          <span className="px-2">·</span>
           <Link href="/" className="underline-offset-4 hover:underline hover:text-white">
             Back to Call
           </Link>

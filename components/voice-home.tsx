@@ -1944,6 +1944,12 @@ export function VoiceHome({
             >
               Subscribe
             </a>
+            <a
+              href="/refund"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Refunds
+            </a>
             <button
               type="button"
               onClick={signOutAccount}
@@ -1965,6 +1971,12 @@ export function VoiceHome({
               className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
             >
               Subscribe
+            </a>
+            <a
+              href="/refund"
+              className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
+            >
+              Refunds
             </a>
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Sign in below</p>
           </div>

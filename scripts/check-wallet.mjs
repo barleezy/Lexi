@@ -221,7 +221,27 @@ assert.ok(subscribeApi.includes("await requireAuthSessionUserId"), "subscribe us
 
 assert.ok(packsSrc.includes("STRIPE_PRICE_SUBSCRIPTION"), "subscription price env");
 assert.ok(homeSrc.includes('href="/subscribe"'), "home nav links to /subscribe");
+assert.ok(homeSrc.includes('href="/refund"'), "home nav links to /refund");
+assert.ok(homeSrc.includes("Refunds"), "home nav labels Refunds");
 assert.ok(buyClient.includes('href="/subscribe"'), "buy page links to /subscribe");
+assert.ok(buyClient.includes('href="/refund"'), "buy footer links to Refunds");
+
+const refundPage = readFileSync(new URL("../app/refund/page.tsx", import.meta.url), "utf8");
+assert.ok(refundPage.includes("Refund and Return Policy"), "refund title");
+assert.ok(refundPage.includes("Effective date: September 17, 2026"), "refund effective date");
+assert.ok(refundPage.includes("barleezy@talktolexi.app"), "refund support email");
+assert.ok(!refundPage.includes("support@talktolexi.app"), "refund does not use old support inbox");
+assert.ok(!refundPage.includes("readIncomingAuthSession"), "refund is not behind sign-in");
+assert.ok(!refundPage.includes("/api/checkout"), "refund has no checkout");
+assert.ok(!refundPage.includes("createCheckout"), "refund has no Stripe checkout");
+assert.ok(refundPage.includes("Talk to Lexi sells digital access only"), "refund intro copy");
+
+const refundsAlias = readFileSync(new URL("../app/refunds/page.tsx", import.meta.url), "utf8");
+assert.ok(refundsAlias.includes('../refund/page'), " /refunds aliases /refund");
+const returnPolicyAlias = readFileSync(new URL("../app/return-policy/page.tsx", import.meta.url), "utf8");
+assert.ok(returnPolicyAlias.includes('../refund/page'), "/return-policy aliases /refund");
+
+assert.ok(subscribeClient.includes('href="/refund"'), "subscribe footer links to Refunds");
 
 const checkoutRoute = readFileSync(new URL("../app/api/billing/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutRoute.includes("packId"), "legacy checkout takes packId");
