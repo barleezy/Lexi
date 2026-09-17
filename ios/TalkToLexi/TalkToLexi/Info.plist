@@ -42,8 +42,6 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Lexi plays and loves songs on your Apple Music account while you talk.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Lexi uses the camera when you share it so she can see what you see.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
