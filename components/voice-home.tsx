@@ -2610,20 +2610,22 @@ export function VoiceHome({
               >
                 {locationOn ? "Location on" : "Share location"}
               </button>
-              <button
-                type="button"
-                disabled={appleBusy}
-                onClick={() => {
-                  if (music.appleConnected) {
-                    void disconnectAppleMusic();
-                    return;
-                  }
-                  void connectAppleMusic();
-                }}
-                className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                {music.appleConnected ? "Disconnect Apple Music" : "Connect Apple Music"}
-              </button>
+              {live ? (
+                <button
+                  type="button"
+                  disabled={appleBusy}
+                  onClick={() => {
+                    if (music.appleConnected) {
+                      void disconnectAppleMusic();
+                      return;
+                    }
+                    void connectAppleMusic();
+                  }}
+                  className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  {music.appleConnected ? "Disconnect Apple Music" : "Connect Apple Music"}
+                </button>
+              ) : null}
               {live && toyGrantPending && !toyControl ? (
                 <button
                   type="button"
@@ -2640,7 +2642,7 @@ export function VoiceHome({
           {locationHint ? (
             <p className="px-1 text-[11px] text-zinc-500">{locationHint}</p>
           ) : null}
-          {music.appleConnected ? (
+          {live && music.appleConnected ? (
             <AppleMusicBar
               connected={music.appleConnected}
               playing={music.playing && music.source !== "url"}
@@ -2653,10 +2655,10 @@ export function VoiceHome({
               onNext={onAppleNext}
             />
           ) : null}
-          {appleHint && !music.appleConnected ? (
+          {live && appleHint && !music.appleConnected ? (
             <p className="px-1 text-[11px] text-zinc-500">{appleHint}</p>
           ) : null}
-          {music.playing && !music.appleConnected ? (
+          {live && music.playing && !music.appleConnected ? (
             <p className="px-1 text-[11px] text-zinc-500">Playing: {music.title || "music"}</p>
           ) : null}
         <form

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -17,12 +17,18 @@ export function SubscribeClient({
   priceLabel: string;
   cadence: string;
 }) {
+  const [authed, setAuthed] = useState(signedIn);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
+  const [accountDraft, setAccountDraft] = useState("");
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [accountPending, setAccountPending] = useState(false);
 
   async function subscribe() {
-    if (!signedIn) {
-      window.location.href = "/?next=/subscribe";
+    if (!authed) {
+      setError("Sign in to subscribe. Use the form on this page — you stay here.");
       return;
     }
     if (!planReady) {
@@ -42,16 +48,63 @@ export function SubscribeClient({
       });
       const body = (await response.json()) as { url?: string; error?: string };
       if (response.status === 401) {
-        window.location.href = "/?next=/subscribe";
+        console.error("[subscribe-checkout] 401", body.error);
+        setAuthed(false);
+        setError(body.error || "Sign in first.");
+        setPending(false);
         return;
       }
       if (!response.ok || !body.url) {
+        console.error("[subscribe-checkout] checkout failed", response.status, body.error);
         throw new Error(body.error || "Could not start Checkout.");
       }
       window.location.href = body.url;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start Checkout.");
+      const message = err instanceof Error ? err.message : "Could not start Checkout.";
+      console.error("[subscribe-checkout] client error", err);
+      setError(message);
       setPending(false);
+    }
+  }
+
+  async function submitAccount(event: FormEvent) {
+    event.preventDefault();
+    if (!accountDraft.trim()) {
+      setError("Enter a username.");
+      return;
+    }
+    if (accountMode === "signup" && !accountEmail.trim()) {
+      setError("Enter the email for this account.");
+      return;
+    }
+    if (accountPassword.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    setError(null);
+    setAccountPending(true);
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: accountMode,
+          userId: accountDraft,
+          email: accountEmail,
+          password: accountPassword,
+        }),
+      });
+      const body = (await response.json()) as { error?: string; userId?: string };
+      if (!response.ok || !body.userId) {
+        throw new Error(body.error || (accountMode === "signup" ? "Could not create account." : "Could not sign in."));
+      }
+      setAuthed(true);
+      setAccountPassword("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign in.");
+    } finally {
+      setAccountPending(false);
     }
   }
 
@@ -129,9 +182,9 @@ export function SubscribeClient({
             Checkout is not configured on this server yet. The monthly plan is listed below —
             payment will not start until billing is set up.
           </p>
-        ) : !signedIn ? (
+        ) : !authed ? (
           <p className="mt-8 max-w-xl text-center text-sm text-zinc-300" role="status">
-            Sign in to subscribe. This page stays here after you come back.
+            Sign in to subscribe. This page stays here after you sign in.
           </p>
         ) : null}
 
@@ -151,9 +204,88 @@ export function SubscribeClient({
             onClick={() => void subscribe()}
             className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
           >
-            {pending ? "Starting…" : !signedIn ? "Sign in to subscribe" : !planReady ? "Unavailable" : "Subscribe"}
+            {pending ? "Starting…" : !authed ? "Sign in to subscribe" : !planReady ? "Unavailable" : "Subscribe"}
           </button>
         </div>
+
+        {!authed ? (
+          <form
+            noValidate
+            onSubmit={(event) => void submitAccount(event)}
+            className="mt-8 w-full max-w-sm rounded-[1.75rem] border border-pink-400/50 bg-black/50 px-6 py-6 text-left"
+          >
+            <div className="grid grid-cols-2 rounded-full bg-zinc-900/80 p-1 text-sm font-medium">
+              <button
+                type="button"
+                onClick={() => setAccountMode("signin")}
+                className={`rounded-full px-3 py-2 ${
+                  accountMode === "signin" ? "bg-pink-400 text-zinc-950" : "text-zinc-300"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccountMode("signup")}
+                className={`rounded-full px-3 py-2 ${
+                  accountMode === "signup" ? "bg-pink-400 text-zinc-950" : "text-zinc-300"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
+            <label className="mt-4 flex flex-col gap-1.5 text-sm font-medium text-zinc-200">
+              Username
+              <input
+                value={accountDraft}
+                onChange={(event) => setAccountDraft(event.target.value)}
+                placeholder="username"
+                autoComplete="username"
+                className="rounded-2xl border border-zinc-500 bg-transparent px-4 py-3 text-base font-normal text-white outline-none focus:border-pink-400"
+              />
+            </label>
+            {accountMode === "signup" ? (
+              <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium text-zinc-200">
+                Email
+                <input
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={accountEmail}
+                  onChange={(event) => setAccountEmail(event.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  className="rounded-2xl border border-zinc-500 bg-transparent px-4 py-3 text-base font-normal text-white outline-none focus:border-pink-400"
+                />
+              </label>
+            ) : null}
+            <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium text-zinc-200">
+              Password
+              <input
+                type="password"
+                value={accountPassword}
+                onChange={(event) => setAccountPassword(event.target.value)}
+                placeholder="At least 8 characters"
+                autoComplete={accountMode === "signup" ? "new-password" : "current-password"}
+                className="rounded-2xl border border-zinc-500 bg-transparent px-4 py-3 text-base font-normal text-white outline-none focus:border-pink-400"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={accountPending}
+              className="buy-buy-btn mt-5 w-full rounded-full px-5 py-3 text-sm font-semibold disabled:opacity-45"
+            >
+              {accountPending
+                ? accountMode === "signup"
+                  ? "Creating account…"
+                  : "Signing in…"
+                : accountMode === "signup"
+                  ? "Create account"
+                  : "Sign in"}
+            </button>
+          </form>
+        ) : null}
 
         {error ? (
           <p className="mt-8 text-center text-sm text-zinc-300" role="alert">

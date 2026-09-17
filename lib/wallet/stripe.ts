@@ -5,6 +5,8 @@ import {
   isStripeConfigured,
   stripePriceIdForPack,
   stripeSubscriptionPriceId,
+  SUBSCRIBE_CANCEL_URL,
+  SUBSCRIBE_SUCCESS_URL,
   SUBSCRIPTION_PLAN,
   voicePackById,
   voicePackByPriceId,
@@ -42,35 +44,49 @@ async function createCheckoutForPack(input: {
   return { ok: true as const, url: session.url, sessionId: session.id };
 }
 
-/** /api/checkout/subscribe — recurring monthly Checkout. Same return URLs as packs. */
+/** /api/checkout/subscribe — recurring monthly Checkout. Returns stay on /subscribe. */
 export async function createSubscriptionCheckout(input: {
   userId: string;
   env?: NodeJS.ProcessEnv;
 }) {
   const env = input.env ?? process.env;
   if (!isStripeConfigured(env)) {
+    console.error("[subscribe-checkout] billing is not configured");
     return { ok: false as const, status: 503, error: "Billing is not configured." };
   }
   const priceId = stripeSubscriptionPriceId(env);
   if (!priceId) {
+    console.error("[subscribe-checkout] STRIPE_PRICE_SUBSCRIPTION is missing");
     return { ok: false as const, status: 503, error: "That plan is not for sale yet." };
   }
   const stripe = stripeClient(env);
-  if (!stripe) return { ok: false as const, status: 503, error: "Billing is not configured." };
+  if (!stripe) {
+    console.error("[subscribe-checkout] Stripe client is not configured");
+    return { ok: false as const, status: 503, error: "Billing is not configured." };
+  }
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    line_items: [{ price: priceId, quantity: 1 }],
-    success_url: BUY_SUCCESS_URL,
-    cancel_url: BUY_CANCEL_URL,
-    client_reference_id: input.userId,
-    metadata: {
-      user_id: input.userId,
-      plan: SUBSCRIPTION_PLAN.id,
-    },
-  });
-  if (!session.url) return { ok: false as const, status: 502, error: "Could not start Checkout." };
-  return { ok: true as const, url: session.url, sessionId: session.id };
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: SUBSCRIBE_SUCCESS_URL,
+      cancel_url: SUBSCRIBE_CANCEL_URL,
+      client_reference_id: input.userId,
+      metadata: {
+        user_id: input.userId,
+        plan: SUBSCRIPTION_PLAN.id,
+      },
+    });
+    if (!session.url) {
+      console.error("[subscribe-checkout] Stripe session had no URL", session.id);
+      return { ok: false as const, status: 502, error: "Could not start Checkout." };
+    }
+    return { ok: true as const, url: session.url, sessionId: session.id };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not start Checkout.";
+    console.error("[subscribe-checkout] Stripe session create failed", error);
+    return { ok: false as const, status: 502, error: message };
+  }
 }
 
 /** /api/checkout — client sends { priceId }; pack/seconds resolved server-side. */

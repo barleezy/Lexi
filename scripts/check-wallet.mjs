@@ -70,6 +70,9 @@ assert.ok(!STRIPE_WEBHOOK_URL.endsWith("/"), "no trailing slash");
 const packsSrc = readFileSync(new URL("../lib/wallet/packs.ts", import.meta.url), "utf8");
 assert.ok(packsSrc.includes("BUY_SUCCESS_URL"), "buy success url");
 assert.ok(packsSrc.includes("/buy/success"), "buy success path");
+assert.ok(packsSrc.includes("SUBSCRIBE_SUCCESS_URL"), "subscribe success url");
+assert.ok(packsSrc.includes("/subscribe/success"), "subscribe success path");
+assert.ok(packsSrc.includes("SUBSCRIBE_CANCEL_URL"), "subscribe cancel url");
 assert.ok(packsSrc.includes("STRIPE_PRICE_PACK_10"), "whisper price env");
 assert.ok(packsSrc.includes('id: "whisper"'), "whisper pack");
 assert.ok(packsSrc.includes('id: "murmur"'), "murmur pack");
@@ -117,6 +120,7 @@ assert.ok(homeSrc.includes("Rehearsal"), "rehearsal screen label");
 assert.ok(homeSrc.includes("catalogPacks"), "home receives public catalog");
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
 assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
+assert.ok(homeSrc.includes("live && music.appleConnected"), "Apple Music search bar only during a live call");
 
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs");
@@ -129,6 +133,10 @@ assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does no
 const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.meta.url), "utf8");
 assert.ok(buySuccess.includes("Minutes added"), "success copy");
 assert.ok(buySuccess.includes('href="/"'), "success links to Call");
+
+const subscribeSuccess = readFileSync(new URL("../app/subscribe/success/page.tsx", import.meta.url), "utf8");
+assert.ok(subscribeSuccess.includes("You are subscribed"), "subscribe success copy");
+assert.ok(subscribeSuccess.includes('href="/"'), "subscribe success links to Call");
 
 const checkoutApi = readFileSync(new URL("../app/api/checkout/route.ts", import.meta.url), "utf8");
 assert.ok(checkoutApi.includes("priceId"), "checkout takes priceId");
@@ -199,9 +207,12 @@ assert.ok(stripeSrc.includes("user_id"), "checkout metadata user_id");
 assert.ok(stripeSrc.includes("pack:"), "checkout metadata pack");
 assert.ok(stripeSrc.includes("BUY_SUCCESS_URL"), "checkout success → /buy/success");
 assert.ok(stripeSrc.includes("BUY_CANCEL_URL"), "checkout cancel → /buy");
+assert.ok(stripeSrc.includes("success_url: SUBSCRIBE_SUCCESS_URL"), "subscription success → /subscribe/success");
+assert.ok(stripeSrc.includes("cancel_url: SUBSCRIBE_CANCEL_URL"), "subscription cancel → /subscribe");
 assert.ok(stripeSrc.includes("createCheckoutByPriceId"), "priceId checkout helper");
 assert.ok(stripeSrc.includes("createSubscriptionCheckout"), "subscription checkout helper");
 assert.ok(stripeSrc.includes('mode: "subscription"'), "subscription checkout is recurring");
+assert.ok(stripeSrc.includes("[subscribe-checkout]"), "subscription checkout logs Stripe failures");
 assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.pack");
 
 const subscribePage = readFileSync(new URL("../app/subscribe/page.tsx", import.meta.url), "utf8");
@@ -213,11 +224,15 @@ const subscribeClient = readFileSync(new URL("../app/subscribe/subscribe-client.
 assert.ok(subscribeClient.includes("/api/checkout/subscribe"), "subscribe posts subscription checkout");
 assert.ok(subscribeClient.includes('credentials: "include"'), "subscribe checkout sends session cookie");
 assert.ok(subscribeClient.includes("Subscribe"), "subscribe button");
-assert.ok(subscribeClient.includes("/?next=/subscribe"), "unsigned subscribe asks to sign in");
+assert.ok(!subscribeClient.includes("/?next=/subscribe"), "unsigned subscribe stays on /subscribe");
+assert.ok(!subscribeClient.includes('window.location.href = "/"'), "subscribe does not send users home");
+assert.ok(subscribeClient.includes("Sign in to subscribe"), "unsigned subscribe shows sign-in");
 
 const subscribeApi = readFileSync(new URL("../app/api/checkout/subscribe/route.ts", import.meta.url), "utf8");
 assert.ok(subscribeApi.includes("createSubscriptionCheckout"), "subscribe route creates subscription");
 assert.ok(subscribeApi.includes("await requireAuthSessionUserId"), "subscribe uses shared session helper");
+assert.ok(subscribeApi.includes("console.error"), "subscribe route logs checkout failures");
+assert.ok(subscribeApi.includes("console.warn"), "subscribe route logs unsigned 401");
 
 assert.ok(packsSrc.includes("STRIPE_PRICE_SUBSCRIPTION"), "subscription price env");
 assert.ok(homeSrc.includes('href="/subscribe"'), "home nav links to /subscribe");
