@@ -40,7 +40,7 @@ struct SettingsView: View {
             if app.isSignedIn {
                 Text("Signed in as \(app.account.userId)")
                     .font(.system(size: 16, weight: .semibold))
-                Text(app.minutesLabel.isEmpty ? "0s left" : "\(app.minutesLabel) left")
+                Text("\(app.voiceSeconds / 60) min left")
                     .font(.system(size: 22, weight: .semibold))
                 Text(app.subscribed ? "Lexi Pro is active." : "No subscription.")
                     .font(.system(size: 13))

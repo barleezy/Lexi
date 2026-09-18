@@ -4,7 +4,7 @@ import { findAccountRow } from "@/lib/auth/accounts";
 import { creditPaidCheckoutsForUser, readAccountSubscriptionCancelState } from "@/lib/wallet/stripe";
 import { readAccountSubscribed } from "@/lib/wallet/subscription";
 import { readAllottedVoiceSeconds } from "@/lib/wallet/allotment";
-import { formatVoiceMinutes, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
+import { sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 import { AccountClient } from "./account-client";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,6 @@ export default async function AccountPage() {
   let email = "";
   let subscribed = false;
   let voiceSeconds = 0;
-  let minutesLabel = "0s";
   let cancelAtPeriodEnd = false;
 
   if (userId) {
@@ -37,7 +36,6 @@ export default async function AccountPage() {
     email = (account?.email ?? "").trim();
     subscribed = nextSubscribed;
     voiceSeconds = seconds ?? 0;
-    minutesLabel = formatVoiceMinutes(voiceSeconds);
     cancelAtPeriodEnd = cancelState.cancelAtPeriodEnd;
   }
 
@@ -47,7 +45,6 @@ export default async function AccountPage() {
         signedIn={Boolean(session)}
         email={email}
         subscribed={subscribed}
-        minutesLabel={minutesLabel}
         voiceSeconds={voiceSeconds}
         cancelAtPeriodEnd={cancelAtPeriodEnd}
       />

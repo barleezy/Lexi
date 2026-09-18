@@ -146,7 +146,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         do {
             let balance = try await api.billingBalance()
             voiceSeconds = balance.voiceSeconds
-            minutesLabel = balance.label
+            minutesLabel = "\(voiceSeconds / 60) min"
             subscribed = balance.subscribed
             billingMessage = ""
         } catch {

@@ -6,7 +6,9 @@ import { isVoiceConnectFailure } from "../lib/voice/connect-fail.ts";
 import { SUBSCRIPTION_PLAN, VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
 import {
   VOICE_USD_PER_MINUTE,
+  allottedFloorMinutes,
   allottedVoiceSeconds,
+  formatAllottedFloorMinutes,
   prepaidLedgerCentsToUsd,
   usdToVoiceSeconds,
   voiceSecondsToUsd,
@@ -44,6 +46,9 @@ assert.equal(VOICE_USD_PER_AUDIO_MINUTE, VOICE_USD_PER_MINUTE);
 assert.equal(VOICE_USD_PER_AUDIO_MINUTE, 0.08);
 assert.equal(usdToVoiceSeconds(4.7), 3525);
 assert.equal(usdToVoiceSeconds(4.7) / 60, 58.75);
+assert.equal(allottedFloorMinutes(3525), 58);
+assert.equal(allottedFloorMinutes(usdToVoiceSeconds(4.7)), 58);
+assert.equal(formatAllottedFloorMinutes(3525), "58 min");
 assert.equal(allottedVoiceSeconds(3600, 4.7), 3525);
 assert.equal(allottedVoiceSeconds(3600, null), 3600);
 assert.equal(allottedVoiceSeconds(600, 4.7), 600);
@@ -64,12 +69,19 @@ assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=g
   const s = usdToVoiceSeconds(4.7);
   const m = Math.floor(s / 60);
   const rem = s % 60;
+  assert.equal(s, 3525);
+  assert.equal(m, 58);
   assert.equal(`${m}m ${rem}s`, "58m 45s");
+  assert.equal(formatAllottedFloorMinutes(s), "58 min");
+  assert.notEqual(formatAllottedFloorMinutes(s), "58m 45s");
 }
 
 const voiceRateSrc = readFileSync(new URL("../lib/wallet/voice-rate.ts", import.meta.url), "utf8");
 assert.ok(voiceRateSrc.includes("VOICE_USD_PER_MINUTE = 0.08"), "billed usage rate is $0.08/min");
 assert.ok(voiceRateSrc.includes("usdToVoiceSeconds"), "usd → seconds helper");
+assert.ok(voiceRateSrc.includes("allottedFloorMinutes"), "floor minutes helper");
+assert.ok(voiceRateSrc.includes("formatAllottedFloorMinutes"), "58 min label helper");
+assert.ok(voiceRateSrc.includes("Math.floor"), "UI minutes floor / 60");
 assert.ok(voiceRateSrc.includes("every signed-in account"), "rate is global");
 assert.ok(!voiceRateSrc.includes("isAdminUserId"), "rate is not admin-gated");
 assert.ok(!voiceRateSrc.includes("ADMIN_USER_IDS"), "rate is not admin-gated");
@@ -194,6 +206,11 @@ assert.ok(homeSrc.includes("loadVoiceSession"), "home lazy-loads VoiceSession un
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
 assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
 assert.ok(homeSrc.includes("live && music.appleConnected"), "Apple Music search bar only during a live call");
+assert.ok(homeSrc.includes("formatAllottedFloorMinutes"), "home floors voiceSeconds / 60");
+assert.ok(homeSrc.includes("body.voiceSeconds"), "home allotted minutes come from voiceSeconds");
+assert.ok(!homeSrc.includes("body.label"), "home does not echo balance label");
+assert.ok(!homeSrc.includes("setVoiceLabel"), "home does not paint API label");
+assert.ok(!homeSrc.includes("voiceLabel"), "home does not store API label");
 
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 assert.ok(!homePage.includes("buyPagePacks"), "home HTML is not blocked on Stripe pack catalog");
@@ -228,6 +245,8 @@ assert.ok(buySuccess.includes("Minutes added"), "success copy");
 assert.ok(buySuccess.includes("creditPaidCheckoutsForUser"), "success credits paid packs before showing minutes");
 assert.ok(buySuccess.includes("You now have"), "success shows live allotted minutes");
 assert.ok(buySuccess.includes("readAllottedVoiceSeconds"), "success labels prepaid-clamped minutes");
+assert.ok(buySuccess.includes("formatAllottedFloorMinutes"), "success floors voiceSeconds / 60");
+assert.ok(!buySuccess.includes("formatVoiceMinutes"), "success does not show 58m 45s");
 assert.ok(buySuccess.includes('href="/"'), "success links to Call");
 
 const subscribeSuccess = readFileSync(new URL("../app/subscribe/success/page.tsx", import.meta.url), "utf8");
@@ -425,6 +444,8 @@ assert.ok(iosController.includes("account.apiHost"), "iOS site URLs use AccountS
 assert.ok(iosController.includes("UIApplication.shared.open"), "iOS opens Safari, not an in-app checkout session");
 assert.ok(iosController.includes("refreshBilling"), "iOS refreshes minutes from GET /api/billing/balance");
 assert.ok(iosController.includes("settleIfIdle"), "iOS refreshes minutes when returning to the app");
+assert.ok(iosController.includes("voiceSeconds / 60"), "iOS floors voiceSeconds / 60");
+assert.ok(!iosController.includes("minutesLabel = balance.label"), "iOS does not echo API label");
 assert.ok(!iosController.includes("startPackCheckout"), "iOS does not create pack Checkout sessions");
 assert.ok(!iosController.includes("startSubscribeCheckout"), "iOS does not create subscribe Checkout sessions");
 assert.ok(!iosController.includes("openCheckout"), "iOS does not present ASWebAuthenticationSession checkout");
@@ -446,6 +467,7 @@ assert.ok(iosSettings.includes("openBuyMinutes"), "settings Buy minutes opens Sa
 assert.ok(iosSettings.includes("openSubscribe"), "settings Subscribe opens Safari /subscribe");
 assert.ok(iosSettings.includes("openManageAccount"), "settings Manage account opens Safari /account");
 assert.ok(!iosSettings.includes("buyPack"), "settings is not per-pack native checkout");
+assert.ok(iosSettings.includes("voiceSeconds / 60"), "iOS settings floors voiceSeconds / 60");
 
 const iosSignIn = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/SignInCoordinator.swift", import.meta.url),
@@ -458,7 +480,8 @@ const iosHome = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/VoiceHomeView.swift", import.meta.url),
   "utf8",
 );
-assert.ok(iosHome.includes("minutesLabel"), "home header can show minutes");
+assert.ok(iosHome.includes("voiceSeconds / 60"), "iOS home floors voiceSeconds / 60");
+assert.ok(!iosHome.includes("app.minutesLabel"), "iOS home does not echo minutesLabel");
 assert.ok(iosHome.includes("showSettings"), "minutes pill opens Settings");
 assert.ok(iosHome.includes("scheduleLaunchWork"), "VoiceHomeView kicks launch work after first appearance");
 
@@ -549,6 +572,9 @@ assert.ok(accountPage.includes("creditPaidCheckoutsForUser"), "account credits p
 assert.ok(accountPage.includes("readIncomingAuthSession"), "account page uses shared session helper");
 assert.ok(accountPage.includes("readAccountSubscribed"), "account page loads subscription status");
 assert.ok(accountPage.includes("readAllottedVoiceSeconds"), "account page loads allotted minute balance");
+assert.ok(accountPage.includes("voiceSeconds={voiceSeconds}"), "account passes voiceSeconds, not a label");
+assert.ok(!accountPage.includes("formatVoiceMinutes"), "account does not SSR formatVoiceMinutes");
+assert.ok(!accountPage.includes("minutesLabel"), "account does not pass API-style minutesLabel");
 assert.ok(accountPage.includes("findAccountRow"), "account page loads email");
 assert.ok(accountPage.includes("AccountClient"), "account page renders client");
 assert.ok(accountPage.includes("cancelAtPeriodEnd"), "account page passes cancel state");
@@ -558,6 +584,10 @@ assert.ok(accountPage.includes("await connection()"), "account page reads live m
 const accountClient = readFileSync(new URL("../app/account/account-client.tsx", import.meta.url), "utf8");
 assert.ok(accountClient.includes("/api/billing/balance"), "account page refreshes live minutes");
 assert.ok(accountClient.includes("liveMinutes"), "account shows the live minute label");
+assert.ok(accountClient.includes("formatAllottedFloorMinutes"), "account floors voiceSeconds / 60");
+assert.ok(accountClient.includes("body.voiceSeconds"), "account live minutes come from voiceSeconds");
+assert.ok(!accountClient.includes("body.label"), "account does not echo balance label");
+assert.ok(!accountClient.includes("minutesLabel"), "account does not paint minutesLabel");
 assert.ok(accountClient.includes("Cancel subscription"), "account has cancel button");
 assert.ok(accountClient.includes("/api/billing/cancel"), "account cancel posts to billing cancel");
 assert.ok(accountClient.includes("active") && accountClient.includes("none"), "account shows active or none");

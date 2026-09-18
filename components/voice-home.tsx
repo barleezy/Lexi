@@ -21,6 +21,7 @@ import {
   readBrowserUserId,
   writeBrowserUserId,
 } from "@/lib/memory/user";
+import { formatAllottedFloorMinutes } from "@/lib/wallet/voice-rate";
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_VIDEO_FIRST_LOOK_FRAMES,
@@ -337,7 +338,6 @@ export function VoiceHome({
   const [error, setError] = useState<string | null>(null);
   const [accountId, setAccountId] = useState("");
   const [voiceSeconds, setVoiceSeconds] = useState<number | null>(null);
-  const [voiceLabel, setVoiceLabel] = useState("");
   const [stripeConfigured, setStripeConfigured] = useState(billingReady);
   const [buyPacks, setBuyPacks] = useState<BuyPackCard[]>(catalogPacks);
   const [buyIntent, setBuyIntent] = useState(false);
@@ -1254,14 +1254,12 @@ export function VoiceHome({
       });
       if (response.status === 401) {
         setVoiceSeconds(null);
-        setVoiceLabel("");
         setBuyPacks(catalogPacks);
         setSubscribed(false);
         return null;
       }
       const body = (await response.json()) as {
         voiceSeconds?: number;
-        label?: string;
         stripeConfigured?: boolean;
         buyPacks?: BuyPackCard[];
         subscribed?: boolean;
@@ -1269,7 +1267,6 @@ export function VoiceHome({
       if (!response.ok) return null;
       const seconds = typeof body.voiceSeconds === "number" ? body.voiceSeconds : 0;
       setVoiceSeconds(seconds);
-      setVoiceLabel(typeof body.label === "string" ? body.label : "");
       setStripeConfigured(body.stripeConfigured === true);
       setBuyPacks(Array.isArray(body.buyPacks) && body.buyPacks.length ? body.buyPacks : catalogPacks);
       setSubscribed(body.subscribed === true);
@@ -1999,7 +1996,7 @@ export function VoiceHome({
               {live && callLeftLabel
                 ? ` · ${callLeftLabel}`
                 : voiceSeconds != null
-                  ? ` · ${voiceLabel || `${voiceSeconds}s`}`
+                  ? ` · ${formatAllottedFloorMinutes(voiceSeconds)}`
                   : ""}
             </span>
             <a

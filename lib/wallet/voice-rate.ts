@@ -10,11 +10,20 @@
 
 export const VOICE_USD_PER_MINUTE = 0.08;
 
-/** Seconds = round(usd / 0.08 * 60). $4.70 → 3525s (58.75 min / 58m 45s). */
+/** Seconds = round(usd / 0.08 * 60). $4.70 → 3525s (58.75 min). UI floors to 58 min. */
 export function usdToVoiceSeconds(usd: number) {
   const dollars = Number(usd);
   if (!Number.isFinite(dollars) || dollars <= 0) return 0;
   return Math.round((dollars / VOICE_USD_PER_MINUTE) * 60);
+}
+
+/** Floored allotted minutes for client display. 3525s → 58, not 58.75 or 58m 45s. */
+export function allottedFloorMinutes(voiceSeconds: number) {
+  return Math.floor(Math.max(0, Number(voiceSeconds) || 0) / 60);
+}
+
+export function formatAllottedFloorMinutes(voiceSeconds: number) {
+  return `${allottedFloorMinutes(voiceSeconds)} min`;
 }
 
 export function voiceSecondsToUsd(seconds: number) {

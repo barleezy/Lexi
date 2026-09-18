@@ -3,27 +3,28 @@
 import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { formatAllottedFloorMinutes } from "@/lib/wallet/voice-rate";
 
 export function AccountClient({
   signedIn = false,
   email = "",
   subscribed = false,
-  minutesLabel = "0s",
+  voiceSeconds = 0,
   cancelAtPeriodEnd = false,
 }: {
   signedIn?: boolean;
   email?: string;
   subscribed?: boolean;
-  minutesLabel?: string;
   voiceSeconds?: number;
   cancelAtPeriodEnd?: boolean;
 }) {
-  const [liveMinutes, setLiveMinutes] = useState(minutesLabel);
+  const [liveSeconds, setLiveSeconds] = useState(voiceSeconds);
+  const liveMinutes = formatAllottedFloorMinutes(liveSeconds);
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
 
   useEffect(() => {
-    setLiveMinutes(minutesLabel);
-  }, [minutesLabel]);
+    setLiveSeconds(voiceSeconds);
+  }, [voiceSeconds]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -35,10 +36,10 @@ export function AccountClient({
           credentials: "include",
         });
         if (!response.ok) return;
-        const body = (await response.json()) as { label?: string };
-        if (!cancelled && typeof body.label === "string") setLiveMinutes(body.label);
+        const body = (await response.json()) as { voiceSeconds?: number };
+        if (!cancelled && typeof body.voiceSeconds === "number") setLiveSeconds(body.voiceSeconds);
       } catch {
-        // keep the server-rendered label
+        // keep the server-rendered voiceSeconds
       }
     }
     void load();
