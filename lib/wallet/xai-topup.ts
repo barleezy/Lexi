@@ -2,10 +2,12 @@ import { neon } from "@neondatabase/serverless";
 import Stripe from "stripe";
 import { stripeWebhookSecret, xaiManagementApiKey, xaiTeamId } from "@/lib/xai/env";
 import { stripeClient } from "./stripe";
+import { prepaidLedgerCentsToUsd, usdToVoiceSeconds } from "./voice-rate";
 
 /** Official xAI Management API. Inference `XAI_API_KEY` is not accepted here. */
 export const XAI_MANAGEMENT_API_BASE = "https://management-api.x.ai";
 export const XAI_PREPAID_TOPUP_PATH = "/v1/billing/teams/{team_id}/prepaid/top-up";
+export const XAI_PREPAID_BALANCE_PATH = "/v1/billing/teams/{team_id}/prepaid/balance";
 
 /** Public Stripe endpoint for xAI prepaid top-up. Distinct from voice-minutes `/api/billing/webhook`. */
 export const XAI_STRIPE_WEBHOOK_PATH = "/api/webhooks/stripe";
@@ -59,6 +61,16 @@ export async function ensureXaiTopupSchema() {
         WHERE stripe_event_id IS NOT NULL AND stripe_event_id <> ''
       `,
       );
+      await db.query(
+        `
+        CREATE TABLE IF NOT EXISTS xai_prepaid_snapshots (
+          id text PRIMARY KEY,
+          remaining_usd double precision NOT NULL,
+          remaining_seconds integer NOT NULL,
+          fetched_at timestamptz NOT NULL DEFAULT now()
+        )
+      `,
+      );
     })().catch((error) => {
       ensured = null;
       throw error;
@@ -79,6 +91,123 @@ export function xaiPrepaidTopUpUrl(env: NodeJS.ProcessEnv = process.env) {
   }
   if (!teamId) return "";
   return `${XAI_MANAGEMENT_API_BASE}/v1/billing/teams/${encodeURIComponent(teamId)}/prepaid/top-up`;
+}
+
+export function xaiPrepaidBalanceUrl(env: NodeJS.ProcessEnv = process.env) {
+  const teamId = xaiTeamId(env);
+  if (!teamId) return "";
+  return `${XAI_MANAGEMENT_API_BASE}/v1/billing/teams/${encodeURIComponent(teamId)}/prepaid/balance`;
+}
+
+export function parsePrepaidRemainingUsd(payload: unknown) {
+  if (!payload || typeof payload !== "object") return null;
+  const total = (payload as { total?: { val?: unknown } }).total;
+  if (!total || typeof total !== "object") return null;
+  return prepaidLedgerCentsToUsd(total.val);
+}
+
+const PREPAID_SNAPSHOT_ID = "team";
+const PREPAID_LIVE_TTL_MS = 20_000;
+
+type PrepaidRemaining = {
+  usd: number;
+  seconds: number;
+  source: "live" | "cache";
+};
+
+let memoryPrepaid: { usd: number; seconds: number; fetchedAt: number } | null = null;
+
+async function persistPrepaidSnapshot(usd: number, seconds: number) {
+  const db = await ensureXaiTopupSchema();
+  if (!db) return;
+  await db.query(
+    `
+    INSERT INTO xai_prepaid_snapshots (id, remaining_usd, remaining_seconds, fetched_at)
+    VALUES ($1, $2, $3, now())
+    ON CONFLICT (id) DO UPDATE
+    SET remaining_usd = EXCLUDED.remaining_usd,
+        remaining_seconds = EXCLUDED.remaining_seconds,
+        fetched_at = now()
+  `,
+    [PREPAID_SNAPSHOT_ID, usd, seconds],
+  );
+}
+
+async function loadPrepaidSnapshot(): Promise<{ usd: number; seconds: number } | null> {
+  const db = await ensureXaiTopupSchema();
+  if (!db) return null;
+  const rows = asRows<{ remaining_usd?: number; remaining_seconds?: number }>(
+    await db.query(
+      `SELECT remaining_usd, remaining_seconds FROM xai_prepaid_snapshots WHERE id = $1 LIMIT 1`,
+      [PREPAID_SNAPSHOT_ID],
+    ),
+  );
+  const usd = Number(rows[0]?.remaining_usd);
+  const seconds = Math.max(0, Math.floor(Number(rows[0]?.remaining_seconds) || 0));
+  if (!Number.isFinite(usd)) return null;
+  return { usd, seconds: seconds || usdToVoiceSeconds(usd) };
+}
+
+async function fetchXaiPrepaidRemainingUsd(env: NodeJS.ProcessEnv): Promise<number | null> {
+  const key = xaiManagementApiKey(env);
+  const url = xaiPrepaidBalanceUrl(env);
+  if (!key || !url) return null;
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${key}` },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      console.warn("[xai-prepaid] balance read failed", { status: response.status });
+      return null;
+    }
+    return parsePrepaidRemainingUsd(await response.json());
+  } catch (error) {
+    console.warn("[xai-prepaid] balance read threw", error);
+    return null;
+  }
+}
+
+/**
+ * Team prepaid remaining dollars from the management API.
+ * Applies to every signed-in account (shared team ceiling), not admin-only.
+ * Live miss falls back to last known snapshot — never invents Echo 60 and never treats a failed read as $0.
+ */
+export async function readXaiPrepaidRemainingUsd(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<PrepaidRemaining | null> {
+  if (memoryPrepaid && Date.now() - memoryPrepaid.fetchedAt < PREPAID_LIVE_TTL_MS) {
+    return { usd: memoryPrepaid.usd, seconds: memoryPrepaid.seconds, source: "cache" };
+  }
+
+  const liveUsd = await fetchXaiPrepaidRemainingUsd(env);
+  if (liveUsd != null) {
+    const seconds = usdToVoiceSeconds(liveUsd);
+    memoryPrepaid = { usd: liveUsd, seconds, fetchedAt: Date.now() };
+    try {
+      await persistPrepaidSnapshot(liveUsd, seconds);
+    } catch (error) {
+      console.warn("[xai-prepaid] snapshot persist failed", error);
+    }
+    console.info("[xai-prepaid] remaining", { usd: liveUsd, seconds, source: "live" });
+    return { usd: liveUsd, seconds, source: "live" };
+  }
+
+  if (memoryPrepaid) {
+    return { usd: memoryPrepaid.usd, seconds: memoryPrepaid.seconds, source: "cache" };
+  }
+
+  try {
+    const snap = await loadPrepaidSnapshot();
+    if (snap) {
+      memoryPrepaid = { ...snap, fetchedAt: Date.now() };
+      return { usd: snap.usd, seconds: snap.seconds, source: "cache" };
+    }
+  } catch (error) {
+    console.warn("[xai-prepaid] snapshot load failed", error);
+  }
+  return null;
 }
 
 /** Same STRIPE_WEBHOOK_SECRET the Stripe Dashboard already has. */

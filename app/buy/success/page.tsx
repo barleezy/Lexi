@@ -3,7 +3,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { readIncomingAuthSession } from "@/lib/auth/session";
 import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
-import { formatVoiceMinutes, readVoiceSeconds } from "@/lib/wallet/voice";
+import { readAllottedVoiceSeconds } from "@/lib/wallet/allotment";
+import { formatVoiceMinutes } from "@/lib/wallet/voice";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -19,7 +20,7 @@ export default async function BuySuccessPage() {
   let minutesLabel = "";
   if (session?.userId) {
     await creditPaidCheckoutsForUser(session.userId);
-    minutesLabel = formatVoiceMinutes((await readVoiceSeconds(session.userId)) ?? 0);
+    minutesLabel = formatVoiceMinutes((await readAllottedVoiceSeconds(session.userId)) ?? 0);
   }
 
   return (

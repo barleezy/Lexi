@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { TEXT_FAST_MODEL, TEXT_FAST_MAX_TOKENS, textFastModelFromEnv } from "../lib/wallet/models.ts";
+import { isVoiceConnectFailure } from "../lib/voice/connect-fail.ts";
 import { SUBSCRIPTION_PLAN, VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
+import {
+  VOICE_USD_PER_MINUTE,
+  allottedVoiceSeconds,
+  prepaidLedgerCentsToUsd,
+  usdToVoiceSeconds,
+  voiceSecondsToUsd,
+} from "../lib/wallet/voice-rate.ts";
 import { DEFAULT_CHAT_MODEL, chatModelFromEnv } from "../lib/channels/parse.ts";
 import { VIDEO_CONTEXT_MODEL, VIDEO_CONTEXT_MAX_TOKENS } from "../lib/voice/video-context.ts";
 import { IOS_REALTIME_URL } from "../lib/ios/config.ts";
@@ -31,7 +39,16 @@ assert.equal(REALTIME_VOICE_URL, "wss://api.x.ai/v1/realtime?model=grok-voice-th
 assert.equal(IOS_REALTIME_URL, REALTIME_VOICE_URL);
 assert.equal(VOICE_MAX_SESSION_SECONDS, 30 * 60);
 assert.equal(VOICE_MAX_SESSION_SPEND_USD, 5);
+assert.equal(VOICE_USD_PER_MINUTE, 0.08);
+assert.equal(VOICE_USD_PER_AUDIO_MINUTE, VOICE_USD_PER_MINUTE);
 assert.equal(VOICE_USD_PER_AUDIO_MINUTE, 0.08);
+assert.equal(usdToVoiceSeconds(4.7), 3525);
+assert.equal(usdToVoiceSeconds(4.7) / 60, 58.75);
+assert.equal(allottedVoiceSeconds(3600, 4.7), 3525);
+assert.equal(allottedVoiceSeconds(3600, null), 3600);
+assert.equal(allottedVoiceSeconds(600, 4.7), 600);
+assert.equal(prepaidLedgerCentsToUsd("-470"), 4.7);
+assert.equal(voiceSecondsToUsd(60), 0.08);
 assert.equal(estimateVoiceSessionSpendUsd(60), 0.08);
 assert.equal(voiceSessionLimitReason(30 * 60 - 1), null);
 assert.equal(voiceSessionLimitReason(30 * 60), "duration");
@@ -42,6 +59,26 @@ assertRealtimeVoiceModel(IOS_REALTIME_URL);
 assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=grok-voice-latest"));
 assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=grok-4-1-fast-reasoning"));
 assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=grok-4.6"));
+
+{
+  const s = usdToVoiceSeconds(4.7);
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  assert.equal(`${m}m ${rem}s`, "58m 45s");
+}
+
+const voiceRateSrc = readFileSync(new URL("../lib/wallet/voice-rate.ts", import.meta.url), "utf8");
+assert.ok(voiceRateSrc.includes("VOICE_USD_PER_MINUTE = 0.08"), "billed usage rate is $0.08/min");
+assert.ok(voiceRateSrc.includes("usdToVoiceSeconds"), "usd → seconds helper");
+assert.ok(voiceRateSrc.includes("every signed-in account"), "rate is global");
+assert.ok(!voiceRateSrc.includes("isAdminUserId"), "rate is not admin-gated");
+assert.ok(!voiceRateSrc.includes("ADMIN_USER_IDS"), "rate is not admin-gated");
+
+const allotmentSrc = readFileSync(new URL("../lib/wallet/allotment.ts", import.meta.url), "utf8");
+assert.ok(allotmentSrc.includes("readAllottedVoiceSeconds"), "allotment helper");
+assert.ok(allotmentSrc.includes("readXaiPrepaidRemainingUsd"), "allotment reads team prepaid");
+assert.ok(allotmentSrc.includes("allottedVoiceSeconds"), "allotment uses $0.08/min math");
+assert.ok(!allotmentSrc.includes("isAdminUserId"), "allotment is not admin-gated");
 
 assert.equal(TEXT_FAST_MODEL, "grok-4-1-fast-reasoning");
 assert.equal(TEXT_FAST_MAX_TOKENS, 800);
@@ -151,14 +188,17 @@ assert.ok(homeSrc.includes("buyIntent && !live"), "buy section is click-intent o
 assert.ok(homeSrc.includes("Manage subscription"), "home shows Manage subscription when subscribed");
 assert.ok(homeSrc.includes('href="/account"'), "home manage/account links to /account");
 assert.ok(homeSrc.includes('subscribed ? "/account" : "/subscribe"'), "home Subscribe follows billing status");
-assert.ok(homeSrc.includes("catalogPacks"), "home receives public catalog");
+assert.ok(homeSrc.includes("catalogPacks"), "home can hydrate catalog packs after paint");
+assert.ok(homeSrc.includes("afterFirstPaint"), "home defers balance/channels/music until after first paint");
+assert.ok(homeSrc.includes("loadVoiceSession"), "home lazy-loads VoiceSession until Connect");
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
 assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
 assert.ok(homeSrc.includes("live && music.appleConnected"), "Apple Music search bar only during a live call");
 
 const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
-assert.ok(homePage.includes("buyPagePacks"), "home server-renders catalog packs");
-assert.ok(homePage.includes("await connection()"), "home reads live Stripe price env");
+assert.ok(!homePage.includes("buyPagePacks"), "home HTML is not blocked on Stripe pack catalog");
+assert.ok(!homePage.includes("await connection()"), "home HTML is not blocked on connection()");
+assert.ok(homePage.includes("VoiceHome"), "home still renders VoiceHome");
 
 const balanceSrc = readFileSync(new URL("../app/api/billing/balance/route.ts", import.meta.url), "utf8");
 assert.ok(balanceSrc.includes("buyPagePacks"), "balance returns buy packs");
@@ -168,9 +208,12 @@ assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared 
 assert.ok(balanceSrc.includes('force-dynamic'), "balance is not statically cached");
 assert.ok(balanceSrc.includes("await connection()"), "balance reads live env and cookies");
 assert.ok(balanceSrc.includes("creditPaidCheckoutsForUser"), "balance credits paid packs before showing minutes");
-assert.ok(balanceSrc.includes("clampVoiceSecondsToSoldPacks"), "balance clamps displayed minutes to the largest sold pack");
-assert.ok(balanceSrc.includes("MAX_VOICE_PACK_SECONDS"), "balance knows Echo 3600 is the display cap");
-assert.ok(balanceSrc.includes("allotted seconds exceed largest sold pack"), "balance warns when leftover monthly is above Echo");
+assert.ok(balanceSrc.includes("readAllottedVoiceSeconds"), "balance allots minutes from prepaid at $0.08/min for the session user");
+assert.ok(balanceSrc.includes("formatVoiceMinutes"), "balance labels allotted seconds");
+assert.ok(!balanceSrc.includes("clampVoiceSecondsToSoldPacks"), "balance must not invent Echo 60 when prepaid is $4.70");
+assert.ok(!balanceSrc.includes("MAX_VOICE_PACK_SECONDS"), "balance display is not the Echo 3600 cap");
+assert.ok(!balanceSrc.includes("isAdminUserId"), "balance allotment is not admin-gated");
+assert.ok(!balanceSrc.includes("ADMIN_USER_IDS"), "balance allotment is not admin-gated");
 assert.ok(balanceSrc.includes("no-store"), "balance forbids HTTP cache");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 assert.ok(!balanceSrc.includes("plan:"), "balance does not add a plan field for iOS");
@@ -184,6 +227,7 @@ const buySuccess = readFileSync(new URL("../app/buy/success/page.tsx", import.me
 assert.ok(buySuccess.includes("Minutes added"), "success copy");
 assert.ok(buySuccess.includes("creditPaidCheckoutsForUser"), "success credits paid packs before showing minutes");
 assert.ok(buySuccess.includes("You now have"), "success shows live allotted minutes");
+assert.ok(buySuccess.includes("readAllottedVoiceSeconds"), "success labels prepaid-clamped minutes");
 assert.ok(buySuccess.includes('href="/"'), "success links to Call");
 
 const subscribeSuccess = readFileSync(new URL("../app/subscribe/success/page.tsx", import.meta.url), "utf8");
@@ -232,6 +276,10 @@ assert.ok(xaiTopupSrc.includes("XAI_MANAGEMENT_API_KEY"), "top-up uses managemen
 assert.ok(xaiTopupSrc.includes("XAI_TEAM_ID"), "top-up requires team id env");
 assert.ok(xaiTopupSrc.includes("management-api.x.ai"), "top-up hits management API");
 assert.ok(xaiTopupSrc.includes("/prepaid/top-up"), "top-up path");
+assert.ok(xaiTopupSrc.includes("/prepaid/balance"), "prepaid remaining-balance path");
+assert.ok(xaiTopupSrc.includes("readXaiPrepaidRemainingUsd"), "prepaid remaining is readable");
+assert.ok(xaiTopupSrc.includes("parsePrepaidRemainingUsd"), "prepaid remaining parser");
+assert.ok(!xaiTopupSrc.includes("isAdminUserId"), "prepaid remaining is not admin-gated");
 assert.ok(xaiTopupSrc.includes("{ amount: { val: String(amount_total) } }"), "top-up body is amount.val cents string");
 assert.ok(xaiTopupSrc.includes("[xai-topup] request body"), "logs full xAI request body");
 assert.ok(xaiTopupSrc.includes("[xai-topup] response"), "logs full xAI response");
@@ -268,6 +316,28 @@ assert.ok(voiceSrc.includes("capAllottedMinutesToPacks"), "wallet can snap down 
 assert.ok(voiceSrc.includes("repairVoiceSecondsToPurchasedPacks"), "one-time pack ledger repair drops leftover monthly grants");
 assert.ok(voiceSrc.includes("pack ledger repair failed"), "schema ensure still logs if the pack repair throws");
 assert.ok(voiceSrc.includes("repaired allotted minutes to purchased packs"), "repair logs when it snaps a wallet down");
+assert.ok(
+  voiceSrc.includes("SELECT COUNT(*)::int AS count FROM accounts WHERE voice_seconds > 3600"),
+  "repair pre/post-check counts every accounts row over Echo",
+);
+assert.ok(voiceSrc.includes("[stripe-minutes] repair pre-check"), "repair logs the pre-check count");
+assert.ok(voiceSrc.includes("[stripe-minutes] repair post-check"), "repair logs the post-check count");
+assert.ok(
+  voiceSrc.includes("SET voice_seconds = LEAST(voice_seconds, 3600), updated_at = now()"),
+  "repair snaps the whole accounts table down to Echo 3600",
+);
+assert.ok(voiceSrc.includes("WHERE voice_seconds > 3600"), "Echo snap has no user_id predicate");
+{
+  const repairFn = voiceSrc.slice(
+    voiceSrc.indexOf("export async function repairVoiceSecondsToPurchasedPacks"),
+    voiceSrc.indexOf("export async function creditSubscriptionCheckoutMinutes"),
+  );
+  assert.ok(repairFn.includes("repairVoiceSecondsToPurchasedPacks"), "repair function slice");
+  assert.ok(!repairFn.includes("WALLET_USER_SQL"), "repair UPDATE is not Ian/Barleezy-filtered");
+  assert.ok(!repairFn.includes("isAdminUserId"), "repair is not admin-gated");
+  assert.ok(!repairFn.includes("ADMIN_USER_IDS"), "repair is not admin-gated");
+  assert.ok(!/WHERE\s+user_id\s*=\s*\$/.test(repairFn), "repair has no WHERE user_id = $n bind");
+}
 assert.ok(voiceSrc.includes("setToPack"), "pack credit SETS voice_seconds to the purchased pack");
 assert.ok(voiceSrc.includes('mode?: "add" | "set"'), "creditVoiceSeconds distinguishes SET packs from ADD subscription");
 assert.ok(voiceSrc.includes("hold_seconds = 0"), "hangup settle zeros the reserved hold");
@@ -343,6 +413,8 @@ const iosController = readFileSync(
 assert.ok(iosController.includes("VoiceRealtimeConfig.url"), "iOS connect ignores a server URL that could escalate");
 assert.ok(iosController.includes("pinnedSessionUpdate"), "iOS session start overwrites model");
 assert.ok(iosController.includes("settlePendingVoiceSessions"), "iOS settles leftover holds on launch and hangup");
+assert.ok(iosController.includes("scheduleLaunchWork"), "iOS defers settle/billing/channels until after first frame");
+assert.ok(iosController.includes("launchWorkStarted"), "iOS launch work is one-shot");
 assert.ok(iosController.includes("applySessionLimits"), "iOS arms duration and spend guards");
 assert.ok(iosController.includes("realtimeDidDisconnect"), "iOS settles on socket death, not only End");
 assert.ok(!iosController.includes("grok-voice-latest"), "iOS controller does not fall back to the latest alias");
@@ -388,6 +460,7 @@ const iosHome = readFileSync(
 );
 assert.ok(iosHome.includes("minutesLabel"), "home header can show minutes");
 assert.ok(iosHome.includes("showSettings"), "minutes pill opens Settings");
+assert.ok(iosHome.includes("scheduleLaunchWork"), "VoiceHomeView kicks launch work after first appearance");
 
 const musicSrc = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Music/MusicController.swift", import.meta.url),
@@ -467,14 +540,15 @@ assert.ok(headerSrc.includes('href={signedIn ? "/account" : "/"}'), "signed-in h
 assert.ok(headerSrc.includes('subscribed ? "/account" : "/subscribe"'), "header Subscribe follows billing status");
 
 const layoutSrc = readFileSync(new URL("../app/layout.tsx", import.meta.url), "utf8");
-assert.ok(layoutSrc.includes("readStoredSubscribed"), "layout reads stored subscription for the header");
-assert.ok(layoutSrc.includes("subscribed={subscribed}"), "layout passes subscribed to SiteChrome");
+assert.ok(layoutSrc.includes("readIncomingAuthSession"), "layout reads the session cookie");
+assert.ok(!layoutSrc.includes("readStoredSubscribed"), "layout does not wait on a subscription DB read");
+assert.ok(!layoutSrc.includes("subscribed={subscribed}"), "layout does not pass subscribed from Neon");
 
 const accountPage = readFileSync(new URL("../app/account/page.tsx", import.meta.url), "utf8");
 assert.ok(accountPage.includes("creditPaidCheckoutsForUser"), "account credits paid packs before showing minutes");
 assert.ok(accountPage.includes("readIncomingAuthSession"), "account page uses shared session helper");
 assert.ok(accountPage.includes("readAccountSubscribed"), "account page loads subscription status");
-assert.ok(accountPage.includes("readVoiceSeconds"), "account page loads minute balance");
+assert.ok(accountPage.includes("readAllottedVoiceSeconds"), "account page loads allotted minute balance");
 assert.ok(accountPage.includes("findAccountRow"), "account page loads email");
 assert.ok(accountPage.includes("AccountClient"), "account page renders client");
 assert.ok(accountPage.includes("cancelAtPeriodEnd"), "account page passes cancel state");
@@ -693,5 +767,66 @@ assert.equal(readPreviousSessionId(), null);
 assert.equal(readVoiceSessionStore().sessionId, null);
 assert.equal(readVoiceSessionStore().userId, "Ian", "hangup keeps userId for facts");
 assert.equal(readVoiceSessionStore().rows.length, 0);
+
+const chatRoute = readFileSync(new URL("../app/api/chat/route.ts", import.meta.url), "utf8");
+const chatReply = readFileSync(new URL("../lib/chat/reply.ts", import.meta.url), "utf8");
+assert.ok(chatRoute.includes("replyInAppChat"), "text chat uses replyInAppChat");
+assert.ok(chatRoute.includes("requireAuthSessionUserId"), "text chat requires auth");
+assert.ok(!/grok-voice/i.test(chatRoute), "text chat never mentions grok-voice");
+assert.ok(!chatRoute.includes("mintXaiClientSecret"), "text chat does not mint a voice client_secret");
+assert.ok(!chatRoute.includes("placeVoiceHold"), "text chat does not place a wallet hold");
+assert.ok(!chatRoute.includes("wss://"), "text chat does not open the realtime WebSocket");
+assert.ok(chatReply.includes("textFastModelFromEnv"), "in-app text uses TEXT_FAST_MODEL");
+assert.ok(chatReply.includes("TEXT_FAST_MAX_TOKENS"), "in-app text uses TEXT_FAST_MAX_TOKENS");
+assert.ok(chatReply.includes("buildInstructions"), "in-app text uses shared persona instructions");
+assert.ok(!/grok-voice/i.test(chatReply), "in-app text never mentions grok-voice");
+assert.ok(!chatReply.includes("mintXaiClientSecret"), "in-app text does not mint a voice client_secret");
+assert.ok(!chatReply.includes("placeVoiceHold"), "in-app text does not place a wallet hold");
+assert.ok(!chatRoute.includes("placeVoiceHold"), "chat route does not place a voice hold");
+
+assert.ok(homeSrc.includes('useState<ChatMode>("voice")'), "home defaults to voice");
+assert.ok(homeSrc.includes('setChatMode("text")'), "home can enter text mode");
+assert.ok(homeSrc.includes('aria-label="Chat mode"'), "home has a first-class text/voice control");
+assert.ok(homeSrc.includes("if (text && !liveSession)"), "idle composer send is text chat");
+assert.ok(homeSrc.includes('fetch("/api/chat"'), "home text mode posts /api/chat");
+assert.ok(homeSrc.includes("enterTextModeSilently"), "home silently falls back to text");
+assert.ok(homeSrc.includes("logVoiceConnectFailure"), "home logs voice connect failures");
+assert.ok(homeSrc.includes("onConnectFail"), "home handles connect fail without a user-facing voice error");
+assert.ok(!homeSrc.includes("Send and start talking"), "idle send is text, not start talking");
+assert.ok(!homeSrc.includes("No reply from Lexi"), "home does not show No reply from Lexi");
+assert.ok(!homeSrc.includes("Voice link timed out"), "home does not show Voice link timed out");
+assert.ok(!homeSrc.includes("Try Connect again"), "home does not show Try Connect again");
+
+assert.ok(iosController.includes("enum ChatMode"), "iOS has first-class text mode");
+assert.ok(iosController.includes("enterTextModeSilently"), "iOS silently falls back to text");
+assert.ok(iosController.includes("sendTextChat"), "iOS text send uses the text path");
+assert.ok(iosController.includes("sendChat"), "iOS posts the text chat API");
+assert.ok(!iosController.includes('lastError = "Voice link did not open."'), "iOS sendText does not dead-end on connect fail");
+assert.ok(!iosController.includes('lastError = "Voice auth failed. Try Connect again."'), "iOS does not show auth connect errors");
+assert.ok(!iosController.includes('lastError = "Microphone access is required to talk to Lexi."'), "iOS mic denial falls back to text");
+assert.ok(!iosController.includes('lastError = "Out of minutes."'), "iOS 402 does not set lastError after fallback");
+{
+  const sendTextFn = iosController.slice(
+    iosController.indexOf("func sendText("),
+    iosController.indexOf("private func sendTextChat("),
+  );
+  assert.ok(sendTextFn.includes("sendTextChat"), "iOS idle send uses text chat");
+  assert.ok(!sendTextFn.includes("connectCall()"), "iOS text send does not start voice");
+}
+
+assert.ok(iosClient.includes("/api/chat"), "iOS API client posts /api/chat");
+assert.ok(iosClient.includes("func sendChat"), "iOS API client has sendChat");
+assert.ok(iosClient.includes("/api/voice/log"), "iOS logs voice connect failures server-side");
+assert.ok(iosClient.includes("func logVoiceFailure"), "iOS API client has logVoiceFailure");
+
+const voiceLogRoute = readFileSync(new URL("../app/api/voice/log/route.ts", import.meta.url), "utf8");
+assert.ok(voiceLogRoute.includes("connect.fail"), "voice log accepts connect failures");
+assert.ok(voiceLogRoute.includes("requireAuthSessionUserId"), "connect-fail logs are authenticated");
+assert.ok(voiceLogRoute.includes("[voice.connect]"), "connect failures go to server logs");
+
+const connectFailSrc = readFileSync(new URL("../lib/voice/connect-fail.ts", import.meta.url), "utf8");
+assert.ok(connectFailSrc.includes("isVoiceConnectFailure"), "shared connect-fail helper");
+assert.equal(isVoiceConnectFailure("Out of minutes."), false);
+assert.equal(isVoiceConnectFailure("Voice link timed out."), true);
 
 console.log("wallet checks ok");

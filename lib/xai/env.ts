@@ -3,7 +3,7 @@
  * so Next.js cannot inline a stale build-time copy.
  *
  * Inference (`XAI_API_KEY`) mints realtime tokens.
- * Management (`XAI_MANAGEMENT_API_KEY`) is only for prepaid top-up.
+ * Management (`XAI_MANAGEMENT_API_KEY`) is for prepaid top-up and remaining-balance reads.
  * Never fall back from one to the other.
  */
 

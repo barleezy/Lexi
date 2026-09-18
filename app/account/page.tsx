@@ -3,7 +3,8 @@ import { readIncomingAuthSession } from "@/lib/auth/session";
 import { findAccountRow } from "@/lib/auth/accounts";
 import { creditPaidCheckoutsForUser, readAccountSubscriptionCancelState } from "@/lib/wallet/stripe";
 import { readAccountSubscribed } from "@/lib/wallet/subscription";
-import { formatVoiceMinutes, readVoiceSeconds, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
+import { readAllottedVoiceSeconds } from "@/lib/wallet/allotment";
+import { formatVoiceMinutes, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
 import { AccountClient } from "./account-client";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ export default async function AccountPage() {
     const [account, nextSubscribed, seconds, cancelState] = await Promise.all([
       findAccountRow(userId),
       readAccountSubscribed(userId),
-      readVoiceSeconds(userId),
+      readAllottedVoiceSeconds(userId),
       readAccountSubscriptionCancelState({ userId }),
     ]);
     email = (account?.email ?? "").trim();

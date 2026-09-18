@@ -507,11 +507,31 @@ export async function capAllottedMinutesToPacks(userId: string) {
   return { ok: true as const, voiceSeconds, packSeconds, capped: true };
 }
 
+/** Table-wide leftover check. No user_id / admin predicate — every accounts row. */
+const ACCOUNTS_OVER_ECHO_COUNT_SQL = `SELECT COUNT(*)::int AS count FROM accounts WHERE voice_seconds > 3600`;
+
+/** Snap every accounts row down to Echo (60 min). No user_id / Ian / admin filter. */
+const ACCOUNTS_SNAP_TO_ECHO_SQL = `
+  UPDATE accounts
+  SET voice_seconds = LEAST(voice_seconds, 3600), updated_at = now()
+  WHERE voice_seconds > 3600
+  RETURNING user_id, voice_seconds
+`;
+
+async function countAccountsOverEchoSeconds(
+  conn: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+) {
+  const rows = asRows<{ count?: number }>(await conn.query(ACCOUNTS_OVER_ECHO_COUNT_SQL));
+  return Math.max(0, Math.floor(Number(rows[0]?.count) || 0));
+}
+
 /**
- * One-time-safe ledger repair: SET voice_seconds to the SUM of unique pack
- * credits (600 / 1800 / 3600), dropping leftover monthly grants that survived.
- * Dedupes evt_ vs cs: for the same stripe_session_id. Snap-down only so a later
- * pack SET (Whisper 600) is not raised back to older packs. Safe to run again.
+ * Table-wide ledger repair (every accounts row, not Ian/admin-only):
+ * 1. Snap each account down to the SUM of its unique pack credits (600 / 1800 / 3600)
+ *    via a JOIN over all accounts — no user_id bind, not admin-only.
+ * 2. Snap any remaining leftover monthly above Echo with
+ *    UPDATE accounts SET voice_seconds = LEAST(voice_seconds, 3600) WHERE voice_seconds > 3600.
+ * Dedupes evt_ vs cs: for the same stripe_session_id. Snap-down only. Idempotent.
  */
 export async function repairVoiceSecondsToPurchasedPacks(
   db?: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
@@ -519,56 +539,87 @@ export async function repairVoiceSecondsToPurchasedPacks(
   const conn = db ?? (await ensureVoiceWalletSchema());
   if (!conn) return { ok: true as const, repaired: 0 };
 
-  const rows = asRows<{
-    id?: string;
-    user_id?: string;
-    seconds?: number;
-    stripe_event_id?: string | null;
-    stripe_session_id?: string | null;
-  }>(
+  const preCheck = await countAccountsOverEchoSeconds(conn);
+  console.info("[stripe-minutes] repair pre-check", {
+    overEcho: preCheck,
+    sql: ACCOUNTS_OVER_ECHO_COUNT_SQL,
+  });
+
+  const packSnapped = asRows<{ user_id?: string; voice_seconds?: number }>(
     await conn.query(
       `
-      SELECT id, user_id, seconds, stripe_event_id, stripe_session_id
-      FROM voice_credits
-      WHERE seconds IN (${PACK_SECONDS_SQL})
+      WITH ranked AS (
+        SELECT
+          user_id,
+          seconds,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              user_id,
+              CASE
+                WHEN stripe_session_id IS NOT NULL AND btrim(stripe_session_id) <> ''
+                  THEN 'sid:' || btrim(stripe_session_id)
+                WHEN stripe_event_id IS NOT NULL AND stripe_event_id LIKE 'cs:%'
+                  THEN 'sid:' || substr(stripe_event_id, 4)
+                WHEN stripe_event_id IS NOT NULL AND btrim(stripe_event_id) <> ''
+                  THEN 'eid:' || btrim(stripe_event_id)
+                ELSE 'id:' || id::text
+              END
+            ORDER BY CASE WHEN stripe_event_id LIKE 'evt_%' THEN 0 ELSE 1 END
+          ) AS rn
+        FROM voice_credits
+        WHERE seconds IN (${PACK_SECONDS_SQL})
+      ),
+      pack_totals AS (
+        SELECT user_id, SUM(seconds)::int AS pack_seconds
+        FROM ranked
+        WHERE rn = 1
+        GROUP BY user_id
+      )
+      UPDATE accounts AS a
+      SET
+        voice_seconds = LEAST(a.voice_seconds, GREATEST(0, p.pack_seconds), 3600),
+        updated_at = now()
+      FROM pack_totals AS p
+      WHERE a.user_id = p.user_id
+        AND a.voice_seconds > LEAST(GREATEST(0, p.pack_seconds), 3600)
+      RETURNING a.user_id, a.voice_seconds
     `,
     ),
   );
 
-  const byWallet = new Map<string, typeof rows>();
-  for (const row of rows) {
-    const owner = normalizeUserId(row.user_id ?? "");
-    if (!owner) continue;
-    const list = byWallet.get(owner) ?? [];
-    list.push(row);
-    byWallet.set(owner, list);
+  let overEcho = asRows<{ user_id?: string; voice_seconds?: number }>(
+    await conn.query(ACCOUNTS_SNAP_TO_ECHO_SQL),
+  );
+  let repaired = packSnapped.length + overEcho.length;
+
+  let postCheck = await countAccountsOverEchoSeconds(conn);
+  if (postCheck !== 0) {
+    overEcho = asRows<{ user_id?: string; voice_seconds?: number }>(
+      await conn.query(ACCOUNTS_SNAP_TO_ECHO_SQL),
+    );
+    repaired += overEcho.length;
+    postCheck = await countAccountsOverEchoSeconds(conn);
   }
 
-  let repaired = 0;
-  for (const [wallet, credits] of Array.from(byWallet.entries())) {
-    const packSeconds = uniquePackSeconds(credits);
-    const updated = asRows<{ voice_seconds?: number }>(
-      await conn.query(
-        `
-        UPDATE accounts
-        SET voice_seconds = $2, updated_at = now()
-        WHERE ${WALLET_USER_SQL}
-          AND voice_seconds > $2
-        RETURNING voice_seconds
-      `,
-        [wallet, packSeconds],
-      ),
-    );
-    if (updated[0]) {
-      repaired += 1;
-      console.info("[stripe-minutes] repaired allotted minutes to purchased packs", {
-        userId: wallet,
-        packSeconds,
-        voiceSeconds: Math.max(0, Math.floor(Number(updated[0].voice_seconds) || 0)),
-      });
-    }
+  console.info("[stripe-minutes] repair post-check", {
+    overEcho: postCheck,
+    sql: ACCOUNTS_OVER_ECHO_COUNT_SQL,
+  });
+  if (postCheck !== 0) {
+    console.error("[stripe-minutes] repair post-check still has rows above Echo 3600", {
+      overEcho: postCheck,
+    });
   }
-  return { ok: true as const, repaired };
+  if (repaired > 0) {
+    console.info("[stripe-minutes] repaired allotted minutes to purchased packs", {
+      repaired,
+      packSnapped: packSnapped.length,
+      overEchoSnapped: overEcho.length,
+      preCheck,
+      postCheck,
+    });
+  }
+  return { ok: true as const, repaired, preCheck, postCheck };
 }
 
 /** checkout.session.completed for Lexi Pro: add 150 minutes and start the reset clock. */

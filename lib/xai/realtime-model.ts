@@ -1,3 +1,5 @@
+import { VOICE_USD_PER_MINUTE, voiceSecondsToUsd } from "../wallet/voice-rate.ts";
+
 /**
  * Versioned Speech-to-Speech pin. Never use grok-voice-latest — that alias
  * jumps tiers (1.0 → 2.0 on 2026-08-05) and silently changes the bill.
@@ -12,18 +14,18 @@ export const VOICE_MAX_SESSION_SECONDS = 30 * 60;
 export const VOICE_MAX_SESSION_SPEND_USD = 5;
 
 /**
- * Published Speech-to-Speech audio rate ($/min). Used as a conservative
- * estimate so the spend guard fires without live usage events.
+ * Published Speech-to-Speech audio rate ($/min). Same billed usage rate as
+ * wallet allotment (`VOICE_USD_PER_MINUTE`). Used so the spend guard fires
+ * without live usage events.
  */
-export const VOICE_USD_PER_AUDIO_MINUTE = 0.08;
+export const VOICE_USD_PER_AUDIO_MINUTE = VOICE_USD_PER_MINUTE;
 
 export const SESSION_LIMIT_CODE = "session_limit";
 export const SESSION_DURATION_MESSAGE = "Call time limit reached.";
 export const SESSION_SPEND_MESSAGE = "Call spend limit reached.";
 
 export function estimateVoiceSessionSpendUsd(elapsedSeconds: number) {
-  const seconds = Math.max(0, Number(elapsedSeconds) || 0);
-  return (seconds / 60) * VOICE_USD_PER_AUDIO_MINUTE;
+  return voiceSecondsToUsd(elapsedSeconds);
 }
 
 export function voiceSessionLimitReason(elapsedSeconds: number) {
