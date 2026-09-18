@@ -10,6 +10,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     let music = MusicController()
     let watch = WatchController()
     let camera = CameraController()
+    let screen = ScreenShareController()
     let location = LocationController()
     let generate = GenerateController()
     let toys = ToyController()
@@ -74,6 +75,14 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             guard let self, self.realtime.isLive else { return }
             self.realtime.notifyVision(source: "camera", active: active)
         }
+        screen.onFrame = { [weak self] dataUrl in
+            guard let self, self.realtime.isLive else { return }
+            self.realtime.sendVisionFrame(source: "screen", dataUrl: dataUrl)
+        }
+        screen.onShareChange = { [weak self] active in
+            guard let self, self.realtime.isLive else { return }
+            self.realtime.notifyVision(source: "screen", active: active)
+        }
         routeThroughPS5PartyChat = account.routeThroughPS5PartyChat
         account.useBackupPsnAccount()
         psnOnlineId = account.psnOnlineId
@@ -92,6 +101,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         bind(music)
         bind(watch)
         bind(camera)
+        bind(screen)
         bind(location)
         bind(generate)
         bind(toys)
@@ -149,6 +159,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         music.stop()
         watch.clear(notify: false)
         camera.stop(notify: false)
+        screen.stop(notify: false)
         toys.reset()
         isConnecting = false
         account.signOut()
@@ -220,6 +231,18 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         Task { await camera.start() }
     }
 
+    func toggleScreenShare() {
+        if screen.isOn {
+            screen.stop()
+            return
+        }
+        guard realtime.isLive else {
+            screen.hint = "Connect first, then share the screen."
+            return
+        }
+        screen.start()
+    }
+
     func connectCall() {
         lastError = ""
         connectGeneration += 1
@@ -261,6 +284,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         // Hang up: clear previousSessionId. Next Call sends null + empty prior; facts stay.
         AccountStore.shared.clearCallContinuity()
         camera.stop(notify: false)
+        screen.stop(notify: false)
         toys.reset()
         refreshStatus()
         Task {
@@ -309,6 +333,9 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         }
         if camera.isOn {
             realtime.notifyVision(source: "camera", active: true)
+        }
+        if screen.isOn {
+            realtime.notifyVision(source: "screen", active: true)
         }
         refreshStatus()
     }

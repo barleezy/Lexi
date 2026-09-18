@@ -235,6 +235,8 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
                 labels.append("Watch-together frame \(watchIndex) of \(watchTotal)\(time) (video, not the user).")
             } else if part.source == "upload" {
                 labels.append("Uploaded photo (user allowed).")
+            } else if part.source == "screen" {
+                labels.append("Live shared screen (exactly what is on screen).")
             } else {
                 labels.append("Live 30fps camera video (exactly what the camera sees).")
             }
