@@ -172,19 +172,33 @@ export function isVoiceWalletConfigured() {
   return isAccountStoreConfigured() && Boolean(databaseUrl());
 }
 
+/**
+ * Remaining pack seconds from the ledger, not the raw accounts.voice_seconds column.
+ * earned packs (evt_ webhook or backfill: charge) − settled usage after the first
+ * pack − open holds. Phantom cs: Lexi Pro 150 / reconcile grants do not count.
+ * Write-through keeps the column in sync for SQL / iOS / hold CTEs.
+ */
 export async function readVoiceSeconds(userId: string): Promise<number | null> {
   const id = normalizeUserId(userId);
   if (!id) return null;
   const db = await ensureVoiceWalletSchema();
   if (!db) return null;
   const account = await findAccountRow(id);
-  const accountId = account?.user_id ?? id;
-  const rows = asRows<{ voice_seconds?: number }>(
-    await db.query(`SELECT voice_seconds FROM accounts WHERE user_id = $1 LIMIT 1`, [accountId]),
+  if (!account?.user_id && !(await accountRowExists(db, id))) return null;
+  const computed = await computeLedgerVoiceSeconds(id);
+  if (computed == null) return account ? 0 : null;
+  await writeThroughVoiceSeconds(db, id, account?.user_id ?? id, computed);
+  return computed;
+}
+
+async function accountRowExists(
+  db: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+  userId: string,
+) {
+  const rows = asRows<{ user_id?: string }>(
+    await db.query(`SELECT user_id FROM accounts WHERE ${WALLET_USER_SQL} LIMIT 1`, [userId]),
   );
-  if (!rows[0]) return account ? 0 : null;
-  const value = Number(rows[0].voice_seconds);
-  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  return Boolean(rows[0]?.user_id);
 }
 
 /**
@@ -198,6 +212,8 @@ export async function creditVoiceSeconds(input: {
   source: "stripe" | "test";
   stripeEventId?: string | null;
   stripeSessionId?: string | null;
+  /** Charge id so a later evt_ webhook cannot double-credit a backfill row. */
+  stripeChargeId?: string | null;
   /** Packs SET the wallet. Subscription / explicit add still increment. */
   mode?: "add" | "set";
 }): Promise<{ ok: true; voiceSeconds: number; credited: number } | { ok: false; error: string }> {
@@ -214,23 +230,11 @@ export async function creditVoiceSeconds(input: {
 
   const eventId = input.stripeEventId?.trim() || null;
   const sessionId = input.stripeSessionId?.trim() || null;
-  if (eventId) {
-    const existing = asRows<{ id?: string }>(
-      await db.query(`SELECT id FROM voice_credits WHERE stripe_event_id = $1 LIMIT 1`, [eventId]),
-    );
-    if (existing[0]) {
-      const balance = await readVoiceSeconds(accountId);
-      return { ok: true, voiceSeconds: balance ?? 0, credited: 0 };
-    }
-  }
-  if (sessionId) {
-    const existing = asRows<{ id?: string }>(
-      await db.query(`SELECT id FROM voice_credits WHERE stripe_session_id = $1 LIMIT 1`, [sessionId]),
-    );
-    if (existing[0]) {
-      const balance = await readVoiceSeconds(accountId);
-      return { ok: true, voiceSeconds: balance ?? 0, credited: 0 };
-    }
+  const chargeId = input.stripeChargeId?.trim() || "";
+  const existing = await findExistingVoiceCredit(db, { eventId, sessionId, chargeId });
+  if (existing) {
+    const balance = await readVoiceSeconds(accountId);
+    return { ok: true, voiceSeconds: balance ?? 0, credited: 0 };
   }
 
   try {
@@ -269,9 +273,11 @@ export async function creditVoiceSeconds(input: {
       [seconds, accountId],
     ),
   );
+  const computed = await readVoiceSeconds(accountId);
   return {
     ok: true,
-    voiceSeconds: Math.max(0, Math.floor(Number(updated[0]?.voice_seconds) || 0)),
+    voiceSeconds:
+      computed ?? Math.max(0, Math.floor(Number(updated[0]?.voice_seconds) || 0)),
     credited: seconds,
   };
 }
@@ -391,20 +397,165 @@ function uniquePackSeconds(
     stripe_session_id?: string | null;
   }>,
 ) {
+  return uniqueEarnedPackRows(rows).reduce((sum, row) => sum + row.seconds, 0);
+}
+
+function isEarnedPackEventId(eventId?: string | null) {
+  const id = eventId?.trim() || "";
+  return id.startsWith("evt_") || id.startsWith("backfill:");
+}
+
+/** Neon Date / JS Date.toString() is not a Postgres timestamptz literal. */
+function toLedgerTimestamp(value: unknown): string {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+  }
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? "" : new Date(ms).toISOString();
+}
+
+function uniqueEarnedPackRows(
+  rows: Array<{
+    id?: string;
+    seconds?: number;
+    stripe_event_id?: string | null;
+    stripe_session_id?: string | null;
+    created_at?: string | Date | null;
+  }>,
+) {
   const packSet = new Set(PACK_SECONDS);
   const ordered = [...rows].sort((left, right) => {
     const leftEvt = left.stripe_event_id?.startsWith("evt_") ? 0 : 1;
     const rightEvt = right.stripe_event_id?.startsWith("evt_") ? 0 : 1;
     return leftEvt - rightEvt;
   });
-  const seen = new Map<string, number>();
+  const seen = new Map<string, { seconds: number; createdAt: string }>();
   for (const row of ordered) {
     const seconds = Math.max(0, Math.floor(Number(row.seconds) || 0));
     if (!packSet.has(seconds)) continue;
     const key = packCreditDedupeKey(row);
-    if (!seen.has(key)) seen.set(key, seconds);
+    if (!seen.has(key)) {
+      seen.set(key, { seconds, createdAt: toLedgerTimestamp(row.created_at) });
+    }
   }
-  return [...seen.values()].reduce((sum, seconds) => sum + seconds, 0);
+  return [...seen.values()];
+}
+
+async function findExistingVoiceCredit(
+  db: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+  input: { eventId?: string | null; sessionId?: string | null; chargeId?: string | null },
+) {
+  const eventId = input.eventId?.trim() || "";
+  const sessionId = input.sessionId?.trim() || "";
+  const chargeId = input.chargeId?.trim() || "";
+  if (!eventId && !sessionId && !chargeId) return false;
+  const rows = asRows<{ id?: string }>(
+    await db.query(
+      `
+      SELECT id
+      FROM voice_credits
+      WHERE
+        ($1 <> '' AND stripe_event_id = $1)
+        OR ($2 <> '' AND stripe_session_id = $2)
+        OR ($2 <> '' AND stripe_event_id = $2)
+        OR ($2 <> '' AND stripe_event_id = 'cs:' || $2)
+        OR ($2 <> '' AND stripe_event_id = 'backfill:cs:' || $2)
+        OR ($3 <> '' AND (
+          stripe_event_id = $3
+          OR stripe_event_id = 'backfill:' || $3
+          OR stripe_event_id LIKE '%' || $3
+        ))
+      LIMIT 1
+    `,
+      [eventId, sessionId, chargeId],
+    ),
+  );
+  return Boolean(rows[0]?.id);
+}
+
+async function writeThroughVoiceSeconds(
+  db: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+  userId: string,
+  accountId: string,
+  voiceSeconds: number,
+) {
+  const current = asRows<{ voice_seconds?: number }>(
+    await db.query(
+      `SELECT voice_seconds FROM accounts WHERE ${WALLET_USER_SQL} OR user_id = $2`,
+      [userId, accountId],
+    ),
+  );
+  if (
+    current.length > 0 &&
+    current.every((row) => Math.max(0, Math.floor(Number(row.voice_seconds) || 0)) === voiceSeconds)
+  ) {
+    return;
+  }
+  await db.query(
+    `
+    UPDATE accounts
+    SET voice_seconds = $2, updated_at = now()
+    WHERE ${WALLET_USER_SQL} OR user_id = $3
+  `,
+    [userId, voiceSeconds, accountId],
+  );
+}
+
+/**
+ * wallet = unique earned pack credits − settled used_seconds after the first
+ * pack − open hold_seconds. No pack rows ⇒ 0. Does not trust the raw column.
+ */
+export async function computeLedgerVoiceSeconds(userId: string): Promise<number | null> {
+  const id = normalizeUserId(userId);
+  if (!id) return null;
+  const db = await ensureVoiceWalletSchema();
+  if (!db) return null;
+
+  const packs = uniqueEarnedPackRows(
+    (await loadEarnedPackCreditRows(db, id)).filter((row) => isEarnedPackEventId(row.stripe_event_id)),
+  );
+  const packSeconds = packs.reduce((sum, row) => sum + row.seconds, 0);
+  if (packSeconds <= 0) return 0;
+
+  const firstPackAt = packs
+    .map((row) => toLedgerTimestamp(row.createdAt))
+    .filter(Boolean)
+    .sort()[0];
+
+  const usedRows = asRows<{ used?: number }>(
+    await db.query(
+      firstPackAt
+        ? `
+        SELECT coalesce(sum(used_seconds), 0)::int AS used
+        FROM voice_sessions
+        WHERE ${WALLET_USER_SQL}
+          AND settled_at IS NOT NULL
+          AND started_at >= $2::timestamptz
+      `
+        : `
+        SELECT coalesce(sum(used_seconds), 0)::int AS used
+        FROM voice_sessions
+        WHERE ${WALLET_USER_SQL}
+          AND settled_at IS NOT NULL
+      `,
+      firstPackAt ? [id, firstPackAt] : [id],
+    ),
+  );
+  const holdRows = asRows<{ held?: number }>(
+    await db.query(
+      `
+      SELECT coalesce(sum(hold_seconds), 0)::int AS held
+      FROM voice_sessions
+      WHERE ${WALLET_USER_SQL} AND settled_at IS NULL
+    `,
+      [id],
+    ),
+  );
+  const used = Math.max(0, Math.floor(Number(usedRows[0]?.used) || 0));
+  const held = Math.max(0, Math.floor(Number(holdRows[0]?.held) || 0));
+  return Math.max(0, packSeconds - used - held);
 }
 
 async function loadPackCreditRows(
@@ -448,6 +599,35 @@ async function loadPackCreditRows(
     );
     return rows.filter((row) => PACK_SECONDS.includes(Math.max(0, Math.floor(Number(row.seconds) || 0))));
   }
+}
+
+async function loadEarnedPackCreditRows(
+  db: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+  userId: string,
+) {
+  const id = normalizeUserId(userId);
+  return asRows<{
+    id?: string;
+    seconds?: number;
+    stripe_event_id?: string | null;
+    stripe_session_id?: string | null;
+    created_at?: string | Date | null;
+  }>(
+    await db.query(
+      `
+      SELECT id, seconds, stripe_event_id, stripe_session_id, created_at
+      FROM voice_credits
+      WHERE ${WALLET_USER_SQL}
+        AND seconds IN (${PACK_SECONDS_SQL})
+        AND source = 'stripe'
+        AND (
+          stripe_event_id LIKE 'evt_%'
+          OR stripe_event_id LIKE 'backfill:%'
+        )
+    `,
+      [id],
+    ),
+  );
 }
 
 /**
@@ -724,6 +904,8 @@ export async function placeVoiceHold(userId: string): Promise<VoiceHoldOk | Voic
     return { ok: false, code: "busy", error: "A Call is already open. Hang up first." };
   }
 
+  // Refill before VOICE_MIN_SECONDS. Callers also credit paid checkouts first
+  // (balance GET + session start) so Connect never 402s on a stale 0.
   await maybeRefillMonthlyMinutes(accountId);
 
   const balance = (await readVoiceSeconds(accountId)) ?? 0;

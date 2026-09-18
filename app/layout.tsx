@@ -2,17 +2,19 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { SiteChrome } from "@/components/site-chrome";
 import { readIncomingAuthSession } from "@/lib/auth/session";
-import { readStoredSubscribed } from "@/lib/wallet/subscription";
 import "./globals.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "optional",
+  preload: false,
 });
 
 export const metadata: Metadata = {
@@ -25,16 +27,17 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Cookie HMAC only — no Neon/Stripe. Home hides SiteHeader; other routes
+  // can treat subscribed as unknown until their own pages load wallet state.
   const session = await readIncomingAuthSession();
-  const subscribed = session ? await readStoredSubscribed(session.userId) : false;
 
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} min-h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} min-h-dvh antialiased`}
     >
-      <body className="flex min-h-full flex-col">
-        <SiteChrome signedIn={Boolean(session)} subscribed={subscribed}>
+      <body className="flex min-h-dvh flex-col">
+        <SiteChrome signedIn={Boolean(session)}>
           {children}
         </SiteChrome>
       </body>

@@ -3,6 +3,7 @@ import { buildIosSession, IOS_REALTIME_URL, IOS_TARGET_RATE } from "@/lib/ios/se
 import { mintXaiClientSecret } from "@/lib/xai/client-secret";
 import { readIosSession } from "@/lib/ios/auth";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
+import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
 import { logVoiceEnv, readMintError, voiceMintFailureMessage, xaiInferenceKey } from "@/lib/xai/env";
 import type { DeviceLocationState } from "@/lib/voice/location";
 import type { MusicSessionState } from "@/lib/voice/persona";
@@ -14,6 +15,7 @@ import {
   VOICE_MAX_SESSION_SPEND_USD,
   estimateVoiceSessionSpendUsd,
   extendVoiceHold,
+  maybeRefillMonthlyMinutes,
   placeVoiceHold,
   REALTIME_VOICE_MODEL,
   releaseVoiceHold,
@@ -60,6 +62,8 @@ export async function POST(request: Request) {
     rehearsal?: unknown;
     voiceSessionId?: unknown;
     extend?: unknown;
+    platform?: unknown;
+    client?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -95,6 +99,8 @@ export async function POST(request: Request) {
   }
 
   await sweepStaleVoiceSessions(userId);
+  await creditPaidCheckoutsForUser(userId);
+  await maybeRefillMonthlyMinutes(userId);
   const resumeVoiceSessionId =
     typeof body.voiceSessionId === "string" ? body.voiceSessionId.trim() : "";
   const hold =
@@ -150,6 +156,8 @@ export async function POST(request: Request) {
     musicPlaying: body.musicPlaying === true,
     musicTitle: typeof body.musicTitle === "string" ? body.musicTitle : "",
     musicSource: source,
+    client:
+      body.platform === "android" || body.client === "android" ? "android" : "ios",
   });
 
   return Response.json({

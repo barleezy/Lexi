@@ -142,7 +142,7 @@ export function AccountClient({
   }
 
   return (
-    <div className="buy-page relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
+    <div className="buy-page relative flex min-h-dvh w-full flex-1 flex-col overflow-x-hidden">
       <style>{`
         .buy-page {
           --buy-pink: #f472b6;
@@ -244,12 +244,23 @@ export function AccountClient({
                   </button>
                 )}
               </div>
-            ) : null}
+            ) : (
+              <Link
+                href="/subscribe"
+                className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-center text-sm font-semibold"
+              >
+                Subscribe
+              </Link>
+            )}
           </div>
         ) : (
           <>
             <p className="mt-8 max-w-xl text-center text-sm text-zinc-300" role="status">
-              Sign in to see your email, minutes, and subscription. You can also sign in on the{" "}
+              Sign in to see your email, minutes, and subscription. You can{" "}
+              <Link href="/subscribe" className="text-pink-300 underline-offset-4 hover:underline">
+                Subscribe
+              </Link>{" "}
+              or sign in on the{" "}
               <Link href="/" className="text-pink-300 underline-offset-4 hover:underline">
                 homepage
               </Link>

@@ -1,10 +1,16 @@
 import { connection } from "next/server";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
-import { readAllottedVoiceSeconds } from "@/lib/wallet/allotment";
 import { buyPagePacks, publicPacks, isStripeConfigured } from "@/lib/wallet/packs";
 import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
 import { readAccountSubscribed } from "@/lib/wallet/subscription";
-import { formatVoiceMinutes, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
+import { allottedVoiceSeconds } from "@/lib/wallet/voice-rate";
+import {
+  computeLedgerVoiceSeconds,
+  formatVoiceMinutes,
+  maybeRefillMonthlyMinutes,
+  sweepStaleVoiceSessions,
+} from "@/lib/wallet/voice";
+import { readXaiPrepaidRemainingUsd } from "@/lib/wallet/xai-topup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +26,10 @@ export async function GET(request: Request) {
   }
   await sweepStaleVoiceSessions(userId);
   await creditPaidCheckoutsForUser(userId);
-  const voiceSeconds = (await readAllottedVoiceSeconds(userId)) ?? 0;
+  await maybeRefillMonthlyMinutes(userId);
+  const ledgerSeconds = (await computeLedgerVoiceSeconds(userId)) ?? 0;
+  const prepaid = await readXaiPrepaidRemainingUsd();
+  const voiceSeconds = allottedVoiceSeconds(ledgerSeconds, prepaid?.usd ?? null);
   const subscribed = await readAccountSubscribed(userId);
   return Response.json(
     {

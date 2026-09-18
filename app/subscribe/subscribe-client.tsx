@@ -1,22 +1,26 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Image from "next/image";
+import Link from "next/link";
 
 export function SubscribeClient({
   signedIn = false,
+  subscribed: subscribedProp = false,
   planReady = false,
   label,
   priceLabel,
   cadence,
 }: {
   signedIn?: boolean;
+  subscribed?: boolean;
   planReady?: boolean;
   label: string;
   priceLabel: string;
   cadence: string;
 }) {
   const [authed, setAuthed] = useState(signedIn);
+  const [subscribed, setSubscribed] = useState(subscribedProp);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountMode, setAccountMode] = useState<"signin" | "signup">("signin");
@@ -24,6 +28,35 @@ export function SubscribeClient({
   const [accountEmail, setAccountEmail] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
   const [accountPending, setAccountPending] = useState(false);
+
+  useEffect(() => {
+    setSubscribed(subscribedProp);
+  }, [subscribedProp]);
+
+  useEffect(() => {
+    if (!authed) {
+      setSubscribed(false);
+      return;
+    }
+    let cancelled = false;
+    async function load() {
+      try {
+        const response = await fetch("/api/billing/balance", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        if (!response.ok) return;
+        const body = (await response.json()) as { subscribed?: boolean };
+        if (!cancelled) setSubscribed(body.subscribed === true);
+      } catch {
+        // keep the server-rendered subscribed flag
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [authed]);
 
   async function subscribe() {
     if (!authed) {
@@ -197,14 +230,23 @@ export function SubscribeClient({
           <p className="mt-3 text-sm" style={{ color: "var(--buy-muted)" }}>
             {cadence}
           </p>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => void subscribe()}
-            className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
-          >
-            {pending ? "Starting…" : !authed ? "Sign in to subscribe" : !planReady ? "Unavailable" : "Subscribe"}
-          </button>
+          {subscribed ? (
+            <Link
+              href="/account"
+              className="buy-buy-btn mt-8 inline-flex w-full items-center justify-center rounded-full px-5 py-3 text-sm font-semibold no-underline"
+            >
+              Manage
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => void subscribe()}
+              className="buy-buy-btn mt-8 w-full rounded-full px-5 py-3 text-sm font-semibold"
+            >
+              {pending ? "Starting…" : !authed ? "Sign in to subscribe" : !planReady ? "Unavailable" : "Subscribe"}
+            </button>
+          )}
         </div>
 
         {!authed ? (

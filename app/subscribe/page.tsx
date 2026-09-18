@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { readIncomingAuthSession } from "@/lib/auth/session";
 import { isSubscriptionConfigured, SUBSCRIPTION_PLAN } from "@/lib/wallet/packs";
+import { readAccountSubscribed } from "@/lib/wallet/subscription";
 import { SubscribeClient } from "./subscribe-client";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +14,13 @@ export const metadata = {
 export default async function SubscribePage() {
   await connection();
   const session = await readIncomingAuthSession();
+  const subscribed = session?.userId ? await readAccountSubscribed(session.userId) : false;
 
   return (
     <main className="flex min-h-0 flex-1 flex-col font-sans text-zinc-100">
       <SubscribeClient
         signedIn={Boolean(session)}
+        subscribed={subscribed}
         planReady={isSubscriptionConfigured()}
         label={SUBSCRIPTION_PLAN.label}
         priceLabel={SUBSCRIPTION_PLAN.priceLabel}

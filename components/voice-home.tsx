@@ -1,15 +1,12 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { BuyPacks, type BuyPackCard } from "@/components/buy-packs";
-import {
-  VoiceSession,
-  type GeneratedMediaItem,
-  type TranscriptRow,
-  type VoicePhase,
-} from "@/lib/voice/session";
+import type { BuyPackCard } from "@/components/buy-packs";
+import type { GeneratedMediaItem } from "@/lib/generate/media";
+import type { TranscriptRow, VoicePhase, VoiceSession } from "@/lib/voice/session";
 import {
   clearCallContinuityStore,
   readVoiceSessionStore,
@@ -97,6 +94,38 @@ import { AppleMusicBar } from "@/components/apple-music-bar";
 import { BackgroundAudioPlayer } from "@/lib/voice/background-music";
 import { setMediaSessionYield } from "@/lib/voice/keepalive";
 import { DEFAULT_MUSIC_STATE, type MusicSessionState } from "@/lib/voice/persona";
+import { logVoiceConnectFailure } from "@/lib/voice/connect-fail";
+
+type ChatMode = "voice" | "text";
+
+const BuyPacks = dynamic(() =>
+  import("@/components/buy-packs").then((mod) => mod.BuyPacks),
+);
+
+let voiceSessionModule: Promise<typeof import("@/lib/voice/session")> | null = null;
+let homeLaunchBalanceStarted = false;
+
+function loadVoiceSession() {
+  voiceSessionModule ??= import("@/lib/voice/session");
+  return voiceSessionModule;
+}
+
+function afterFirstPaint(task: () => void) {
+  const start = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => task(), { timeout: 1500 });
+      return;
+    }
+    window.setTimeout(task, 0);
+  };
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(start);
+    });
+    return;
+  }
+  start();
+}
 
 const HINTS: Record<VoicePhase, string> = {
   idle: "Talk to Lexi",
@@ -333,7 +362,10 @@ export function VoiceHome({
   billingReady?: boolean;
 } = {}) {
   const sessionRef = useRef<VoiceSession | null>(null);
+  const textSessionIdRef = useRef<string | null>(null);
   const [phase, setPhase] = useState<VoicePhase>("idle");
+  const [chatMode, setChatMode] = useState<ChatMode>("text");
+  const [textBusy, setTextBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accountId, setAccountId] = useState("");
@@ -370,6 +402,9 @@ export function VoiceHome({
   const cameraSlot = useRef<VisionSlot>(emptyVisionSlot());
   const screenSlot = useRef<VisionSlot>(emptyVisionSlot());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLInputElement>(null);
+  const launchBalanceStarted = useRef(false);
+  const balanceInFlight = useRef<Promise<number | null> | null>(null);
   const videoFileInputRef = useRef<HTMLInputElement>(null);
   const watchVideoRef = useRef<HTMLVideoElement>(null);
   const videoObjectUrl = useRef<string | null>(null);
@@ -474,57 +509,7 @@ export function VoiceHome({
       setRows(persisted.rows);
       setCaption(persisted.caption);
     }
-    void fetch("/api/channels", { headers: { "ngrok-skip-browser-warning": "1" } })
-      .then((response) => response.json())
-      .then((body: { platforms?: Record<string, boolean> }) => {
-        const platforms = body.platforms ?? {};
-        setChannelNames(
-          (["discord", "telegram", "sms", "email"] as const).filter((name) => platforms[name]),
-        );
-      })
-      .catch(() => {});
-    void refreshVoiceBalance();
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") void refreshVoiceBalance();
-    };
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    window.addEventListener("pageshow", refreshWhenVisible);
-    window.addEventListener("focus", refreshWhenVisible);
-    const fromCheckout = /\/(buy|subscribe)\/success/.test(document.referrer);
-    let checkoutPoll: number | undefined;
-    if (fromCheckout) {
-      let ticks = 0;
-      checkoutPoll = window.setInterval(() => {
-        ticks += 1;
-        void refreshVoiceBalance();
-        if (ticks >= 6 && checkoutPoll) window.clearInterval(checkoutPoll);
-      }, 2000);
-    }
-    void fetch("/api/apple-music", { headers: { "ngrok-skip-browser-warning": "1" } })
-      .then((response) => response.json())
-      .then(async (body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
-        if (typeof body.developerToken === "string") appleDeveloperToken.current = body.developerToken;
-        const connected = Boolean(body.connected);
-        setMusic((current) => ({
-          ...current,
-          appleConfigured: Boolean(body.configured),
-          appleConnected: connected,
-        }));
-        if (connected && body.developerToken) {
-          try {
-            await configureMusicKit(body.developerToken);
-          } catch {
-            // Play tap will configure again
-          }
-          if (isAdminUserId(signedIn)) void prefetchOurSong();
-          applyApplePlayback(readAppleMusicNowPlaying());
-        }
-      })
-      .catch(() => {});
-    const unsubscribeMusic = subscribeAppleMusicPlayback((now) => {
-      applyApplePlayback(now);
-    });
-    setCanShare(canShareScreen() && !preferWatchTab());
+    setCanShare(canShareScreen());
     setPhoneWatch(preferWatchTab());
     visionBatcher.current.setFlush((parts) => {
       sessionRef.current?.sendVisionFrames(parts);
@@ -532,6 +517,8 @@ export function VoiceHome({
     liveMux.current.setFlush((parts) => {
       sessionRef.current?.sendVisionFrames(parts);
     });
+    let cancelled = false;
+    let unsubscribeMusic: (() => void) | undefined;
     const channel = openWatchChannel((message) => {
       if (message.type === "hello") {
         channel?.postMessage({ type: "ready" });
@@ -601,16 +588,54 @@ export function VoiceHome({
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
     syncHidden();
+    afterFirstPaint(() => {
+      if (cancelled) return;
+      void loadVoiceSession();
+      const signedInNow = readBrowserUserId();
+      void fetch("/api/channels", { headers: { "ngrok-skip-browser-warning": "1" } })
+        .then((response) => response.json())
+        .then((body: { platforms?: Record<string, boolean> }) => {
+          if (cancelled) return;
+          const platforms = body.platforms ?? {};
+          setChannelNames(
+            (["discord", "telegram", "sms", "email"] as const).filter((name) => platforms[name]),
+          );
+        })
+        .catch(() => {});
+      void fetch("/api/apple-music", { headers: { "ngrok-skip-browser-warning": "1" } })
+        .then((response) => response.json())
+        .then(async (body: { configured?: boolean; connected?: boolean; developerToken?: string }) => {
+          if (cancelled) return;
+          if (typeof body.developerToken === "string") appleDeveloperToken.current = body.developerToken;
+          const connected = Boolean(body.connected);
+          setMusic((current) => ({
+            ...current,
+            appleConfigured: Boolean(body.configured),
+            appleConnected: connected,
+          }));
+          if (connected && body.developerToken) {
+            try {
+              await configureMusicKit(body.developerToken);
+            } catch {
+              // Play tap will configure again
+            }
+            if (cancelled) return;
+            if (isAdminUserId(signedInNow)) void prefetchOurSong();
+            applyApplePlayback(readAppleMusicNowPlaying());
+          }
+        })
+        .catch(() => {});
+      unsubscribeMusic = subscribeAppleMusicPlayback((now) => {
+        applyApplePlayback(now);
+      });
+    });
     return () => {
-      unsubscribeMusic();
+      cancelled = true;
+      unsubscribeMusic?.();
       document.removeEventListener("visibilitychange", syncHidden);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("pageshow", syncHidden);
-      window.removeEventListener("pageshow", refreshWhenVisible);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
-      window.removeEventListener("focus", refreshWhenVisible);
-      if (checkoutPoll) window.clearInterval(checkoutPoll);
       cameraSlot.current.stopLoop?.();
       screenSlot.current.stopLoop?.();
       cameraDecipherStop.current?.();
@@ -633,6 +658,56 @@ export function VoiceHome({
       sessionRef.current?.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (!composerRef.current) return;
+    let cancelled = false;
+    let checkoutPoll: number | undefined;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshVoiceBalance();
+    };
+    const scheduleLaunchBalance = () => {
+      if (cancelled) return;
+      const signedInNow = readBrowserUserId();
+      const fromCheckout = /\/(buy|subscribe)\/success/.test(document.referrer);
+      if (
+        !launchBalanceStarted.current &&
+        !homeLaunchBalanceStarted &&
+        ((signedInNow && !isGuestUserId(signedInNow)) || fromCheckout)
+      ) {
+        launchBalanceStarted.current = true;
+        homeLaunchBalanceStarted = true;
+        void refreshVoiceBalance();
+      }
+      document.addEventListener("visibilitychange", refreshWhenVisible);
+      window.addEventListener("pageshow", refreshWhenVisible);
+      window.addEventListener("focus", refreshWhenVisible);
+      if (fromCheckout) {
+        let ticks = 0;
+        checkoutPoll = window.setInterval(() => {
+          ticks += 1;
+          void refreshVoiceBalance();
+          if (ticks >= 6 && checkoutPoll) window.clearInterval(checkoutPoll);
+        }, 2000);
+      }
+    };
+    const frame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(scheduleLaunchBalance);
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("pageshow", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
+      if (checkoutPoll) window.clearInterval(checkoutPoll);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!buyIntent) return;
+    void refreshVoiceBalance();
+  }, [buyIntent]);
 
   useEffect(() => {
     if (!music.appleConnected) return;
@@ -832,9 +907,18 @@ export function VoiceHome({
         setScreenOn(true);
         sessionRef.current?.setSharedTabAudio(stream);
       }
-      sessionRef.current?.notifyVision(source, true);
-      const other = source === "camera" ? screenSlot.current.stream : cameraSlot.current.stream;
-      if (other) sessionRef.current?.notifyDualLiveVision();
+      const notifyLive = (session: NonNullable<typeof sessionRef.current>) => {
+        session.notifyVision(source, true);
+        const other = source === "camera" ? screenSlot.current.stream : cameraSlot.current.stream;
+        if (other) session.notifyDualLiveVision();
+      };
+      if (sessionRef.current) {
+        notifyLive(sessionRef.current);
+      } else {
+        void startSession({ keepTextMode: true }).then((session) => {
+          if (session) notifyLive(session);
+        });
+      }
     } catch (caught) {
       releaseVision(source, false);
       const message =
@@ -1232,12 +1316,14 @@ export function VoiceHome({
     bindVideoProvider(session);
   }
 
-  function clearSession() {
+  function clearSession(options?: { keepTranscript?: boolean }) {
     sessionRef.current = null;
     setPhase("idle");
     setSessionId(null);
-    setRows([]);
-    setCaption("");
+    if (!options?.keepTranscript) {
+      setRows([]);
+      setCaption("");
+    }
     setToyControl(false);
     setToyGrantPending(false);
     setMicResume(false);
@@ -1245,7 +1331,86 @@ export function VoiceHome({
     setCallLeftover(0);
   }
 
+  function enterTextModeSilently(reason: string) {
+    setChatMode("text");
+    setError(null);
+    logVoiceConnectFailure({ reason, platform: "web", sessionId });
+  }
+
+  function appendLocalRows(...next: TranscriptRow[]) {
+    setRows((current) => {
+      const snapshot = [...current, ...next].map((row) => ({ ...row }));
+      const live = [...snapshot].reverse().find((row) => row.text.trim())?.text ?? "";
+      writeVoiceSessionStore({ caption: live, rows: snapshot });
+      return snapshot;
+    });
+  }
+
+  async function postTextChat(text: string) {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "x-lexi-user-id": accountId,
+        "ngrok-skip-browser-warning": "1",
+      },
+      body: JSON.stringify({
+        text,
+        userId: accountId,
+        sessionId: textSessionIdRef.current,
+        platform: "web",
+      }),
+    });
+    let body: { reply?: string; error?: string; sessionId?: string | null } = {};
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      body = {};
+    }
+    if (typeof body.sessionId === "string" && body.sessionId.trim()) {
+      textSessionIdRef.current = body.sessionId.trim();
+    }
+    if (!response.ok || !body.reply?.trim()) {
+      throw new Error(body.error || "Could not write a reply.");
+    }
+    return body.reply.trim();
+  }
+
+  async function sendTextChat(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || textBusy) return;
+    if (!accountId || isGuestUserId(accountId)) {
+      setError("Sign in first.");
+      return;
+    }
+    const userRow: TranscriptRow = { id: crypto.randomUUID(), role: "user", text: trimmed };
+    appendLocalRows(userRow);
+    commitCaption(trimmed);
+    setTextBusy(true);
+    try {
+      const reply = await postTextChat(trimmed);
+      appendLocalRows({ id: crypto.randomUUID(), role: "assistant", text: reply });
+      commitCaption(reply);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not write a reply.");
+    } finally {
+      setTextBusy(false);
+    }
+  }
+
   async function refreshVoiceBalance(): Promise<number | null> {
+    if (balanceInFlight.current) return balanceInFlight.current;
+    const request = loadVoiceBalance();
+    balanceInFlight.current = request;
+    try {
+      return await request;
+    } finally {
+      if (balanceInFlight.current === request) balanceInFlight.current = null;
+    }
+  }
+
+  async function loadVoiceBalance(): Promise<number | null> {
     try {
       const response = await fetch("/api/billing/balance", {
         cache: "no-store",
@@ -1695,6 +1860,7 @@ export function VoiceHome({
     setBuyIntent(false);
     setRehearsal(false);
     setSubscribed(false);
+    textSessionIdRef.current = null;
     writeVoiceSessionStore({ userId: "" });
     try {
       await fetch("/api/auth", { method: "DELETE" });
@@ -1703,7 +1869,7 @@ export function VoiceHome({
     }
   }
 
-  async function startSession() {
+  async function startSession(options?: { keepTextMode?: boolean }) {
     if (!accountId || isGuestUserId(accountId)) {
       setError("Sign in first.");
       return null;
@@ -1711,12 +1877,13 @@ export function VoiceHome({
     const seconds = await refreshVoiceBalance();
     if (seconds !== null && seconds <= 0) {
       setBuyIntent(true);
+      enterTextModeSilently("out_of_minutes");
       if (process.env.NODE_ENV === "development") setRehearsal(true);
-      else setRehearsal(false);
       return null;
     }
     setRehearsal(false);
     setBuyIntent(false);
+    const { VoiceSession } = await loadVoiceSession();
     const session = new VoiceSession({
       onPhase: setPhase,
       onTranscripts: commitRows,
@@ -1795,15 +1962,25 @@ export function VoiceHome({
         setCallLeftover(leftover);
         setCallCapAtMs(capAtMs);
       },
+      onConnectFail: (message) => {
+        enterTextModeSilently(message);
+        releaseVision(undefined, false);
+        const settled = sessionRef.current?.stop();
+        clearSession({ keepTranscript: true });
+        void Promise.resolve(settled).then(() => refreshVoiceBalance());
+      },
       onError: (message) => {
-        setError(message);
         if (/^out of minutes\.?$/i.test(message.trim())) {
+          setError(message);
           setBuyIntent(true);
+          setChatMode("text");
           if (process.env.NODE_ENV === "development") setRehearsal(true);
+        } else {
+          enterTextModeSilently(message);
         }
         releaseVision(undefined, false);
         const settled = sessionRef.current?.stop();
-        clearSession();
+        clearSession({ keepTranscript: true });
         void Promise.resolve(settled).then(() => refreshVoiceBalance());
       },
     });
@@ -1822,7 +1999,9 @@ export function VoiceHome({
     }
     const urlWasPlaying = backgroundAudio.current.playing;
     await session.start();
-    if (sessionRef.current) setRehearsal(false);
+    if (!sessionRef.current) return null;
+    if (!options?.keepTextMode) setChatMode("voice");
+    setRehearsal(false);
     if (urlWasPlaying && !backgroundAudio.current.playing) {
       try {
         await backgroundAudio.current.resume();
@@ -1898,16 +2077,24 @@ export function VoiceHome({
     event.preventDefault();
     const text = draft.trim();
     const unsent = chips.filter((chip) => !chip.sent);
+    const liveSession = sessionRef.current;
 
     if (text || unsent.length) {
       setDraft("");
       setError(null);
       setAttachError(null);
-      let session = sessionRef.current;
+      if (text && !liveSession) {
+        await sendTextChat(text);
+        return;
+      }
+      let session = liveSession;
       if (!session) {
         session = await startSession();
       }
-      if (!session) return;
+      if (!session || !sessionRef.current) {
+        if (text) await sendTextChat(text);
+        return;
+      }
       if (unsent.length) {
         sendReadyAttachments(
           unsent.map((chip) => chip.payload),
@@ -1924,6 +2111,7 @@ export function VoiceHome({
       return;
     }
 
+    if (chatMode === "text") return;
     await startSession();
   }
 
@@ -1948,24 +2136,26 @@ export function VoiceHome({
       ? ""
       : [...rows].reverse().find((row) => row.text.trim())?.text) ||
     "";
-  const placeholder = live ? HINTS[phase] : HINTS.idle;
+  const placeholder = live ? HINTS[phase] : "Message Lexi";
   const status = error
     ? error
     : live
       ? `${gameHasFocus ? "Still live while Fortnite or another app is up. " : ""}${
           sessionId ? `${HINTS[phase]} · session ${sessionId}` : HINTS[phase]
         }`
-      : HINTS.idle;
+      : chatMode === "text"
+        ? "Text"
+        : HINTS.idle;
   const buttonLabel = hasText
-    ? live
-      ? "Send to Lexi"
-      : "Send and start talking"
+    ? "Send to Lexi"
     : live
       ? "Stop talking"
-      : "Start talking";
+      : chatMode === "text"
+        ? "Send to Lexi"
+        : "Start talking";
 
   return (
-    <div className="relative flex flex-1 flex-col bg-background font-sans text-foreground">
+    <div className="relative flex h-dvh max-h-dvh flex-1 flex-col overflow-hidden bg-background font-sans text-foreground">
       <style>{`
         @keyframes lexi-wave {
           0%, 100% { transform: scaleY(0.4); }
@@ -1981,12 +2171,13 @@ export function VoiceHome({
           alt=""
           fill
           priority
-          sizes="100vw"
+          sizes="(max-width: 640px) 100vw, 720px"
+          quality={65}
           className="object-cover object-[center_12%] opacity-[0.28] sm:object-[84%_16%] sm:opacity-[0.42] dark:opacity-[0.34] dark:sm:opacity-[0.5] [mask-image:linear-gradient(180deg,rgba(0,0,0,0.9)_0%,rgba(0,0,0,0.4)_40%,transparent_70%)] sm:[mask-image:linear-gradient(270deg,rgba(0,0,0,0.95)_0%,rgba(0,0,0,0.55)_46%,transparent_82%)]"
         />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-background/30 to-background sm:bg-gradient-to-r sm:from-background sm:via-background/40 sm:to-transparent" />
       </div>
-      <header className="relative z-10 flex items-center justify-between gap-4 px-6 py-5 sm:px-10">
+      <header className="relative z-10 flex shrink-0 items-center justify-between gap-4 px-6 py-5 sm:px-10">
         <p className="text-sm font-medium uppercase tracking-[0.22em]">Lexi</p>
         {accountId ? (
           <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-zinc-600 dark:text-zinc-300">
@@ -2009,7 +2200,7 @@ export function VoiceHome({
               href={subscribed ? "/account" : "/subscribe"}
               className="rounded-full border border-zinc-400 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-500 dark:text-zinc-200"
             >
-              {subscribed ? "Manage subscription" : "Subscribe"}
+              {subscribed ? "Manage" : "Subscribe"}
             </a>
             <a
               href="/account"
@@ -2049,7 +2240,7 @@ export function VoiceHome({
           </div>
         )}
       </header>
-      <main className={`relative z-10 flex flex-1 flex-col items-center px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
+      <main className={`relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 ${WATCH_UI_ENABLED && (videoSrc || watchRemote) ? "justify-end pb-2" : "justify-center"}`}>
         <p className="mb-4 font-mono text-xs uppercase tracking-[0.28em] text-zinc-500">
           /ˈlek.si/
         </p>
@@ -2071,8 +2262,29 @@ export function VoiceHome({
                 ? "Sign in to buy Whisper, Murmur, or Echo."
                 : buyIntent && !live
                   ? "Buy minutes for a live Call."
-                  : latestText || (accountId ? "A voice-first companion." : "Sign in to talk.")}
+                  : latestText ||
+                    (accountId
+                      ? chatMode === "text"
+                        ? "Message Lexi."
+                        : "A voice-first companion."
+                      : "Sign in to talk.")}
         </p>
+        {rows.length > 1 ? (
+          <ul className="mt-4 flex max-h-24 w-full max-w-md flex-col gap-1.5 overflow-y-auto text-sm">
+            {rows.slice(-6).map((row) => (
+              <li
+                key={row.id}
+                className={
+                  row.role === "user"
+                    ? "text-right text-zinc-500"
+                    : "text-left text-zinc-600 dark:text-zinc-300"
+                }
+              >
+                {row.role === "user" ? `You: ${row.text}` : row.text}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {buyIntent && !live ? (
           <section
             className="mt-6 flex w-full max-w-4xl flex-col items-center"
@@ -2299,9 +2511,7 @@ export function VoiceHome({
             ) : null}
           </form>
         ) : null}
-      </main>
-      <div className="relative z-10 w-full px-4 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
-        <div className="mx-auto flex w-full max-w-xl flex-col gap-2">
+        <div className="mx-auto mt-6 flex w-full max-w-xl flex-col gap-2 pb-4">
           {WATCH_UI_ENABLED && watchRemote ? (
             <div className="rounded-2xl border border-zinc-400 bg-background px-3 py-2 shadow-md dark:border-zinc-500">
               <p className="truncate text-xs font-medium text-foreground">
@@ -2392,49 +2602,24 @@ export function VoiceHome({
                 Phone: keep this tab talking. Play the video in the other tab — tap play there if it
                 does not start. She sees stills; soundtrack stays in the watch tab.
               </p>
-              <form
-                className="flex items-center gap-2 rounded-full border border-zinc-400 bg-background px-2 py-1.5 dark:border-zinc-500"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  loadVideoUrl(videoDraft);
-                }}
+              <input
+                ref={videoFileInputRef}
+                id="lexi-video-file"
+                type="file"
+                accept={VIDEO_ACCEPT}
+                className="sr-only"
+                onChange={(event) => onVideoFilePicked(event.target.files)}
+              />
+              <button
+                type="button"
+                aria-label="Upload a video"
+                title="Upload a video"
+                onClick={() => videoFileInputRef.current?.click()}
+                className="flex h-10 w-full items-center justify-center gap-2 rounded-full border border-zinc-400 bg-background text-sm font-medium text-foreground shadow-md dark:border-zinc-500"
               >
-                <input
-                  ref={videoFileInputRef}
-                  id="lexi-video-file"
-                  type="file"
-                  accept={VIDEO_ACCEPT}
-                  className="sr-only"
-                  onChange={(event) => onVideoFilePicked(event.target.files)}
-                />
-                <button
-                  type="button"
-                  aria-label="Upload a video"
-                  title="Upload a video"
-                  onClick={() => videoFileInputRef.current?.click()}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                >
-                  <FilmIcon />
-                </button>
-                <label className="sr-only" htmlFor="lexi-video-url">
-                  Video URL
-                </label>
-                <input
-                  id="lexi-video-url"
-                  type="url"
-                  value={videoDraft}
-                  onChange={(event) => setVideoDraft(event.target.value)}
-                  placeholder="Direct mp4/webm — streams in watch tab"
-                  autoComplete="off"
-                  className="min-w-0 flex-1 bg-transparent px-1 text-sm text-foreground outline-none placeholder:text-zinc-500"
-                />
-                <button
-                  type="submit"
-                  className="flex h-8 shrink-0 items-center rounded-full px-3 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
-                >
-                  Load
-                </button>
-              </form>
+                <FilmIcon />
+                Upload a video
+              </button>
             </>
           ) : null}
           {WATCH_UI_ENABLED && videoHint ? (
@@ -2492,8 +2677,8 @@ export function VoiceHome({
                 <button
                   type="button"
                   aria-pressed={screenOn}
-                  aria-label={screenOn ? "Stop sharing tab" : "Share a tab or screen"}
-                  title={screenOn ? "Stop sharing" : "Share a tab or screen"}
+                  aria-label={screenOn ? "Stop sharing screen" : "Share screen"}
+                  title={screenOn ? "Stop sharing screen" : "Share screen"}
                   onClick={() => toggleVision("screen")}
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-zinc-400 bg-background text-foreground transition-colors hover:bg-zinc-100 dark:border-zinc-500 dark:hover:bg-zinc-800 ${screenOn ? "bg-zinc-100 dark:bg-zinc-800" : ""}`}
                 >
@@ -2613,8 +2798,38 @@ export function VoiceHome({
               ))}
             </ul>
           ) : null}
+        </div>
+      </main>
+      <div className="relative z-30 w-full shrink-0 bg-background px-4 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:px-6">
+        <div className="mx-auto flex w-full max-w-xl flex-col gap-2">
           <div className="flex items-center justify-between gap-2 px-1">
             <div className="flex min-w-0 items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1" role="group" aria-label="Chat mode">
+                <button
+                  type="button"
+                  aria-pressed={chatMode === "voice"}
+                  onClick={() => setChatMode("voice")}
+                  className={`rounded-full px-2 py-1 text-[11px] transition-colors ${
+                    chatMode === "voice"
+                      ? "bg-zinc-100 text-foreground dark:bg-zinc-800"
+                      : "text-zinc-600 hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  Voice
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={chatMode === "text"}
+                  onClick={() => setChatMode("text")}
+                  className={`rounded-full px-2 py-1 text-[11px] transition-colors ${
+                    chatMode === "text"
+                      ? "bg-zinc-100 text-foreground dark:bg-zinc-800"
+                      : "text-zinc-600 hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  Text
+                </button>
+              </div>
               <LiveClock />
               {live ? (
                 micResume ? (
@@ -2644,6 +2859,16 @@ export function VoiceHome({
               >
                 {locationOn ? "Location on" : "Share location"}
               </button>
+              {canShare ? (
+                <button
+                  type="button"
+                  aria-pressed={screenOn}
+                  onClick={() => toggleVision("screen")}
+                  className="rounded-full px-2 py-1 text-[11px] text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-foreground dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  {screenOn ? "Screen on" : "Share screen"}
+                </button>
+              ) : null}
               {live ? (
                 <button
                   type="button"
@@ -2718,10 +2943,23 @@ export function VoiceHome({
           >
             <PaperclipIcon />
           </button>
+          {canShare ? (
+            <button
+              type="button"
+              aria-pressed={screenOn}
+              aria-label={screenOn ? "Stop sharing screen" : "Share screen"}
+              title={screenOn ? "Stop sharing screen" : "Share screen"}
+              onClick={() => toggleVision("screen")}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 ${screenOn ? "bg-zinc-100 dark:bg-zinc-800" : ""}`}
+            >
+              <ScreenShareIcon />
+            </button>
+          ) : null}
           <label className="sr-only" htmlFor="lexi-composer">
             Message Lexi
           </label>
           <input
+            ref={composerRef}
             id="lexi-composer"
             type="text"
             value={draft}
@@ -2737,7 +2975,8 @@ export function VoiceHome({
             type="submit"
             aria-pressed={live && !hasText}
             aria-label={buttonLabel}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            disabled={textBusy}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
           >
             <ComposerButton live={live} hasText={hasText} phase={phase} />
           </button>

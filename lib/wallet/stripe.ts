@@ -372,11 +372,13 @@ export async function handleStripeWebhook(input: {
   }
 
   const session = event.data.object as Stripe.Checkout.Session;
+  const payment = await checkoutPaymentIds(session, stripe);
   return creditCompletedCheckoutSession({
     session,
     stripe,
     env,
     stripeEventId: event.id,
+    stripeChargeId: payment.chargeId,
   });
 }
 
@@ -401,11 +403,16 @@ export async function creditPaidCheckoutsForUser(
       for (const session of sessions) {
         if (isSubscriptionCheckout(session)) continue;
         try {
+          const payment = await checkoutPaymentIds(session, stripe);
+          if (payment.refunded) continue;
           const result = await creditCompletedCheckoutSession({
             session,
             stripe,
             env,
-            stripeEventId: `cs:${session.id}`,
+            stripeEventId: payment.chargeId
+              ? `backfill:${payment.chargeId}`
+              : `backfill:cs:${session.id}`,
+            stripeChargeId: payment.chargeId,
           });
           if (result.ok && "credited" in result && typeof result.credited === "number") {
             creditedSeconds += result.credited;
@@ -431,6 +438,7 @@ async function creditCompletedCheckoutSession(input: {
   stripe: Stripe;
   env: NodeJS.ProcessEnv;
   stripeEventId: string;
+  stripeChargeId?: string | null;
 }) {
   const { session, stripe, env } = input;
   const userId = checkoutUserId(session);
@@ -492,6 +500,7 @@ async function creditCompletedCheckoutSession(input: {
     source: "stripe",
     stripeEventId: input.stripeEventId,
     stripeSessionId: session.id,
+    stripeChargeId: input.stripeChargeId,
     mode: "set",
   });
   if (!credited.ok) {
@@ -520,6 +529,41 @@ async function creditCompletedCheckoutSession(input: {
     userId,
     pack: pack.id,
   };
+}
+
+async function checkoutPaymentIds(session: Stripe.Checkout.Session, stripe: Stripe) {
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id || "";
+  let chargeId = "";
+  const latest =
+    typeof session.payment_intent === "object" && session.payment_intent
+      ? session.payment_intent.latest_charge
+      : null;
+  if (typeof latest === "string") chargeId = latest;
+  else if (latest && typeof latest === "object" && "id" in latest && typeof latest.id === "string") {
+    chargeId = latest.id;
+  }
+  let refunded = false;
+  if (paymentIntentId && !chargeId) {
+    try {
+      const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      const charge = intent.latest_charge;
+      chargeId = typeof charge === "string" ? charge : charge && typeof charge === "object" ? charge.id : "";
+    } catch {
+      // Session id is enough for webhook idempotency.
+    }
+  }
+  if (chargeId) {
+    try {
+      const charge = await stripe.charges.retrieve(chargeId);
+      refunded = charge.refunded === true || (charge.amount_refunded ?? 0) >= (charge.amount ?? 0);
+    } catch {
+      refunded = false;
+    }
+  }
+  return { paymentIntentId, chargeId, refunded };
 }
 
 function checkoutUserId(session: Stripe.Checkout.Session) {

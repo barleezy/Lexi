@@ -10,12 +10,14 @@ import {
 import { formatSessionIdLine, parseSessionId } from "@/lib/memory/session-id";
 import { formatPriorChat } from "@/lib/memory/turns";
 import { requireAuthSessionUserId } from "@/lib/auth/session";
+import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
 import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice/server-log";
 import {
   OUT_OF_MINUTES_CODE,
   OUT_OF_MINUTES_MESSAGE,
   SESSION_LIMIT_CODE,
   extendVoiceHold,
+  maybeRefillMonthlyMinutes,
   placeVoiceHold,
   readOpenVoiceSession,
   REALTIME_VOICE_MODEL,
@@ -111,6 +113,8 @@ export async function POST(request: Request) {
   }
 
   await sweepStaleVoiceSessions(userId);
+  await creditPaidCheckoutsForUser(userId);
+  await maybeRefillMonthlyMinutes(userId);
 
   let hold: Awaited<ReturnType<typeof placeVoiceHold>> | null = null;
   let extended: Awaited<ReturnType<typeof extendVoiceHold>> | null = null;

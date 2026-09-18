@@ -3,6 +3,11 @@ import Combine
 import Foundation
 import UIKit
 
+enum ChatMode: String {
+    case voice
+    case text
+}
+
 @MainActor
 final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelegate {
     static let shared = LexiAppController()
@@ -13,6 +18,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     let music = MusicController()
     let watch = WatchController()
     let camera = CameraController()
+    let screen = ScreenCaptureController()
     let location = LocationController()
     let generate = GenerateController()
     let toys = ToyController()
@@ -20,6 +26,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
 
     @Published var draft = ""
     @Published private(set) var lastError = ""
+    @Published private(set) var chatMode: ChatMode = .text
+    @Published private(set) var textBusy = false
     @Published private(set) var statusLine = "Signed out"
     @Published private(set) var phase: VoicePhase = .idle
     @Published private(set) var caption = ""
@@ -28,10 +36,6 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     @Published private(set) var isSignedIn = false
     @Published private(set) var isConnecting = false
     @Published private(set) var channelNames: [String] = []
-    @Published private(set) var routeThroughPS5PartyChat = false
-    @Published private(set) var ps5ChatPortStatus = ""
-    @Published private(set) var psnOnlineId = "Barleezybaby"
-    @Published private(set) var psnLoginName = "barleezyfbaby"
     @Published private(set) var minutesLabel = ""
     @Published private(set) var voiceSeconds = 0
     @Published private(set) var subscribed = false
@@ -45,6 +49,12 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     private var callStartedAt: Date?
     private var limitWorkItem: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
+    private var launchWorkStarted = false
+    private var allowIdleBillingRefresh = false
+    private var billingInFlight: Task<Int?, Never>?
+    private var captureMicEnabled = true
+    private var textRows: [TranscriptRow] = []
+    private var textSessionId: String?
 
     var phaseLabel: String {
         if isConnecting { return "Connecting" }
@@ -83,27 +93,34 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             guard let self, self.realtime.isLive else { return }
             self.realtime.notifyVision(source: "camera", active: active)
         }
-        routeThroughPS5PartyChat = account.routeThroughPS5PartyChat
-        account.useBackupPsnAccount()
-        psnOnlineId = account.psnOnlineId
-        psnLoginName = account.psnLoginName
-        refreshStatus()
-        Task {
-            await api.settlePendingVoiceSessions()
-            await refreshExtras()
+        screen.onFrame = { [weak self] dataUrl in
+            guard let self, self.realtime.isLive else { return }
+            self.realtime.sendVisionFrame(source: "screen", dataUrl: dataUrl)
         }
+        screen.onShareChange = { [weak self] active in
+            guard let self, self.realtime.isLive else { return }
+            self.realtime.notifyVision(source: "screen", active: active)
+        }
+        refreshStatus()
     }
 
-    func setRouteThroughPS5PartyChat(_ on: Bool) {
-        routeThroughPS5PartyChat = on
-        account.routeThroughPS5PartyChat = on
-        Task { await realtime.applyAudioRouting() }
+    /// Chat chrome paints first. One balance fetch after VoiceHome composer appears.
+    func scheduleLaunchWork() {
+        guard !launchWorkStarted else { return }
+        launchWorkStarted = true
+        Task {
+            await Task.yield()
+            await api.settlePendingVoiceSessions()
+            await refreshExtras()
+            allowIdleBillingRefresh = true
+        }
     }
 
     private func bindChildren() {
         bind(music)
         bind(watch)
         bind(camera)
+        bind(screen)
         bind(location)
         bind(generate)
         bind(toys)
@@ -122,14 +139,18 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         isSignedIn = account.isSignedIn
         isLive = realtime.isLive
         phase = realtime.phase
-        caption = realtime.caption
-        rows = realtime.rows
+        if realtime.isLive {
+            caption = realtime.caption
+            rows = realtime.rows
+        } else {
+            rows = textRows
+            caption = textRows.last?.text ?? ""
+        }
         statusLine = account.isSignedIn ? "Signed in as \(account.userId)" : "Ready to talk"
     }
 
     func refreshExtras() async {
         if account.isSignedIn {
-            await music.refreshStatus(using: api)
             channelNames = await api.channels()
             await refreshBilling()
         } else {
@@ -138,10 +159,22 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         refreshStatus()
     }
 
-    func refreshBilling() async {
+    @discardableResult
+    func refreshBilling() async -> Int? {
+        if let billingInFlight {
+            return await billingInFlight.value
+        }
+        let task = Task { await self.loadBilling() }
+        billingInFlight = task
+        let value = await task.value
+        billingInFlight = nil
+        return value
+    }
+
+    private func loadBilling() async -> Int? {
         guard account.isSignedIn else {
             clearBilling()
-            return
+            return nil
         }
         do {
             let balance = try await api.billingBalance()
@@ -149,10 +182,12 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             minutesLabel = "\(voiceSeconds / 60) min"
             subscribed = balance.subscribed
             billingMessage = ""
+            return voiceSeconds
         } catch {
             if minutesLabel.isEmpty {
                 billingMessage = error.localizedDescription
             }
+            return nil
         }
     }
 
@@ -219,7 +254,13 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         music.stop()
         watch.clear(notify: false)
         camera.stop(notify: false)
+        screen.stop(notify: false)
         toys.reset()
+        textRows = []
+        textSessionId = nil
+        textBusy = false
+        chatMode = .text
+        lastError = ""
         account.signOut()
         channelNames = []
         clearBilling()
@@ -241,7 +282,12 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             Task { await sendText(text) }
             return
         }
+        if chatMode == .text { return }
         toggleCall()
+    }
+
+    func setChatMode(_ mode: ChatMode) {
+        chatMode = mode
     }
 
     func sendText(_ text: String) async {
@@ -249,26 +295,70 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         guard !trimmed.isEmpty else { return }
         draft = ""
         lastError = ""
-        if !realtime.isReady {
-            if !realtime.isLive && !isConnecting {
-                connectCall()
-            }
-            for _ in 0..<160 where !realtime.isReady && lastError.isEmpty {
-                try? await Task.sleep(nanoseconds: 150_000_000)
-            }
-        }
-        if !lastError.isEmpty {
+        if realtime.isReady {
+            toys.noteUtterance(trimmed)
+            realtime.sendText(trimmed)
             refreshStatus()
             return
         }
-        guard realtime.isReady else {
-            lastError = "Voice link did not open."
+        await sendTextChat(trimmed)
+    }
+
+    private func sendTextChat(_ text: String) async {
+        if !account.isSignedIn {
+            lastError = "Sign in first."
             refreshStatus()
             return
         }
-        toys.noteUtterance(trimmed)
-        realtime.sendText(trimmed)
+        if textBusy { return }
+        textBusy = true
+        lastError = ""
+        chatMode = .text
+        toys.noteUtterance(text)
+        appendTextRow(role: "user", text: text)
+        do {
+            let result = try await api.sendChat(text, sessionId: textSessionId)
+            if let next = result.sessionId, !next.isEmpty { textSessionId = next }
+            appendTextRow(role: "assistant", text: result.reply)
+        } catch {
+            lastError = error.localizedDescription
+        }
+        textBusy = false
         refreshStatus()
+    }
+
+    private func appendTextRow(role: String, text: String) {
+        textRows.append(TranscriptRow(id: UUID(), role: role, text: text))
+        rows = textRows
+        caption = text
+    }
+
+    private func enterTextModeSilently(reason: String) {
+        if textRows.isEmpty && !realtime.rows.isEmpty {
+            textRows = realtime.rows
+        }
+        chatMode = .text
+        lastError = ""
+        isConnecting = false
+        Task { await api.logVoiceFailure(reason: reason, sessionId: realtime.memorySessionId) }
+        refreshStatus()
+    }
+
+    private static func isVoiceConnectFailure(_ message: String) -> Bool {
+        if message.range(of: #"^out of minutes\.?$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return false
+        }
+        if message.localizedCaseInsensitiveContains("time limit") { return false }
+        if message.localizedCaseInsensitiveContains("spend limit") { return false }
+        if message.localizedCaseInsensitiveContains("Sign in") { return false }
+        return true
+    }
+
+    private static func isAuthFailure(_ message: String) -> Bool {
+        message.range(
+            of: #"401|403|unauthor|expired|invalid.?token|forbidden|Voice auth failed"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     func sendPhoto(_ dataUrl: String) {
@@ -291,10 +381,49 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         Task { await camera.start() }
     }
 
+    func toggleScreenShare() {
+        if screen.isOn {
+            screen.stop()
+            return
+        }
+        Task { await startScreenShare() }
+    }
+
+    private func startScreenShare() async {
+        await screen.start()
+        guard screen.isOn else { return }
+        if !realtime.isLive {
+            await connectRealtimeForVision()
+        }
+        if screen.isOn, realtime.isLive {
+            realtime.notifyVision(source: "screen", active: true)
+        }
+    }
+
+    /// Open the voice socket so screen frames can send. Mic stays off; failures stay silent.
+    private func connectRealtimeForVision() async {
+        if realtime.isLive || isConnecting { return }
+        lastError = ""
+        connectGeneration += 1
+        authRefreshCount = 0
+        captureMicEnabled = false
+        let gen = connectGeneration
+        isConnecting = true
+        refreshStatus()
+        do {
+            try await openRealtime(generation: gen)
+            guard gen == connectGeneration else { return }
+        } catch {
+            guard gen == connectGeneration else { return }
+            enterTextModeSilently(reason: error.localizedDescription)
+        }
+    }
+
     func connectCall() {
         lastError = ""
         connectGeneration += 1
         authRefreshCount = 0
+        captureMicEnabled = true
         let gen = connectGeneration
         isConnecting = true
         refreshStatus()
@@ -303,18 +432,16 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             let micOK = await requestMicrophone()
             guard gen == connectGeneration else { return }
             guard micOK else {
-                isConnecting = false
-                lastError = "Microphone access is required to talk to Lexi."
-                refreshStatus()
+                enterTextModeSilently(reason: "Microphone access is required to talk to Lexi.")
                 return
             }
             do {
                 try await openRealtime(generation: gen)
+                guard gen == connectGeneration, realtime.isLive else { return }
+                chatMode = .voice
             } catch {
                 guard gen == connectGeneration else { return }
-                isConnecting = false
-                lastError = error.localizedDescription
-                refreshStatus()
+                enterTextModeSilently(reason: error.localizedDescription)
             }
         }
     }
@@ -335,6 +462,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         // Hang up: clear previousSessionId. Next Call sends null + empty prior; facts stay.
         AccountStore.shared.clearCallContinuity()
         camera.stop(notify: false)
+        screen.stop(notify: false)
         toys.reset()
         refreshStatus()
         Task {
@@ -345,9 +473,11 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     }
 
     func settleIfIdle() {
+        guard launchWorkStarted else { return }
         guard !realtime.isLive, !isConnecting, !extendingHold else { return }
         Task {
             await api.settlePendingVoiceSessions()
+            guard allowIdleBillingRefresh else { return }
             await refreshBilling()
         }
     }
@@ -359,6 +489,10 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         realtime.memorySessionId = nil
         realtime.voiceSessionId = nil
         callStartedAt = nil
+        let seconds = await refreshBilling()
+        if let seconds, seconds <= 0 {
+            throw NSError(domain: "LexiAPI", code: 402, userInfo: [NSLocalizedDescriptionKey: "Out of minutes."])
+        }
         let session = try await api.startRealtimeSession(
             sessionId: nil,
             previousSessionId: nil,
@@ -380,13 +514,17 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         realtime.start(
             token: session.token,
             realtimeURL: VoiceRealtimeConfig.url,
-            sessionUpdate: pinnedSessionUpdate(session)
+            sessionUpdate: pinnedSessionUpdate(session),
+            captureMic: captureMicEnabled
         )
         if watch.isLoaded {
             realtime.notifyVideo(active: true, title: watch.title)
         }
         if camera.isOn {
             realtime.notifyVision(source: "camera", active: true)
+        }
+        if screen.isOn {
+            realtime.notifyVision(source: "screen", active: true)
         }
         refreshStatus()
     }
@@ -398,14 +536,14 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         realtime.armVoiceCap(capAtMs: capAtMs - lead * 1000) { [weak self] in
             guard let self else { return }
             if let message = self.sessionLimitMessage() {
-                self.lastError = message
+                self.enterTextModeSilently(reason: message)
                 self.endCall()
                 return
             }
             if self.walletLeftover > 0 {
                 self.extendHoldOrHangup()
             } else {
-                self.lastError = "Out of minutes."
+                self.enterTextModeSilently(reason: "Out of minutes.")
                 self.endCall()
             }
         }
@@ -422,7 +560,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         limitWorkItem?.cancel()
         guard callStartedAt != nil else { return }
         if let message = sessionLimitMessage() {
-            lastError = message
+            enterTextModeSilently(reason: message)
             endCall()
             return
         }
@@ -430,7 +568,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if let message = self.sessionLimitMessage() {
-                self.lastError = message
+                self.enterTextModeSilently(reason: message)
                 self.endCall()
             }
         }
@@ -482,7 +620,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             defer { extendingHold = false }
             do {
                 guard !voiceSessionId.isEmpty else {
-                    lastError = "Out of minutes."
+                    enterTextModeSilently(reason: "Out of minutes.")
                     endCall()
                     return
                 }
@@ -506,10 +644,11 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
                 realtime.start(
                     token: session.token,
                     realtimeURL: VoiceRealtimeConfig.url,
-                    sessionUpdate: pinnedSessionUpdate(session)
+                    sessionUpdate: pinnedSessionUpdate(session),
+                    captureMic: captureMicEnabled
                 )
             } catch {
-                lastError = error.localizedDescription
+                enterTextModeSilently(reason: error.localizedDescription)
                 endCall()
             }
         }
@@ -517,8 +656,8 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
 
     private func refreshVoiceSession() {
         if authRefreshCount >= 1 {
-            lastError = "Voice auth failed. Try Connect again."
-            refreshStatus()
+            enterTextModeSilently(reason: "Voice auth failed after retry.")
+            endCall()
             return
         }
         authRefreshCount += 1
@@ -535,37 +674,9 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
                 try await openRealtime(generation: gen)
             } catch {
                 guard refresh == refreshGeneration, gen == connectGeneration else { return }
-                isConnecting = false
-                lastError = error.localizedDescription
-                refreshStatus()
+                enterTextModeSilently(reason: error.localizedDescription)
+                endCall()
             }
-        }
-    }
-
-    func connectAppleMusic() {
-        Task {
-            lastError = ""
-            if music.connected {
-                music.disconnect()
-                return
-            }
-            let message = await music.connect(using: api)
-            if !music.connected { lastError = message }
-            refreshStatus()
-        }
-    }
-
-    func playAppleMusic() {
-        Task {
-            await music.playFromUser(using: api, allowOurSong: account.isAdmin)
-            syncDuck()
-        }
-    }
-
-    func skipAppleMusic() {
-        Task {
-            await music.skipNext(using: api, allowOurSong: account.isAdmin)
-            syncDuck()
         }
     }
 
@@ -594,34 +705,40 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
 
     nonisolated func realtime(_ session: RealtimeSession, caption: String) {
         Task { @MainActor in
-            self.caption = caption
+            if session.isLive {
+                self.caption = caption
+            }
         }
     }
 
     nonisolated func realtime(_ session: RealtimeSession, rows: [TranscriptRow]) {
         Task { @MainActor in
-            self.rows = rows
+            if session.isLive {
+                self.rows = rows
+            }
         }
     }
 
     nonisolated func realtime(_ session: RealtimeSession, error: String) {
         Task { @MainActor in
-            self.lastError = error
             self.isLive = session.isLive
             self.phase = session.phase
             self.isConnecting = false
-            if !session.isLive {
-                self.camera.stop(notify: false)
-                if !self.extendingHold {
-                    self.endCall()
-                }
+            if session.isLive {
+                self.lastError = ""
+                Task { await self.api.logVoiceFailure(reason: error, sessionId: session.memorySessionId) }
+                return
             }
-        }
-    }
-
-    nonisolated func realtime(_ session: RealtimeSession, chatPortStatus: String) {
-        Task { @MainActor in
-            self.ps5ChatPortStatus = chatPortStatus
+            if Self.isAuthFailure(error), self.authRefreshCount < 1 {
+                self.lastError = ""
+                return
+            }
+            self.enterTextModeSilently(reason: error)
+            self.camera.stop(notify: false)
+            self.screen.stop(notify: false)
+            if !self.extendingHold {
+                self.endCall()
+            }
         }
     }
 
@@ -636,6 +753,7 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             self.isLive = false
             self.isConnecting = false
             self.camera.stop(notify: false)
+            self.screen.stop(notify: false)
             if self.extendingHold { return }
             await self.api.settleVoiceSession(voiceSessionId: session.voiceSessionId)
             await self.api.settlePendingVoiceSessions()
@@ -677,31 +795,6 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             music.stop()
             syncDuck()
             return stringify(["ok": true])
-        case "apple_music_connect":
-            let message = await music.connect(using: api)
-            return stringify(["ok": music.connected, "message": message])
-        case "apple_music_love":
-            let message = await music.love(
-                query: arguments["query"] as? String,
-                songId: arguments["song_id"] as? String ?? arguments["songId"] as? String,
-                using: api
-            )
-            return stringify(["ok": true, "message": message])
-        case "apple_music_library":
-            let message = await music.addToLibrary(
-                query: arguments["query"] as? String,
-                songId: arguments["song_id"] as? String ?? arguments["songId"] as? String,
-                using: api
-            )
-            return stringify(["ok": true, "message": message])
-        case "apple_music_playlist":
-            let message = await music.addToPlaylist(
-                query: arguments["query"] as? String,
-                songId: arguments["song_id"] as? String ?? arguments["songId"] as? String,
-                playlist: arguments["playlist"] as? String,
-                using: api
-            )
-            return stringify(["ok": true, "message": message])
         case "generate_image":
             let result = await generate.generateImage(arguments, using: api)
             if let dataUrl = result["dataUrl"] as? String, !dataUrl.isEmpty {

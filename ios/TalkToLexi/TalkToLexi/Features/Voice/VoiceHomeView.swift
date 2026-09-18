@@ -76,6 +76,7 @@ struct VoiceHomeView: View {
             .resizable()
             .scaledToFit()
             .frame(maxWidth: .infinity)
+            .frame(maxHeight: 280)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -109,18 +110,13 @@ struct VoiceHomeView: View {
                 .foregroundStyle(Color(red: 0.72, green: 0.72, blue: 0.75))
                 .frame(maxWidth: 360)
             TranscriptView(rows: app.rows)
-            if app.routeThroughPS5PartyChat, !app.ps5ChatPortStatus.isEmpty {
-                Text(app.ps5ChatPortStatus)
-                    .font(.system(size: 12))
-                    .foregroundStyle(LexiTheme.muted)
-            }
         }
     }
 
     private var displayCopy: String {
         if !app.lastError.isEmpty { return app.lastError }
         if !app.latestText.isEmpty { return app.latestText }
-        return "A voice-first companion."
+        return app.chatMode == .text ? "Message Lexi." : "A voice-first companion."
     }
 
     private var extras: some View {
@@ -131,15 +127,17 @@ struct VoiceHomeView: View {
                 }
             }
             GeneratedMediaView(items: app.generate.items)
-            if app.camera.isOn {
+            if app.camera.isOn || app.screen.isOn {
                 HStack(alignment: .bottom) {
-                    CameraPreviewView(session: app.camera.session, mirrored: app.camera.facing == .front) {
-                        app.camera.flip()
+                    if app.camera.isOn {
+                        CameraPreviewView(session: app.camera.session, mirrored: app.camera.facing == .front) {
+                            app.camera.flip()
+                        }
+                        .frame(width: 96, height: 72)
                     }
-                    .frame(width: 96, height: 72)
                     Spacer(minLength: 0)
                     VStack(alignment: .trailing, spacing: 6) {
-                        Text("Sharing with Lexi")
+                        Text(app.screen.isOn ? "Sharing screen with Lexi" : "Sharing with Lexi")
                             .font(.system(size: 11))
                             .foregroundStyle(LexiTheme.muted)
                     }
@@ -151,34 +149,18 @@ struct VoiceHomeView: View {
                     .foregroundStyle(LexiTheme.muted)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            WatchURLField(
-                draft: Binding(get: { app.watch.draft }, set: { app.watch.draft = $0 }),
-                busy: app.watch.isBusy,
-                hint: app.watch.hint
-            ) {
-                app.loadVideo()
+            if let hint = app.screen.hint {
+                Text(hint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(LexiTheme.muted)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             if let hint = app.location.hint {
                 Text(hint)
                     .font(.system(size: 11))
                     .foregroundStyle(LexiTheme.muted)
             }
-            if app.music.connected {
-                MusicBarView(
-                    query: Binding(get: { app.music.query }, set: { app.music.query = $0 }),
-                    playing: app.music.playing && app.music.source != "url",
-                    title: app.music.source == "apple" ? app.music.title : "",
-                    busy: app.music.busy,
-                    hint: app.music.hint,
-                    showOurSong: app.account.isAdmin,
-                    onPlayPause: { app.playAppleMusic() },
-                    onNext: { app.skipAppleMusic() }
-                )
-            } else if !app.music.hint.isEmpty {
-                Text(app.music.hint)
-                    .font(.system(size: 11))
-                    .foregroundStyle(LexiTheme.muted)
-            } else if app.music.playing {
+            if app.music.playing {
                 Text("Playing: \(app.music.title.isEmpty ? "music" : app.music.title)")
                     .font(.system(size: 11))
                     .foregroundStyle(LexiTheme.muted)
@@ -188,26 +170,47 @@ struct VoiceHomeView: View {
 
     private var dock: some View {
         VStack(spacing: 10) {
-            actionPills
-            Button(app.connectTitle) {
-                composerFocused = false
-                app.toggleCall()
-            }
-            .buttonStyle(LexiFilledButtonStyle())
-            .disabled(app.isConnecting)
             ComposerBar(
                 draft: $app.draft,
                 live: app.isLive,
+                textMode: true,
                 phase: app.phase,
                 focused: $composerFocused,
                 onSubmit: { app.sendDraftOrToggle() },
-                onPhoto: { app.sendPhoto($0) }
+                onPhoto: { app.sendPhoto($0) },
+                screenOn: app.screen.isOn,
+                onShareScreen: { app.toggleScreenShare() }
             )
+            .onAppear {
+                app.scheduleLaunchWork()
+            }
+            HStack(spacing: 8) {
+                chatModeControl
+                Spacer(minLength: 8)
+                Button(app.connectTitle) {
+                    composerFocused = false
+                    app.toggleCall()
+                }
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.isLive))
+                .disabled(app.isConnecting)
+            }
+            actionPills
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 10)
         .background(LexiTheme.page.ignoresSafeArea(edges: .bottom))
+    }
+
+    private var chatModeControl: some View {
+        HStack(spacing: 6) {
+            Button("Voice") { app.setChatMode(.voice) }
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.chatMode == .voice))
+            Button("Text") { app.setChatMode(.text) }
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.chatMode == .text))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Chat mode")
     }
 
     private var actionPills: some View {
@@ -222,11 +225,10 @@ struct VoiceHomeView: View {
                     app.toggleCameraShare()
                 }
                 .buttonStyle(LexiPillButtonStyle(emphasized: app.camera.isOn))
-                Button(app.music.connected ? "Disconnect Apple Music" : "Connect Apple Music") {
-                    app.connectAppleMusic()
+                Button(app.screen.isOn ? "Screen on" : "Share screen") {
+                    app.toggleScreenShare()
                 }
-                .buttonStyle(LexiPillButtonStyle(emphasized: app.music.connected))
-                .disabled(app.music.busy)
+                .buttonStyle(LexiPillButtonStyle(emphasized: app.screen.isOn))
                 if app.isLive && app.toys.grantPending && !app.toys.granted {
                     Button("Give Lexi toy control") {
                         app.toys.grantFromUser()

@@ -88,9 +88,13 @@ assert.ok(!voiceRateSrc.includes("ADMIN_USER_IDS"), "rate is not admin-gated");
 
 const allotmentSrc = readFileSync(new URL("../lib/wallet/allotment.ts", import.meta.url), "utf8");
 assert.ok(allotmentSrc.includes("readAllottedVoiceSeconds"), "allotment helper");
+assert.ok(allotmentSrc.includes("computeLedgerVoiceSeconds"), "allotment wallet is ledger remaining, not the stale column");
+assert.ok(!allotmentSrc.includes("readVoiceSeconds"), "allotment does not go through a column-aware wallet read");
+assert.ok(allotmentSrc.includes("ledger remaining"), "allotment documents earned packs − usage − holds");
 assert.ok(allotmentSrc.includes("readXaiPrepaidRemainingUsd"), "allotment reads team prepaid");
 assert.ok(allotmentSrc.includes("allottedVoiceSeconds"), "allotment uses $0.08/min math");
 assert.ok(!allotmentSrc.includes("isAdminUserId"), "allotment is not admin-gated");
+assert.ok(!allotmentSrc.includes("SELECT voice_seconds"), "allotment does not read accounts.voice_seconds");
 
 assert.equal(TEXT_FAST_MODEL, "grok-4-1-fast-reasoning");
 assert.equal(TEXT_FAST_MAX_TOKENS, 800);
@@ -197,11 +201,23 @@ assert.ok(
 assert.ok(!/setRehearsal\(seconds/.test(homeSrc), "balance refresh does not open rehearsal");
 assert.ok(!homeSrc.includes('get("next") === "/buy"'), "home does not auto-open buy from ?next=");
 assert.ok(homeSrc.includes("buyIntent && !live"), "buy section is click-intent only");
-assert.ok(homeSrc.includes("Manage subscription"), "home shows Manage subscription when subscribed");
+assert.ok(homeSrc.includes('subscribed ? "Manage" : "Subscribe"'), "home shows Manage when subscribed");
 assert.ok(homeSrc.includes('href="/account"'), "home manage/account links to /account");
 assert.ok(homeSrc.includes('subscribed ? "/account" : "/subscribe"'), "home Subscribe follows billing status");
 assert.ok(homeSrc.includes("catalogPacks"), "home can hydrate catalog packs after paint");
-assert.ok(homeSrc.includes("afterFirstPaint"), "home defers balance/channels/music until after first paint");
+assert.ok(homeSrc.includes("afterFirstPaint"), "home defers channels/music until after first paint");
+assert.ok(homeSrc.includes("scheduleLaunchBalance"), "home fetches balance only after the composer paints");
+assert.ok(homeSrc.includes("composerRef"), "home waits for the Message Lexi composer before balance");
+{
+  const firstPaint = homeSrc.slice(
+    homeSrc.indexOf("afterFirstPaint(() => {"),
+    homeSrc.indexOf("return () => {", homeSrc.indexOf("afterFirstPaint(() => {")),
+  );
+  assert.ok(!firstPaint.includes("refreshVoiceBalance"), "first afterFirstPaint does not fetch balance");
+}
+assert.ok(!homeSrc.includes('id="lexi-video-url"'), "home has no watch-together URL field");
+assert.ok(!homeSrc.includes("Watch together — paste a video URL"), "home has no paste-video-URL placeholder");
+assert.ok(homeSrc.includes("Share screen"), "home composer chrome has Share screen");
 assert.ok(homeSrc.includes("loadVoiceSession"), "home lazy-loads VoiceSession until Connect");
 assert.ok(homeSrc.includes("Buy minutes"), "home always offers Buy minutes");
 assert.ok(!homeSrc.includes("useState(() => new Date())"), "LiveClock does not SSR a wall clock");
@@ -225,12 +241,31 @@ assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared 
 assert.ok(balanceSrc.includes('force-dynamic'), "balance is not statically cached");
 assert.ok(balanceSrc.includes("await connection()"), "balance reads live env and cookies");
 assert.ok(balanceSrc.includes("creditPaidCheckoutsForUser"), "balance credits paid packs before showing minutes");
-assert.ok(balanceSrc.includes("readAllottedVoiceSeconds"), "balance allots minutes from prepaid at $0.08/min for the session user");
+assert.ok(balanceSrc.includes("maybeRefillMonthlyMinutes"), "balance refills monthly minutes before returning voiceSeconds");
+{
+  const balanceGet = balanceSrc.slice(balanceSrc.indexOf("export async function GET"));
+  assert.ok(balanceGet.includes("computeLedgerVoiceSeconds"), "GET assigns voiceSeconds from the ledger sum");
+  assert.ok(
+    balanceGet.indexOf("maybeRefillMonthlyMinutes") < balanceGet.indexOf("computeLedgerVoiceSeconds"),
+    "balance refill completes before the returned voiceSeconds",
+  );
+  assert.ok(
+    balanceGet.indexOf("computeLedgerVoiceSeconds") < balanceGet.indexOf("allottedVoiceSeconds"),
+    "prepaid clamp runs on the ledger sum, not the column",
+  );
+  assert.ok(!balanceGet.includes("readAllottedVoiceSeconds"), "GET does not hide the ledger sum behind allotment");
+  assert.ok(!balanceGet.includes("readVoiceSeconds"), "GET does not read the wallet column helper");
+  assert.ok(!/SELECT\s+voice_seconds/.test(balanceGet), "GET does not select accounts.voice_seconds");
+}
+assert.ok(balanceSrc.includes("computeLedgerVoiceSeconds"), "balance voiceSeconds is the earned-pack ledger sum");
+assert.ok(balanceSrc.includes("allottedVoiceSeconds"), "balance allots minutes from prepaid at $0.08/min for the session user");
+assert.ok(balanceSrc.includes("readXaiPrepaidRemainingUsd"), "balance applies the existing prepaid clamp after the ledger sum");
 assert.ok(balanceSrc.includes("formatVoiceMinutes"), "balance labels allotted seconds");
 assert.ok(!balanceSrc.includes("clampVoiceSecondsToSoldPacks"), "balance must not invent Echo 60 when prepaid is $4.70");
 assert.ok(!balanceSrc.includes("MAX_VOICE_PACK_SECONDS"), "balance display is not the Echo 3600 cap");
 assert.ok(!balanceSrc.includes("isAdminUserId"), "balance allotment is not admin-gated");
 assert.ok(!balanceSrc.includes("ADMIN_USER_IDS"), "balance allotment is not admin-gated");
+assert.ok(!balanceSrc.includes("SELECT voice_seconds"), "balance GET does not read the stale accounts.voice_seconds column");
 assert.ok(balanceSrc.includes("no-store"), "balance forbids HTTP cache");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 assert.ok(!balanceSrc.includes("plan:"), "balance does not add a plan field for iOS");
@@ -368,6 +403,49 @@ assert.ok(!voiceSrc.includes("ANY($2::int[])"), "pack cap does not bind a JS arr
 assert.ok(voiceSrc.includes("pack credit query failed"), "failed pack lookup is logged and retried");
 assert.ok(voiceSrc.includes("keepMonthlyResetInCurrentPeriod"), "do not rewind the monthly clock into a due refill");
 assert.ok(voiceSrc.includes("stripe_event_id LIKE 'cs:%'"), "reconcile subscription rows use cs: event ids");
+assert.ok(voiceSrc.includes("computeLedgerVoiceSeconds"), "wallet remaining is computed from the pack ledger");
+assert.ok(voiceSrc.includes("stripe_event_id LIKE 'backfill:%'"), "charge-backed backfill rows count as earned packs");
+assert.ok(voiceSrc.includes("stripeChargeId"), "creditVoiceSeconds is idempotent on charge id");
+assert.ok(voiceSrc.includes("writeThroughVoiceSeconds"), "computed remaining write-throughs accounts.voice_seconds");
+assert.ok(existsSync(new URL("./backfill-voice-credit-ledger.mjs", import.meta.url)), "one-off Stripe ledger backfill script");
+{
+  const readFn = voiceSrc.slice(
+    voiceSrc.indexOf("export async function readVoiceSeconds"),
+    voiceSrc.indexOf("export async function creditVoiceSeconds"),
+  );
+  assert.ok(readFn.includes("computeLedgerVoiceSeconds"), "readVoiceSeconds returns the ledger sum");
+  assert.ok(readFn.includes("writeThroughVoiceSeconds"), "readVoiceSeconds may write-through the computed sum");
+  assert.ok(!readFn.includes("SELECT voice_seconds FROM accounts WHERE user_id = $1"), "readVoiceSeconds does not trust the stale column");
+}
+{
+  const computeFn = voiceSrc.slice(
+    voiceSrc.indexOf("export async function computeLedgerVoiceSeconds"),
+    voiceSrc.indexOf("async function loadPackCreditRows"),
+  );
+  assert.ok(computeFn.includes("loadEarnedPackCreditRows"), "ledger sums unique earned pack rows");
+  assert.ok(computeFn.includes("isEarnedPackEventId"), "ledger only counts evt_ / backfill: pack events");
+  assert.ok(computeFn.includes("used_seconds"), "ledger subtracts settled used_seconds");
+  assert.ok(computeFn.includes("started_at >= $2::timestamptz"), "settled usage starts at the first earned pack");
+  assert.ok(computeFn.includes("hold_seconds"), "ledger subtracts open holds");
+  assert.ok(computeFn.includes("Math.max(0, packSeconds - used - held)"), "Ian 7200 − 9718 − holds floors at 0");
+  assert.ok(computeFn.includes("toLedgerTimestamp"), "first pack bind is ISO, not Date.toString()");
+}
+assert.ok(voiceSrc.includes("toISOString"), "ledger timestamps serialize as ISO timestamptz");
+assert.ok(!voiceSrc.includes("createdAt: String(row.created_at"), "created_at Date objects are not String()'d into SQL");
+{
+  const earnedFn = voiceSrc.slice(
+    voiceSrc.indexOf("async function loadEarnedPackCreditRows"),
+    voiceSrc.indexOf("export async function capAllottedMinutesToPacks"),
+  );
+  assert.ok(earnedFn.includes("source = 'stripe'"), "earned packs ignore source=test");
+  assert.ok(earnedFn.includes("stripe_event_id LIKE 'evt_%'"), "earned packs count webhook evt_ rows");
+  assert.ok(earnedFn.includes("stripe_event_id LIKE 'backfill:%'"), "earned packs count backfill: charge rows");
+  assert.ok(earnedFn.includes("seconds IN ("), "earned packs are Whisper/Murmur/Echo only");
+  assert.ok(!earnedFn.includes("9000"), "earned packs do not count Lexi Pro 9000s");
+  assert.ok(!earnedFn.includes("LIKE 'cs:%'"), "earned packs do not count cs: phantom reconcile rows");
+}
+assert.equal(Math.max(0, 7200 - 9718 - 0), 0, "two Echo evt_ rows minus 9718 settled is 0");
+assert.equal(Math.max(0, 3600 - 100 - 0), 3500, "ledger remainder is not the Echo 3600 cap");
 assert.ok(voiceSrc.includes("maybeRefillMonthlyMinutes"), "call start can refill monthly minutes");
 assert.ok(voiceSrc.includes("await maybeRefillMonthlyMinutes(accountId)"), "placeVoiceHold refills before debit");
 assert.ok(voiceSrc.includes("interval '30 days'"), "monthly refill is a 30-day window");
@@ -388,6 +466,12 @@ assert.ok(realtimeSrc.includes("@/lib/xai/client-secret"), "web mint does not im
 assert.ok(!realtimeSrc.includes("process.env.XAI_API_KEY"), "web mint does not inline process.env.XAI_API_KEY");
 assert.ok(realtimeSrc.includes("requireAuthSessionUserId"), "mint uses signed session");
 assert.ok(realtimeSrc.includes("placeVoiceHold"), "mint holds");
+assert.ok(realtimeSrc.includes("creditPaidCheckoutsForUser"), "web mint credits paid packs before the hold");
+assert.ok(realtimeSrc.includes("maybeRefillMonthlyMinutes"), "web mint refills before the min-balance check");
+assert.ok(
+  realtimeSrc.indexOf("await maybeRefillMonthlyMinutes") < realtimeSrc.indexOf("placeVoiceHold(userId)"),
+  "web mint refills before placeVoiceHold",
+);
 assert.ok(realtimeSrc.includes('rehearsal === true') || realtimeSrc.includes("rehearsal === true"), "rehearsal skips mint");
 assert.ok(realtimeSrc.includes("402"), "402 out of minutes");
 assert.ok(realtimeSrc.includes("requireAuthSessionUserId"), "mint uses signed session");
@@ -425,6 +509,14 @@ assert.ok(mintSrc.includes('effort: "none"'), "mint pins reasoning off so the se
 const iosSessionSrc = readFileSync(new URL("../lib/ios/session.ts", import.meta.url), "utf8");
 assert.ok(iosSessionSrc.includes("model: REALTIME_VOICE_MODEL"), "iOS session.update pins the model");
 
+const iosSessionRoute = readFileSync(new URL("../app/api/ios/session/route.ts", import.meta.url), "utf8");
+assert.ok(iosSessionRoute.includes("creditPaidCheckoutsForUser"), "iOS session credits paid packs before the hold");
+assert.ok(iosSessionRoute.includes("maybeRefillMonthlyMinutes"), "iOS session refills before the min-balance check");
+assert.ok(
+  iosSessionRoute.indexOf("await maybeRefillMonthlyMinutes") < iosSessionRoute.indexOf("placeVoiceHold(userId)"),
+  "iOS session refills before placeVoiceHold",
+);
+
 const iosController = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/App/LexiAppController.swift", import.meta.url),
   "utf8",
@@ -443,6 +535,17 @@ assert.ok(iosController.includes('openSitePath("/account")'), "iOS Manage accoun
 assert.ok(iosController.includes("account.apiHost"), "iOS site URLs use AccountStore.apiHost");
 assert.ok(iosController.includes("UIApplication.shared.open"), "iOS opens Safari, not an in-app checkout session");
 assert.ok(iosController.includes("refreshBilling"), "iOS refreshes minutes from GET /api/billing/balance");
+{
+  const openRealtimeFn = iosController.slice(
+    iosController.indexOf("private func openRealtime"),
+    iosController.indexOf("private func applyVoiceHold"),
+  );
+  assert.ok(openRealtimeFn.includes("await refreshBilling()"), "iOS Connect awaits backfilled balance");
+  assert.ok(
+    openRealtimeFn.indexOf("await refreshBilling()") < openRealtimeFn.indexOf("startRealtimeSession"),
+    "iOS awaits GET /api/billing/balance before POST /api/ios/session",
+  );
+}
 assert.ok(iosController.includes("settleIfIdle"), "iOS refreshes minutes when returning to the app");
 assert.ok(iosController.includes("voiceSeconds / 60"), "iOS floors voiceSeconds / 60");
 assert.ok(!iosController.includes("minutesLabel = balance.label"), "iOS does not echo API label");
@@ -483,13 +586,34 @@ const iosHome = readFileSync(
 assert.ok(iosHome.includes("voiceSeconds / 60"), "iOS home floors voiceSeconds / 60");
 assert.ok(!iosHome.includes("app.minutesLabel"), "iOS home does not echo minutesLabel");
 assert.ok(iosHome.includes("showSettings"), "minutes pill opens Settings");
-assert.ok(iosHome.includes("scheduleLaunchWork"), "VoiceHomeView kicks launch work after first appearance");
+assert.ok(iosHome.includes("scheduleLaunchWork"), "VoiceHomeView kicks launch work after composer appears");
+assert.ok(iosHome.includes("onAppear"), "iOS launch work waits until the composer is on screen");
+assert.ok(!iosHome.includes("WatchURLField"), "iOS home has no WatchURLField");
+assert.ok(!iosHome.includes("paste a video URL"), "iOS home has no video URL paste field");
+assert.ok(iosHome.includes("Share screen"), "iOS home has Share screen");
+assert.ok(iosController.includes("toggleScreenShare"), "iOS starts ReplayKit screen share from home");
+assert.ok(iosController.includes("sendVisionFrame(source: \"screen\""), "iOS screen frames use the voice socket");
+assert.ok(iosController.includes("allowIdleBillingRefresh"), "iOS idle/settings do not refetch balance during launch");
+{
+  const initFn = iosController.slice(
+    iosController.indexOf("override init()"),
+    iosController.indexOf("func scheduleLaunchWork()"),
+  );
+  assert.ok(!initFn.includes("refreshBilling"), "iOS init does not fetch balance before the composer");
+  assert.ok(!initFn.includes("scheduleLaunchWork"), "iOS init does not run launch billing");
+}
 
 const musicSrc = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Music/MusicController.swift", import.meta.url),
   "utf8",
 );
-assert.ok(musicSrc.includes("import StoreKit"), "StoreKit stays in the target via MusicController");
+assert.ok(!musicSrc.includes("import StoreKit"), "iOS MusicController does not import StoreKit");
+assert.ok(!musicSrc.includes("import MusicKit"), "iOS MusicController does not import MusicKit");
+assert.ok(!iosHome.includes("Connect Apple Music"), "iOS home has no Connect Apple Music pill");
+assert.ok(!iosHome.includes("MusicBarView"), "iOS home has no Apple Music bar");
+assert.ok(iosHome.includes("ComposerBar("), "iOS home always shows ComposerBar");
+assert.ok(!iosSettings.includes("Route through PS5"), "settings has no PS5 party-chat toggle");
+assert.ok(!iosController.includes("routeThroughPS5PartyChat"), "iOS controller has no PS5 routing");
 
 const accountSrc = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/AccountStore.swift", import.meta.url),
@@ -526,6 +650,9 @@ assert.ok(stripeSrc.includes("resolveVoicePackFromCheckout"), "webhook falls bac
 assert.ok(stripeSrc.includes("price_id: input.priceId"), "checkout stamps price_id metadata");
 assert.ok(stripeSrc.includes("creditPaidCheckoutsForUser"), "page load can credit paid Checkout sessions");
 assert.ok(stripeSrc.includes('mode: "set"'), "pack checkout SETS allotted minutes to the purchased pack");
+assert.ok(stripeSrc.includes("backfill:"), "missed-webhook reconcile uses backfill: charge ids, not cs: phantoms");
+assert.ok(stripeSrc.includes("stripeChargeId"), "webhook passes charge id so backfill rows do not double-credit");
+assert.ok(!stripeSrc.includes("stripeEventId: `cs:${session.id}`"), "pack reconcile no longer writes cs: event ids");
 assert.ok(stripeSrc.includes("(left.created ?? 0) - (right.created ?? 0)"), "reconcile applies older packs before the latest SET");
 assert.ok(stripeSrc.includes("isSubscriptionCheckout(session)) continue"), "page load does not reload subscription minutes");
 assert.ok(stripeSrc.includes("reverseReconciledSubscriptionCredits"), "page load undoes a reloaded subscription grant");
@@ -545,6 +672,8 @@ const subscribeClient = readFileSync(new URL("../app/subscribe/subscribe-client.
 assert.ok(subscribeClient.includes("/api/checkout/subscribe"), "subscribe posts subscription checkout");
 assert.ok(subscribeClient.includes('credentials: "include"'), "subscribe checkout sends session cookie");
 assert.ok(subscribeClient.includes("Subscribe"), "subscribe button");
+assert.ok(subscribeClient.includes("Manage"), "subscribed users see Manage on /subscribe");
+assert.ok(subscribeClient.includes('href="/account"'), "subscribe Manage goes to /account");
 assert.ok(!subscribeClient.includes("/?next=/subscribe"), "unsigned subscribe stays on /subscribe");
 assert.ok(!subscribeClient.includes('window.location.href = "/"'), "subscribe does not send users home");
 assert.ok(subscribeClient.includes("Sign in to subscribe"), "unsigned subscribe shows sign-in");
@@ -558,7 +687,7 @@ assert.ok(!subscribeApi.includes("iosReturn"), "subscribe route has no iosReturn
 assert.ok(!subscribeApi.includes("client"), "subscribe route ignores client:ios");
 
 const headerSrc = readFileSync(new URL("../components/site-header.tsx", import.meta.url), "utf8");
-assert.ok(headerSrc.includes("Manage subscription"), "header shows Manage subscription when subscribed");
+assert.ok(headerSrc.includes('subscribed ? "Manage" : "Subscribe"'), "header shows Manage when subscribed");
 assert.ok(headerSrc.includes('href={signedIn ? "/account" : "/"}'), "signed-in header Account goes to /account");
 assert.ok(headerSrc.includes('subscribed ? "/account" : "/subscribe"'), "header Subscribe follows billing status");
 
@@ -569,6 +698,9 @@ assert.ok(!layoutSrc.includes("subscribed={subscribed}"), "layout does not pass 
 
 const accountPage = readFileSync(new URL("../app/account/page.tsx", import.meta.url), "utf8");
 assert.ok(accountPage.includes("creditPaidCheckoutsForUser"), "account credits paid packs before showing minutes");
+assert.ok(accountPage.includes("maybeRefillMonthlyMinutes"), "account refills monthly minutes before showing minutes");
+assert.ok(accountPage.includes("min-h-dvh"), "account main has a viewport min-height so iOS Safari cannot collapse it");
+assert.ok(!/main className="[^"]*min-h-0/.test(accountPage), "account main is not min-h-0");
 assert.ok(accountPage.includes("readIncomingAuthSession"), "account page uses shared session helper");
 assert.ok(accountPage.includes("readAccountSubscribed"), "account page loads subscription status");
 assert.ok(accountPage.includes("readAllottedVoiceSeconds"), "account page loads allotted minute balance");
@@ -592,6 +724,9 @@ assert.ok(accountClient.includes("Cancel subscription"), "account has cancel but
 assert.ok(accountClient.includes("/api/billing/cancel"), "account cancel posts to billing cancel");
 assert.ok(accountClient.includes("active") && accountClient.includes("none"), "account shows active or none");
 assert.ok(accountClient.includes("Sign in"), "unsigned account shows sign-in");
+assert.ok(accountClient.includes("Subscribe"), "account shows Subscribe");
+assert.ok(accountClient.includes("min-h-dvh"), "account client fills the viewport");
+assert.ok(!accountClient.includes("min-h-0"), "account client is not a collapsing min-h-0 flex child");
 assert.ok(accountClient.includes('href="/"'), "unsigned account can go home");
 
 const cancelApi = readFileSync(new URL("../app/api/billing/cancel/route.ts", import.meta.url), "utf8");
@@ -814,7 +949,10 @@ assert.ok(!chatReply.includes("mintXaiClientSecret"), "in-app text does not mint
 assert.ok(!chatReply.includes("placeVoiceHold"), "in-app text does not place a wallet hold");
 assert.ok(!chatRoute.includes("placeVoiceHold"), "chat route does not place a voice hold");
 
-assert.ok(homeSrc.includes('useState<ChatMode>("voice")'), "home defaults to voice");
+assert.ok(homeSrc.includes('useState<ChatMode>("text")'), "home defaults to text");
+assert.ok(homeSrc.includes('id="lexi-composer"'), "home always renders the text composer");
+assert.ok(homeSrc.includes('placeholder={placeholder}'), "home composer is a visible text field");
+assert.ok(homeSrc.includes("shrink-0 bg-background"), "home pins the composer dock");
 assert.ok(homeSrc.includes('setChatMode("text")'), "home can enter text mode");
 assert.ok(homeSrc.includes('aria-label="Chat mode"'), "home has a first-class text/voice control");
 assert.ok(homeSrc.includes("if (text && !liveSession)"), "idle composer send is text chat");

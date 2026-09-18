@@ -20,7 +20,7 @@ export function SiteHeader({
           Buy minutes
         </Link>
         <Link href={subscribed ? "/account" : "/subscribe"} className={pillClass}>
-          {subscribed ? "Manage subscription" : "Subscribe"}
+          {subscribed ? "Manage" : "Subscribe"}
         </Link>
         <Link href={signedIn ? "/account" : "/"} className={pillClass}>
           {signedIn ? "Account" : "Sign in"}
