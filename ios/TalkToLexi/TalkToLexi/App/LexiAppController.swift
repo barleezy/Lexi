@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import UIKit
 
 @MainActor
 final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelegate {
@@ -31,12 +32,18 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     @Published private(set) var ps5ChatPortStatus = ""
     @Published private(set) var psnOnlineId = "Barleezybaby"
     @Published private(set) var psnLoginName = "barleezyfbaby"
+    @Published private(set) var minutesLabel = ""
+    @Published private(set) var voiceSeconds = 0
+    @Published private(set) var subscribed = false
+    @Published private(set) var billingMessage = ""
 
     private var connectGeneration = 0
     private var refreshGeneration = 0
     private var authRefreshCount = 0
     private var walletLeftover = 0
     private var extendingHold = false
+    private var callStartedAt: Date?
+    private var limitWorkItem: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
     var phaseLabel: String {
@@ -81,7 +88,10 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         psnOnlineId = account.psnOnlineId
         psnLoginName = account.psnLoginName
         refreshStatus()
-        Task { await refreshExtras() }
+        Task {
+            await api.settlePendingVoiceSessions()
+            await refreshExtras()
+        }
     }
 
     func setRouteThroughPS5PartyChat(_ on: Bool) {
@@ -121,8 +131,57 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         if account.isSignedIn {
             await music.refreshStatus(using: api)
             channelNames = await api.channels()
+            await refreshBilling()
+        } else {
+            clearBilling()
         }
         refreshStatus()
+    }
+
+    func refreshBilling() async {
+        guard account.isSignedIn else {
+            clearBilling()
+            return
+        }
+        do {
+            let balance = try await api.billingBalance()
+            voiceSeconds = balance.voiceSeconds
+            minutesLabel = balance.label
+            subscribed = balance.subscribed
+            billingMessage = ""
+        } catch {
+            if minutesLabel.isEmpty {
+                billingMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func openBuyMinutes() {
+        Task { await openSitePath("/buy") }
+    }
+
+    func openSubscribe() {
+        Task { await openSitePath("/subscribe") }
+    }
+
+    func openManageAccount() {
+        Task { await openSitePath("/account") }
+    }
+
+    private func openSitePath(_ path: String) async {
+        if !account.isSignedIn {
+            await signInFromPhone()
+            if !account.isSignedIn { return }
+        }
+        guard let url = URL(string: path, relativeTo: account.apiHost)?.absoluteURL else { return }
+        await UIApplication.shared.open(url)
+    }
+
+    private func clearBilling() {
+        minutesLabel = ""
+        voiceSeconds = 0
+        subscribed = false
+        billingMessage = ""
     }
 
     func toggleSignIn() {
@@ -147,15 +206,25 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
 
     func signOut() {
         connectGeneration += 1
+        isConnecting = false
+        extendingHold = false
+        walletLeftover = 0
+        limitWorkItem?.cancel()
+        limitWorkItem = nil
+        callStartedAt = nil
+        let voiceSessionId = realtime.voiceSessionId
         realtime.stop()
+        realtime.memorySessionId = nil
+        realtime.voiceSessionId = nil
         music.stop()
         watch.clear(notify: false)
         camera.stop(notify: false)
         toys.reset()
-        isConnecting = false
         account.signOut()
         channelNames = []
+        clearBilling()
         refreshStatus()
+        Task { await api.settleVoiceSession(voiceSessionId: voiceSessionId) }
     }
 
     func toggleCall() {
@@ -255,6 +324,9 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         isConnecting = false
         extendingHold = false
         walletLeftover = 0
+        limitWorkItem?.cancel()
+        limitWorkItem = nil
+        callStartedAt = nil
         let sessionId = realtime.memorySessionId
         let voiceSessionId = realtime.voiceSessionId
         realtime.stop()
@@ -267,15 +339,26 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         refreshStatus()
         Task {
             await api.settleVoiceSession(voiceSessionId: voiceSessionId)
+            await api.settlePendingVoiceSessions()
             await api.endMemorySession(sessionId: sessionId)
+        }
+    }
+
+    func settleIfIdle() {
+        guard !realtime.isLive, !isConnecting, !extendingHold else { return }
+        Task {
+            await api.settlePendingVoiceSessions()
+            await refreshBilling()
         }
     }
 
     private func openRealtime(generation gen: Int) async throws {
         // Fresh Call: no previousSessionId, no prior transcript. Recalled facts still load server-side.
+        await api.settlePendingVoiceSessions()
         AccountStore.shared.clearCallContinuity()
         realtime.memorySessionId = nil
         realtime.voiceSessionId = nil
+        callStartedAt = nil
         let session = try await api.startRealtimeSession(
             sessionId: nil,
             previousSessionId: nil,
@@ -288,23 +371,16 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         guard gen == connectGeneration else { return }
         realtime.memorySessionId = session.sessionId
         realtime.voiceSessionId = session.voiceSessionId
-        applyVoiceHold(session)
-        var update = session.sessionUpdate
-        if update == nil {
-            update = [
-                "type": "session.update",
-                "session": [
-                    "voice": "aria",
-                    "instructions": session.instructions ?? "",
-                    "turn_detection": ["type": "server_vad"],
-                ],
-            ]
+        if let voiceSessionId = session.voiceSessionId {
+            account.rememberPendingVoiceSession(voiceSessionId)
         }
+        applyVoiceHold(session)
+        applySessionLimits(session)
         isConnecting = false
         realtime.start(
             token: session.token,
-            realtimeURL: session.realtimeUrl ?? "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
-            sessionUpdate: update ?? [:]
+            realtimeURL: VoiceRealtimeConfig.url,
+            sessionUpdate: pinnedSessionUpdate(session)
         )
         if watch.isLoaded {
             realtime.notifyVideo(active: true, title: watch.title)
@@ -321,6 +397,11 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
         let lead: Double = walletLeftover > 0 ? 12 : 0
         realtime.armVoiceCap(capAtMs: capAtMs - lead * 1000) { [weak self] in
             guard let self else { return }
+            if let message = self.sessionLimitMessage() {
+                self.lastError = message
+                self.endCall()
+                return
+            }
             if self.walletLeftover > 0 {
                 self.extendHoldOrHangup()
             } else {
@@ -328,6 +409,68 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
                 self.endCall()
             }
         }
+    }
+
+    private func applySessionLimits(_ session: IosSessionResponse) {
+        if callStartedAt == nil {
+            callStartedAt = parseStartedAt(session.startedAt) ?? Date()
+        }
+        armSessionLimits()
+    }
+
+    private func armSessionLimits() {
+        limitWorkItem?.cancel()
+        guard callStartedAt != nil else { return }
+        if let message = sessionLimitMessage() {
+            lastError = message
+            endCall()
+            return
+        }
+        let wait = VoiceRealtimeConfig.secondsUntilLimit(elapsed: callElapsed())
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if let message = self.sessionLimitMessage() {
+                self.lastError = message
+                self.endCall()
+            }
+        }
+        limitWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+
+    private func callElapsed() -> TimeInterval {
+        guard let callStartedAt else { return 0 }
+        return Date().timeIntervalSince(callStartedAt)
+    }
+
+    private func sessionLimitMessage() -> String? {
+        VoiceRealtimeConfig.limitMessage(elapsed: callElapsed())
+    }
+
+    private func parseStartedAt(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: raw) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: raw)
+    }
+
+    private func pinnedSessionUpdate(_ session: IosSessionResponse) -> [String: Any] {
+        var update = session.sessionUpdate ?? [
+            "type": "session.update",
+            "session": [
+                "voice": "aria",
+                "instructions": session.instructions ?? "",
+                "turn_detection": ["type": "server_vad"],
+            ] as [String: Any],
+        ]
+        var payload = update["session"] as? [String: Any] ?? [:]
+        payload["model"] = VoiceRealtimeConfig.model
+        payload["reasoning"] = ["effort": "none"]
+        update["type"] = "session.update"
+        update["session"] = payload
+        return update
     }
 
     private func extendHoldOrHangup() {
@@ -355,22 +498,15 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
                 guard realtime.isLive else { return }
                 realtime.memorySessionId = session.sessionId ?? sessionId
                 realtime.voiceSessionId = session.voiceSessionId ?? voiceSessionId
-                applyVoiceHold(session)
-                var update = session.sessionUpdate
-                if update == nil {
-                    update = [
-                        "type": "session.update",
-                        "session": [
-                            "voice": "aria",
-                            "instructions": session.instructions ?? "",
-                            "turn_detection": ["type": "server_vad"],
-                        ],
-                    ]
+                if let nextId = session.voiceSessionId ?? (voiceSessionId.isEmpty ? nil : voiceSessionId) {
+                    account.rememberPendingVoiceSession(nextId)
                 }
+                applyVoiceHold(session)
+                applySessionLimits(session)
                 realtime.start(
                     token: session.token,
-                    realtimeURL: session.realtimeUrl ?? "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
-                    sessionUpdate: update ?? [:]
+                    realtimeURL: VoiceRealtimeConfig.url,
+                    sessionUpdate: pinnedSessionUpdate(session)
                 )
             } catch {
                 lastError = error.localizedDescription
@@ -476,6 +612,9 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
             self.isConnecting = false
             if !session.isLive {
                 self.camera.stop(notify: false)
+                if !self.extendingHold {
+                    self.endCall()
+                }
             }
         }
     }
@@ -489,6 +628,17 @@ final class LexiAppController: NSObject, ObservableObject, RealtimeSessionDelega
     nonisolated func realtimeNeedsSessionRefresh(_ session: RealtimeSession) {
         Task { @MainActor in
             self.refreshVoiceSession()
+        }
+    }
+
+    nonisolated func realtimeDidDisconnect(_ session: RealtimeSession) {
+        Task { @MainActor in
+            self.isLive = false
+            self.isConnecting = false
+            self.camera.stop(notify: false)
+            if self.extendingHold { return }
+            await self.api.settleVoiceSession(voiceSessionId: session.voiceSessionId)
+            await self.api.settlePendingVoiceSessions()
         }
     }
 

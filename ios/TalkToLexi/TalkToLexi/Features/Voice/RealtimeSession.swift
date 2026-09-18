@@ -24,11 +24,13 @@ protocol RealtimeSessionDelegate: AnyObject {
     func realtime(_ session: RealtimeSession, completedTurn user: String, assistant: String)
     func realtime(_ session: RealtimeSession, chatPortStatus: String)
     func realtimeNeedsSessionRefresh(_ session: RealtimeSession)
+    func realtimeDidDisconnect(_ session: RealtimeSession)
 }
 
 extension RealtimeSessionDelegate {
     func realtime(_ session: RealtimeSession, chatPortStatus: String) {}
     func realtimeNeedsSessionRefresh(_ session: RealtimeSession) {}
+    func realtimeDidDisconnect(_ session: RealtimeSession) {}
 }
 
 final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
@@ -188,6 +190,10 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         phase = .idle
         if notify {
             delegate?.realtime(self, caption: "")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.delegate?.realtimeDidDisconnect(self)
+            }
         }
     }
 

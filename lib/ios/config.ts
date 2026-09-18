@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
-export const IOS_REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest";
+/** Keep in lockstep with REALTIME_VOICE_URL in lib/xai/realtime-model.ts. */
+export const IOS_REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0";
 export const IOS_TARGET_RATE = 48_000;
 export const IOS_VOICE = "aria";
 export const IOS_AUTH_PATH = "/ios/signin";

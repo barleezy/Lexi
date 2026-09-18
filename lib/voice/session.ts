@@ -124,6 +124,7 @@ import {
   parseAppleMusicPlaylistIdFromInput,
 } from "@/lib/apple-music/config";
 import { fortniteRealtimeTools, sanitizeFortniteToolResult } from "@/lib/voice/fortnite-tools";
+import { REALTIME_VOICE_MODEL } from "@/lib/xai/realtime-model";
 
 export type { GeneratedMediaItem };
 
@@ -164,7 +165,7 @@ type SessionHandlers = {
 
 export type VideoContextProvider = () => Promise<VideoContextSnapshot>;
 
-const REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest&ngrok-skip-browser-warning=1";
+const REALTIME_URL = `wss://api.x.ai/v1/realtime?model=${REALTIME_VOICE_MODEL}&ngrok-skip-browser-warning=1`;
 
 // Lexi (Beta): persona+rules live in lib/voice/persona.ts (shared with text channels).
 
@@ -768,6 +769,7 @@ function buildSessionUpdate(
   return {
     type: "session.update",
     session: {
+      model: REALTIME_VOICE_MODEL,
       voice: "aria",
       instructions: buildInstructions(
         memoryInstructions,
@@ -1688,21 +1690,34 @@ export class VoiceSession {
     this.settlePosted = true;
     const voiceSessionId = this.voiceSessionId;
     const userId = clientUserId();
-    return fetch("/api/voice/settle", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "x-lexi-user-id": userId,
-        "ngrok-skip-browser-warning": "1",
-      },
-      body: JSON.stringify({ voiceSessionId, userId }),
-      keepalive: true,
-    })
-      .then(() => undefined)
-      .catch(() => {
-        // settle sweeper will catch orphans
+    const post = (): Promise<Response> =>
+      fetch("/api/voice/settle", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-lexi-user-id": userId,
+          "ngrok-skip-browser-warning": "1",
+        },
+        body: JSON.stringify({ voiceSessionId, userId }),
+        keepalive: true,
       });
+    const attempt = (left: number): Promise<void> =>
+      post()
+        .then((response) => {
+          if (response.ok || response.status === 404) return;
+          if (left <= 0) return;
+          return new Promise<void>((resolve) => {
+            setTimeout(() => resolve(attempt(left - 1)), 400);
+          });
+        })
+        .catch(() => {
+          if (left <= 0) return;
+          return new Promise<void>((resolve) => {
+            setTimeout(() => resolve(attempt(left - 1)), 400);
+          });
+        });
+    return attempt(4);
   }
 
   private openWebSocket(token: string, resume: boolean) {

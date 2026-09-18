@@ -1,6 +1,6 @@
 /**
  * Text-only Grok model for memory, summaries, video-context, channels.
- * Never put this on the realtime WebSocket URL (Call stays grok-voice-latest).
+ * Never put this on the realtime WebSocket URL (Call stays on the pinned voice model).
  */
 export const TEXT_FAST_MODEL = "grok-4-1-fast-reasoning";
 export const TEXT_FAST_MAX_TOKENS = 800;

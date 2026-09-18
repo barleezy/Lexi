@@ -9,6 +9,10 @@ import type { MusicSessionState } from "@/lib/voice/persona";
 import {
   OUT_OF_MINUTES_CODE,
   OUT_OF_MINUTES_MESSAGE,
+  SESSION_LIMIT_CODE,
+  VOICE_MAX_SESSION_SECONDS,
+  VOICE_MAX_SESSION_SPEND_USD,
+  estimateVoiceSessionSpendUsd,
   extendVoiceHold,
   placeVoiceHold,
   REALTIME_VOICE_MODEL,
@@ -98,10 +102,18 @@ export async function POST(request: Request) {
       ? await extendVoiceHold(userId, resumeVoiceSessionId)
       : await placeVoiceHold(userId);
   if (!hold.ok) {
-    const status = hold.code === OUT_OF_MINUTES_CODE ? 402 : hold.code === "busy" ? 409 : 401;
+    const status =
+      hold.code === OUT_OF_MINUTES_CODE || hold.code === SESSION_LIMIT_CODE
+        ? 402
+        : hold.code === "busy"
+          ? 409
+          : 401;
     return Response.json(
       {
-        error: hold.code === OUT_OF_MINUTES_CODE ? OUT_OF_MINUTES_MESSAGE : hold.error,
+        error:
+          hold.code === OUT_OF_MINUTES_CODE
+            ? OUT_OF_MINUTES_MESSAGE
+            : hold.error,
         code: hold.code,
       },
       { status },
@@ -151,7 +163,13 @@ export async function POST(request: Request) {
     voiceSessionId: hold.voiceSessionId,
     holdSeconds: hold.holdSeconds,
     voiceSeconds: hold.voiceSeconds,
+    startedAt: hold.startedAt,
     capAtMs: hold.capAtMs,
+    maxDurationSeconds: VOICE_MAX_SESSION_SECONDS,
+    maxSpendUsd: VOICE_MAX_SESSION_SPEND_USD,
+    estimatedSpendUsd: estimateVoiceSessionSpendUsd(
+      Math.max(0, Math.floor((Date.now() - Date.parse(hold.startedAt)) / 1000) || 0),
+    ),
     mintTtlSeconds: minted.ttl,
     decayState: built.decayState,
     memoryInstructions: built.memoryInstructions,

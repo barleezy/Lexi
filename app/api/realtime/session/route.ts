@@ -14,6 +14,7 @@ import { appendVoiceLog, isValidSessionId, isVoiceLogEnabled } from "@/lib/voice
 import {
   OUT_OF_MINUTES_CODE,
   OUT_OF_MINUTES_MESSAGE,
+  SESSION_LIMIT_CODE,
   extendVoiceHold,
   placeVoiceHold,
   readOpenVoiceSession,
@@ -122,7 +123,12 @@ export async function POST(request: Request) {
   if (extendHold && resumeVoiceSessionId) {
     extended = await extendVoiceHold(userId, resumeVoiceSessionId);
     if (!extended.ok) {
-      const status = extended.code === OUT_OF_MINUTES_CODE ? 402 : extended.code === "busy" ? 409 : 401;
+      const status =
+        extended.code === OUT_OF_MINUTES_CODE || extended.code === SESSION_LIMIT_CODE
+          ? 402
+          : extended.code === "busy"
+            ? 409
+            : 401;
       return Response.json(
         {
           error: extended.code === OUT_OF_MINUTES_CODE ? OUT_OF_MINUTES_MESSAGE : extended.error,

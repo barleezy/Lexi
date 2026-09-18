@@ -1,4 +1,5 @@
 import { readXaiClientSecret } from "@/lib/ios/config";
+import { REALTIME_VOICE_MODEL } from "@/lib/xai/realtime-model";
 
 const UPSTREAM = "https://api.x.ai/v1/realtime/client_secrets";
 
@@ -10,7 +11,13 @@ export async function mintXaiClientSecret(apiKey: string, ttlSeconds = 3600) {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ expires_after: { seconds: ttl } }),
+    body: JSON.stringify({
+      expires_after: { seconds: ttl },
+      session: {
+        model: REALTIME_VOICE_MODEL,
+        reasoning: { effort: "none" },
+      },
+    }),
   });
   let data: Parameters<typeof readXaiClientSecret>[0] = {};
   try {

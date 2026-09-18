@@ -1,6 +1,31 @@
 import Foundation
 import os
 
+enum VoiceRealtimeConfig {
+    static let model = "grok-voice-think-fast-1.0"
+    static let url = "wss://api.x.ai/v1/realtime?model=\(model)"
+    static let maxDuration: TimeInterval = 30 * 60
+    static let maxSpendUsd = 5.0
+    static let usdPerAudioMinute = 0.08
+
+    static func estimatedSpendUsd(elapsed: TimeInterval) -> Double {
+        max(0, elapsed) / 60.0 * usdPerAudioMinute
+    }
+
+    static func limitMessage(elapsed: TimeInterval) -> String? {
+        if elapsed >= maxDuration { return "Call time limit reached." }
+        if estimatedSpendUsd(elapsed: elapsed) >= maxSpendUsd { return "Call spend limit reached." }
+        return nil
+    }
+
+    static func secondsUntilLimit(elapsed: TimeInterval) -> TimeInterval {
+        let durationLeft = maxDuration - elapsed
+        let spendLeft = maxSpendUsd - estimatedSpendUsd(elapsed: elapsed)
+        let spendLeftSeconds = usdPerAudioMinute > 0 ? (spendLeft / usdPerAudioMinute) * 60.0 : durationLeft
+        return max(0, min(durationLeft, spendLeftSeconds))
+    }
+}
+
 struct IosSessionResponse {
     var token: String
     var realtimeUrl: String?
@@ -11,7 +36,10 @@ struct IosSessionResponse {
     var voiceSessionId: String?
     var holdSeconds: Int?
     var voiceSeconds: Int?
+    var startedAt: String?
     var capAtMs: Double?
+    var maxDurationSeconds: Int?
+    var maxSpendUsd: Double?
     var decayState: String?
     var memoryInstructions: String?
     var priorChat: String?
@@ -41,6 +69,12 @@ struct WatchResolveResult {
     var mediaUrl: String
     var error: String
     var code: String
+}
+
+struct BillingBalance {
+    var voiceSeconds: Int
+    var label: String
+    var subscribed: Bool
 }
 
 struct GeneratedMediaItem: Identifiable, Equatable {
@@ -131,6 +165,13 @@ final class LexiAPIClient {
             if code == "out_of_minutes" {
                 throw NSError(domain: "LexiAPI", code: 402, userInfo: [NSLocalizedDescriptionKey: "Out of minutes."])
             }
+            if code == "session_limit" {
+                throw NSError(
+                    domain: "LexiAPI",
+                    code: 402,
+                    userInfo: [NSLocalizedDescriptionKey: (raw["error"] as? String) ?? "Call limit reached."]
+                )
+            }
             throw NSError(domain: "LexiAPI", code: 502, userInfo: [NSLocalizedDescriptionKey: (raw["error"] as? String) ?? "Could not start a voice session."])
         }
         return IosSessionResponse(
@@ -143,12 +184,24 @@ final class LexiAPIClient {
             voiceSessionId: raw["voiceSessionId"] as? String,
             holdSeconds: raw["holdSeconds"] as? Int,
             voiceSeconds: raw["voiceSeconds"] as? Int,
+            startedAt: raw["startedAt"] as? String,
             capAtMs: raw["capAtMs"] as? Double,
+            maxDurationSeconds: raw["maxDurationSeconds"] as? Int,
+            maxSpendUsd: raw["maxSpendUsd"] as? Double,
             decayState: raw["decayState"] as? String,
             memoryInstructions: raw["memoryInstructions"] as? String,
             priorChat: raw["priorChat"] as? String,
             instructions: raw["instructions"] as? String,
             sessionUpdate: raw["sessionUpdate"] as? [String: Any]
+        )
+    }
+
+    func billingBalance() async throws -> BillingBalance {
+        let raw = try await getJSON("/api/billing/balance")
+        return BillingBalance(
+            voiceSeconds: (raw["voiceSeconds"] as? Int) ?? 0,
+            label: (raw["label"] as? String) ?? "0s",
+            subscribed: (raw["subscribed"] as? Bool) ?? false
         )
     }
 
@@ -191,10 +244,37 @@ final class LexiAPIClient {
 
     func settleVoiceSession(voiceSessionId: String?) async {
         guard let voiceSessionId, !voiceSessionId.isEmpty else { return }
-        _ = try? await postJSON("/api/voice/settle", body: [
-            "userId": account.sessionUserId,
-            "voiceSessionId": voiceSessionId,
-        ])
+        account.rememberPendingVoiceSession(voiceSessionId)
+        var delayNs: UInt64 = 400_000_000
+        for attempt in 1...5 {
+            do {
+                let raw = try await postJSON("/api/voice/settle", body: [
+                    "userId": account.sessionUserId,
+                    "voiceSessionId": voiceSessionId,
+                ])
+                let ok = raw["ok"] as? Bool ?? false
+                let already = raw["alreadySettled"] as? Bool ?? false
+                if ok || already {
+                    account.forgetPendingVoiceSession(voiceSessionId)
+                    return
+                }
+            } catch {
+                if (error as NSError).code == 404 {
+                    account.forgetPendingVoiceSession(voiceSessionId)
+                    return
+                }
+            }
+            if attempt < 5 {
+                try? await Task.sleep(nanoseconds: delayNs)
+                delayNs *= 2
+            }
+        }
+    }
+
+    func settlePendingVoiceSessions() async {
+        for id in account.pendingVoiceSessionIds {
+            await settleVoiceSession(voiceSessionId: id)
+        }
     }
 
     func channels() async -> [String] {
@@ -353,7 +433,9 @@ final class LexiAPIClient {
         let server = (body["error"] as? String) ?? "HTTP \(http.statusCode)"
         let message: String
         if http.statusCode == 402 || code == "out_of_minutes" {
-            message = "Out of minutes."
+            message = code == "session_limit" ? (body["error"] as? String) ?? "Call limit reached." : "Out of minutes."
+        } else if code == "session_limit" {
+            message = (body["error"] as? String) ?? "Call limit reached."
         } else if http.statusCode == 401 || http.statusCode == 403 {
             message = "Sign-in expired. Sign in again. (\(http.statusCode))"
         } else {

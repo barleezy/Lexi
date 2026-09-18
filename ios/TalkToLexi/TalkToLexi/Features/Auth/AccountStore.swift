@@ -8,6 +8,7 @@ final class AccountStore {
         static let userId = "lexi.ios.userId"
         static let guestUserId = "lexi.ios.guestUserId"
         static let previousSessionId = "lexi.previousSessionId"
+        static let pendingVoiceSessionIds = "lexi.ios.pendingVoiceSessionIds"
         static let host = "lexi.ios.host"
         static let routeThroughPS5PartyChat = "lexi.ios.routeThroughPS5PartyChat"
         static let psnOnlineId = "lexi.ios.psnOnlineId"
@@ -77,6 +78,24 @@ final class AccountStore {
     /// Hang up: drop previousSessionId. Keep userId so recalled facts still load.
     func clearCallContinuity() {
         previousSessionId = ""
+    }
+
+    var pendingVoiceSessionIds: [String] {
+        defaults.stringArray(forKey: Key.pendingVoiceSessionIds) ?? []
+    }
+
+    func rememberPendingVoiceSession(_ id: String) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var ids = pendingVoiceSessionIds
+        if !ids.contains(trimmed) {
+            ids.append(trimmed)
+            defaults.set(ids, forKey: Key.pendingVoiceSessionIds)
+        }
+    }
+
+    func forgetPendingVoiceSession(_ id: String) {
+        defaults.set(pendingVoiceSessionIds.filter { $0 != id }, forKey: Key.pendingVoiceSessionIds)
     }
 
     func apply(token: String, userId: String) {

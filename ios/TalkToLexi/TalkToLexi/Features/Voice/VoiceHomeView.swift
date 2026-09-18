@@ -36,6 +36,19 @@ struct VoiceHomeView: View {
                 .tracking(2.8)
                 .textCase(.uppercase)
             Spacer()
+            if app.isSignedIn, !app.minutesLabel.isEmpty {
+                Button {
+                    showSettings = true
+                } label: {
+                    Text(app.minutesLabel)
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .background(Color.white.opacity(0.08), in: Capsule())
+                }
+                .accessibilityLabel("Minutes, \(app.minutesLabel)")
+            }
             Button {
                 showSettings = true
             } label: {

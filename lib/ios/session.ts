@@ -26,6 +26,7 @@ import {
 import { buildInputAudio } from "@/lib/voice/listen";
 import { buildTurnDetection } from "@/lib/voice/realtime-latency";
 import { mintXaiClientSecret } from "@/lib/xai/client-secret";
+import { REALTIME_VOICE_MODEL } from "@/lib/xai/realtime-model";
 
 import { IOS_REALTIME_URL, IOS_TARGET_RATE, IOS_VOICE, readXaiClientSecret } from "./config";
 
@@ -208,6 +209,7 @@ export function iosSessionUpdatePayload(input: {
   return {
     type: "session.update",
     session: {
+      model: REALTIME_VOICE_MODEL,
       voice: IOS_VOICE,
       instructions: input.instructions,
       reasoning: { effort: "none" },

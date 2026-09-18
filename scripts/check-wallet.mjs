@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { TEXT_FAST_MODEL, TEXT_FAST_MAX_TOKENS, textFastModelFromEnv } from "../lib/wallet/models.ts";
 import { SUBSCRIPTION_PLAN, VOICE_PACKS, publicPacks, voicePackById, STRIPE_WEBHOOK_URL } from "../lib/wallet/packs.ts";
 import { DEFAULT_CHAT_MODEL, chatModelFromEnv } from "../lib/channels/parse.ts";
@@ -91,6 +91,9 @@ assert.ok(packsSrc.includes("/buy/murmur.jpg"), "murmur thumbnail path");
 assert.ok(packsSrc.includes("/buy/echo.jpg"), "echo thumbnail path");
 assert.ok(!packsSrc.includes("existsSync"), "pack thumbs are not fs.stat'd at render");
 assert.ok(packsSrc.includes("packThumbnailSrc"), "pack thumbs resolve without node:fs");
+assert.ok(!packsSrc.includes("IOS_BILLING"), "no iOS billing return URLs");
+assert.ok(!packsSrc.includes("billing-return"), "no billing-return path");
+assert.ok(!existsSync(new URL("../app/ios/billing-return/page.tsx", import.meta.url)), "no billing-return page");
 
 const buyPage = readFileSync(new URL("../app/buy/page.tsx", import.meta.url), "utf8");
 assert.ok(!buyPage.includes("redirect"), "buy catalog is public");
@@ -170,6 +173,8 @@ assert.ok(balanceSrc.includes("MAX_VOICE_PACK_SECONDS"), "balance knows Echo 360
 assert.ok(balanceSrc.includes("allotted seconds exceed largest sold pack"), "balance warns when leftover monthly is above Echo");
 assert.ok(balanceSrc.includes("no-store"), "balance forbids HTTP cache");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
+assert.ok(!balanceSrc.includes("plan:"), "balance does not add a plan field for iOS");
+assert.ok(!balanceSrc.includes("SUBSCRIPTION_PLAN"), "balance does not expand subscription plan");
 
 assert.ok(homeSrc.includes('cache: "no-store"'), "home balance fetch skips HTTP cache");
 assert.ok(homeSrc.includes("refreshWhenVisible"), "home refreshes minutes when the tab is shown");
@@ -191,6 +196,8 @@ assert.ok(checkoutApi.includes("createCheckoutByPriceId"), "checkout by price");
 assert.ok(checkoutApi.includes("await requireAuthSessionUserId"), "checkout uses shared session helper");
 assert.ok(checkoutApi.includes("await connection()"), "checkout reads live Stripe price env");
 assert.ok(!checkoutApi.includes("body.seconds"), "checkout ignores client seconds");
+assert.ok(!checkoutApi.includes("iosReturn"), "checkout route has no iosReturn");
+assert.ok(!checkoutApi.includes("client"), "checkout route ignores client:ios");
 
 const resetSrc = readFileSync(new URL("../lib/auth/reset.ts", import.meta.url), "utf8");
 assert.ok(resetSrc.includes('hostname === "talktolexi.app"'), "publicAppUrl remaps apex → www");
@@ -339,6 +346,54 @@ assert.ok(iosController.includes("settlePendingVoiceSessions"), "iOS settles lef
 assert.ok(iosController.includes("applySessionLimits"), "iOS arms duration and spend guards");
 assert.ok(iosController.includes("realtimeDidDisconnect"), "iOS settles on socket death, not only End");
 assert.ok(!iosController.includes("grok-voice-latest"), "iOS controller does not fall back to the latest alias");
+assert.ok(iosController.includes('openSitePath("/buy")'), "iOS Buy minutes opens /buy");
+assert.ok(iosController.includes('openSitePath("/subscribe")'), "iOS Subscribe opens /subscribe");
+assert.ok(iosController.includes('openSitePath("/account")'), "iOS Manage account opens /account");
+assert.ok(iosController.includes("account.apiHost"), "iOS site URLs use AccountStore.apiHost");
+assert.ok(iosController.includes("UIApplication.shared.open"), "iOS opens Safari, not an in-app checkout session");
+assert.ok(iosController.includes("refreshBilling"), "iOS refreshes minutes from GET /api/billing/balance");
+assert.ok(iosController.includes("settleIfIdle"), "iOS refreshes minutes when returning to the app");
+assert.ok(!iosController.includes("startPackCheckout"), "iOS does not create pack Checkout sessions");
+assert.ok(!iosController.includes("startSubscribeCheckout"), "iOS does not create subscribe Checkout sessions");
+assert.ok(!iosController.includes("openCheckout"), "iOS does not present ASWebAuthenticationSession checkout");
+assert.ok(!iosController.includes("Product.purchase"), "iOS buy/subscribe does not call StoreKit IAP");
+assert.ok(!iosClient.includes("startPackCheckout"), "iOS API client does not start pack checkout");
+assert.ok(!iosClient.includes("startSubscribeCheckout"), "iOS API client does not start subscribe checkout");
+assert.ok(!iosClient.includes('"client": "ios"'), "iOS API client does not send client:ios");
+assert.ok(iosClient.includes("billingBalance"), "iOS still reads GET /api/billing/balance");
+assert.ok(iosClient.includes("/api/billing/balance"), "iOS balance path is the existing API");
+
+const iosSettings = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Settings/SettingsView.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(iosSettings.includes("Buy minutes"), "settings has Buy minutes");
+assert.ok(iosSettings.includes("Subscribe"), "settings has Subscribe");
+assert.ok(iosSettings.includes("Manage account"), "settings has Manage account");
+assert.ok(iosSettings.includes("openBuyMinutes"), "settings Buy minutes opens Safari /buy");
+assert.ok(iosSettings.includes("openSubscribe"), "settings Subscribe opens Safari /subscribe");
+assert.ok(iosSettings.includes("openManageAccount"), "settings Manage account opens Safari /account");
+assert.ok(!iosSettings.includes("buyPack"), "settings is not per-pack native checkout");
+
+const iosSignIn = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/SignInCoordinator.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(!iosSignIn.includes("openCheckout"), "sign-in coordinator does not open checkout");
+assert.ok(!iosSignIn.includes("talktolexi://billing"), "no billing callback scheme");
+
+const iosHome = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/VoiceHomeView.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(iosHome.includes("minutesLabel"), "home header can show minutes");
+assert.ok(iosHome.includes("showSettings"), "minutes pill opens Settings");
+
+const musicSrc = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Music/MusicController.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(musicSrc.includes("import StoreKit"), "StoreKit stays in the target via MusicController");
 
 const accountSrc = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/AccountStore.swift", import.meta.url),
@@ -359,6 +414,9 @@ assert.ok(stripeSrc.includes("BUY_SUCCESS_URL"), "checkout success → /buy/succ
 assert.ok(stripeSrc.includes("BUY_CANCEL_URL"), "checkout cancel → /buy");
 assert.ok(stripeSrc.includes("success_url: SUBSCRIBE_SUCCESS_URL"), "subscription success → /subscribe/success");
 assert.ok(stripeSrc.includes("cancel_url: SUBSCRIBE_CANCEL_URL"), "subscription cancel → /subscribe");
+assert.ok(!stripeSrc.includes("iosReturn"), "checkout has no iosReturn variant");
+assert.ok(!stripeSrc.includes("IOS_BILLING"), "checkout does not use iOS billing-return URLs");
+assert.ok(!stripeSrc.includes("billing-return"), "checkout does not return to /ios/billing-return");
 assert.ok(stripeSrc.includes("createCheckoutByPriceId"), "priceId checkout helper");
 assert.ok(stripeSrc.includes("createSubscriptionCheckout"), "subscription checkout helper");
 assert.ok(stripeSrc.includes('mode: "subscription"'), "subscription checkout is recurring");
@@ -400,6 +458,8 @@ assert.ok(subscribeApi.includes("createSubscriptionCheckout"), "subscribe route 
 assert.ok(subscribeApi.includes("await requireAuthSessionUserId"), "subscribe uses shared session helper");
 assert.ok(subscribeApi.includes("console.error"), "subscribe route logs checkout failures");
 assert.ok(subscribeApi.includes("console.warn"), "subscribe route logs unsigned 401");
+assert.ok(!subscribeApi.includes("iosReturn"), "subscribe route has no iosReturn");
+assert.ok(!subscribeApi.includes("client"), "subscribe route ignores client:ios");
 
 const headerSrc = readFileSync(new URL("../components/site-header.tsx", import.meta.url), "utf8");
 assert.ok(headerSrc.includes("Manage subscription"), "header shows Manage subscription when subscribed");

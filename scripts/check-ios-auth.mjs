@@ -29,7 +29,7 @@ expect(IOS_CALLBACK_SCHEMES.includes("app.talktolexi.ios"), "bundle scheme");
 expect(parseCallbackURI("talktolexi://auth")?.protocol === "talktolexi:", "parse talktolexi");
 expect(parseCallbackURI("https://talktolexi.app/ios/signin") === null, "reject https callback");
 expect(parseCallbackURI("talktolexi://user:pass@evil") === null, "reject userinfo");
-expect(IOS_REALTIME_URL === "wss://api.x.ai/v1/realtime?model=grok-voice-latest", "realtime url");
+expect(IOS_REALTIME_URL === "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0", "realtime url");
 expect(IOS_TARGET_RATE === 48_000, "pcm rate");
 expect(IOS_VOICE === "aria", "voice");
 expect(readXaiClientSecret({ value: "abc" }) === "abc", "secret value");
@@ -70,6 +70,55 @@ expect(iosSession.includes("await connection()"), "iOS mint waits for runtime en
 expect(!iosSession.includes("process.env.XAI_API_KEY"), "iOS mint does not inline process.env.XAI_API_KEY");
 expect(iosSession.includes("mintXaiClientSecret"), "iOS mint uses shared client-secret helper");
 expect(iosSession.includes("@/lib/xai/client-secret"), "iOS mint shares the web client-secret helper");
+expect(iosSession.includes("SESSION_LIMIT_CODE"), "iOS session extend honors duration/spend limits");
+expect(iosSession.includes("maxDurationSeconds"), "iOS session returns the 30-minute cap");
+
+const mintSrc = readFileSync(new URL("../lib/xai/client-secret.ts", import.meta.url), "utf8");
+expect(mintSrc.includes("REALTIME_VOICE_MODEL"), "client secret binds the pinned voice model");
+expect(mintSrc.includes('effort: "none"'), "client secret pins reasoning off");
+
+const iosClient = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Shared/API/LexiAPIClient.swift", import.meta.url),
+  "utf8",
+);
+expect(iosClient.includes('static let model = "grok-voice-think-fast-1.0"'), "iOS hardcodes the pinned model");
+expect(iosClient.includes("for attempt in 1...5"), "iOS settle retries");
+expect(iosClient.includes("billingBalance"), "iOS reads GET /api/billing/balance");
+expect(iosClient.includes("/api/billing/balance"), "iOS balance uses the existing path");
+expect(!iosClient.includes("startPackCheckout"), "iOS does not create pack Checkout sessions");
+expect(!iosClient.includes("startSubscribeCheckout"), "iOS does not create subscribe Checkout sessions");
+expect(!iosClient.includes('"client": "ios"'), "iOS does not send client:ios");
+expect(!iosClient.includes("/api/checkout"), "iOS does not POST /api/checkout");
+
+const iosController = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/App/LexiAppController.swift", import.meta.url),
+  "utf8",
+);
+expect(iosController.includes('openSitePath("/buy")'), "iOS Buy minutes opens /buy");
+expect(iosController.includes('openSitePath("/subscribe")'), "iOS Subscribe opens /subscribe");
+expect(iosController.includes('openSitePath("/account")'), "iOS Manage account opens /account");
+expect(iosController.includes("account.apiHost"), "iOS site URLs use AccountStore.apiHost");
+expect(iosController.includes("UIApplication.shared.open"), "iOS opens Safari");
+expect(iosController.includes("refreshBilling"), "iOS refreshes minutes after return");
+expect(!iosController.includes("openCheckout"), "iOS does not start in-app Stripe checkout");
+expect(!iosController.includes("Product.purchase"), "iOS does not call StoreKit IAP");
+
+const iosSettings = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Settings/SettingsView.swift", import.meta.url),
+  "utf8",
+);
+expect(iosSettings.includes("Buy minutes"), "settings Buy minutes button");
+expect(iosSettings.includes("Subscribe"), "settings Subscribe button");
+expect(iosSettings.includes("Manage account"), "settings Manage account button");
+
+expect(!signIn.includes("openCheckout"), "sign-in coordinator does not open checkout");
+expect(!signIn.includes("talktolexi://billing"), "no billing callback scheme");
+
+const musicSrc = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Music/MusicController.swift", import.meta.url),
+  "utf8",
+);
+expect(musicSrc.includes("import StoreKit"), "StoreKit stays in the target via MusicController");
 
 const realtimeSwift = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/RealtimeSession.swift", import.meta.url),
