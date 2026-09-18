@@ -1,4 +1,4 @@
-/** Stored PlayStation identity for PS5 party-chat routing. Not an unofficial Sony client. */
+/** Stored PlayStation identity for server PSN scripts. Not an unofficial Sony client. */
 
 export const DEFAULT_PSN_LOGIN_NAME = "barleezyfbaby";
 export const DEFAULT_PSN_ONLINE_ID = "Barleezybaby";

@@ -47,15 +47,6 @@ struct IosSessionResponse {
     var sessionUpdate: [String: Any]?
 }
 
-struct AppleMusicStatus: Decodable {
-    var ok: Bool?
-    var configured: Bool?
-    var connected: Bool?
-    var developerToken: String?
-    var error: String?
-    var storefront: String?
-}
-
 struct ChannelStatus: Decodable {
     var ok: Bool?
     var platforms: [String: Bool]?
@@ -205,22 +196,51 @@ final class LexiAPIClient {
         )
     }
 
-    func appleMusicStatus() async throws -> AppleMusicStatus {
-        try await get("/api/apple-music")
-    }
-
-    func appleMusic(action: String, extra: [String: Any] = [:]) async throws -> [String: Any] {
-        var body = extra
-        body["action"] = action
-        return try await postJSON("/api/apple-music", body: body)
-    }
-
     func memoryTool(name: String, args: [String: Any], sessionId: String?) async throws -> [String: Any] {
         var body = args
         body["tool"] = name
         body["userId"] = account.sessionUserId
         if let sessionId { body["sessionId"] = sessionId }
         return try await postJSON("/api/memory", body: body)
+    }
+
+    func sendChat(_ text: String, sessionId: String? = nil, platform: String = "ios") async throws -> (reply: String, sessionId: String?) {
+        var body: [String: Any] = [
+            "text": text,
+            "userId": account.sessionUserId,
+            "platform": platform,
+        ]
+        if let sessionId, !sessionId.isEmpty { body["sessionId"] = sessionId }
+        var request = authorized("/api/chat", method: "POST")
+        request.timeoutInterval = 90
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 90
+        let chatSession = URLSession(configuration: config)
+        let (data, response) = try await chatSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "LexiAPI", code: -1, userInfo: [NSLocalizedDescriptionKey: "No HTTP response from /api/chat."])
+        }
+        try throwIfNeeded(http, data: data)
+        let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard let reply = raw["reply"] as? String, !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NSError(domain: "LexiAPI", code: 502, userInfo: [NSLocalizedDescriptionKey: (raw["error"] as? String) ?? "Could not write a reply."])
+        }
+        return (reply.trimmingCharacters(in: .whitespacesAndNewlines), raw["sessionId"] as? String)
+    }
+
+    func logVoiceFailure(reason: String, sessionId: String? = nil) async {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var body: [String: Any] = [
+            "reason": trimmed,
+            "platform": "ios",
+            "kind": "connect.fail",
+            "userId": account.sessionUserId,
+        ]
+        if let sessionId, !sessionId.isEmpty { body["sessionId"] = sessionId }
+        _ = try? await postJSON("/api/voice/log", body: body)
     }
 
     func recordTurn(userText: String, assistantText: String, sessionId: String?) async {

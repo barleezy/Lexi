@@ -183,4 +183,13 @@ expect(persona.includes("FORTNITE"), "fortnite section");
 expect(persona.includes("WATCH TOGETHER"), "watch section");
 expect(persona.includes("If this channel could be seen or heard"), "channel note has public banter");
 
+const chatRoute = readFileSync(new URL("../app/api/chat/route.ts", import.meta.url), "utf8");
+const chatReply = readFileSync(new URL("../lib/chat/reply.ts", import.meta.url), "utf8");
+expect(!/grok-voice/i.test(chatRoute), "text route never mentions grok-voice");
+expect(!/grok-voice/i.test(chatReply), "text reply helper never mentions grok-voice");
+expect(chatReply.includes("textFastModelFromEnv"), "text reply uses TEXT_FAST_MODEL");
+expect(chatRoute.includes("replyInAppChat"), "POST /api/chat uses replyInAppChat");
+expect(!chatRoute.includes("wss://"), "text route does not open realtime");
+expect(chatReply.includes("buildInstructions"), "text reply uses shared persona");
+
 console.log("channels checks ok");

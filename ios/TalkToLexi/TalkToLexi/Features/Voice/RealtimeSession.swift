@@ -22,13 +22,11 @@ protocol RealtimeSessionDelegate: AnyObject {
     func realtime(_ session: RealtimeSession, error: String)
     func realtime(_ session: RealtimeSession, handleTool name: String, callId: String, arguments: [String: Any]) async -> String
     func realtime(_ session: RealtimeSession, completedTurn user: String, assistant: String)
-    func realtime(_ session: RealtimeSession, chatPortStatus: String)
     func realtimeNeedsSessionRefresh(_ session: RealtimeSession)
     func realtimeDidDisconnect(_ session: RealtimeSession)
 }
 
 extension RealtimeSessionDelegate {
-    func realtime(_ session: RealtimeSession, chatPortStatus: String) {}
     func realtimeNeedsSessionRefresh(_ session: RealtimeSession) {}
     func realtimeDidDisconnect(_ session: RealtimeSession) {}
 }
@@ -80,19 +78,9 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
 
     override init() {
         super.init()
-        audio.onChatPortStatus = { [weak self] status in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                self.delegate?.realtime(self, chatPortStatus: status)
-            }
-        }
     }
 
-    func applyAudioRouting() async {
-        await audio.applyRouting(routeThroughPS5PartyChat: AccountStore.shared.routeThroughPS5PartyChat)
-    }
-
-    func start(token: String, realtimeURL: String, sessionUpdate: [String: Any]) {
+    func start(token: String, realtimeURL: String, sessionUpdate: [String: Any], captureMic: Bool = true) {
         tearDown(notify: false, stopAudio: false)
         generation += 1
         let gen = generation
@@ -107,6 +95,11 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         userText = ""
         assistantText = ""
         caption = ""
+        if !captureMic {
+            audio.onPCM = nil
+            openSocket(token: token, realtimeURL: realtimeURL, generation: gen)
+            return
+        }
         audio.onPCM = { [weak self] data in
             self?.sendAudio(data)
         }
@@ -116,9 +109,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
             await self.audio.stop()
             guard self.generation == gen, self.isLive else { return }
             do {
-                try await self.audio.start(
-                    routeThroughPS5PartyChat: AccountStore.shared.routeThroughPS5PartyChat
-                )
+                try await self.audio.start()
             } catch {
                 await MainActor.run {
                     self.delegate?.realtime(self, error: error.localizedDescription)
@@ -197,6 +188,15 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
+    func appendLocal(role: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if role == "user" { lastUserUtterance = trimmed }
+        appendRow(role: role, text: trimmed)
+        caption = trimmed
+        delegate?.realtime(self, caption: caption)
+    }
+
     func sendText(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -238,6 +238,8 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
                 labels.append("Watch-together frame \(watchIndex) of \(watchTotal)\(time) (video, not the user).")
             } else if part.source == "upload" {
                 labels.append("Uploaded photo (user allowed).")
+            } else if part.source == "screen" {
+                labels.append("Live screen share (exactly what is on screen).")
             } else {
                 labels.append("Live 30fps camera video (exactly what the camera sees).")
             }
@@ -514,9 +516,6 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
         expectSpoken = false
         createInFlight = false
         phase = .listening
-        DispatchQueue.main.async {
-            self.delegate?.realtime(self, error: "No reply from Lexi. Try again.")
-        }
     }
 
     private func armOpenTimeout(generation gen: Int) {

@@ -70,8 +70,24 @@ expect(client.includes("input.trim() || OUR_SONG_SEARCH") === false, "empty inpu
 expect(client.includes("Search a song or playlist first."), "empty play asks for a query");
 
 const home = readFileSync(new URL("../components/voice-home.tsx", import.meta.url), "utf8");
-expect(home.includes("isAdminUserId(signedIn)"), "prefetch our song is admin-gated on connect");
+expect(home.includes("isAdminUserId(signedInNow)"), "prefetch our song is admin-gated on connect");
 expect(home.includes("isAdminUserId(accountId) ? OUR_SONG_SEARCH"), "empty play our song is admin-only");
 expect(home.includes("playAppleMusicPlaylist"), "voice session can play a playlist");
+expect(
+  /\{live \? \([\s\S]*Connect Apple Music/.test(home),
+  "web Connect Apple Music stays behind a live call",
+);
+
+const iosHome = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/VoiceHomeView.swift", import.meta.url),
+  "utf8",
+);
+const iosMusic = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Music/MusicController.swift", import.meta.url),
+  "utf8",
+);
+expect(!iosHome.includes("Connect Apple Music"), "iOS home has no Connect Apple Music button");
+expect(!iosMusic.includes("import MusicKit"), "iOS target does not import MusicKit");
+expect(!iosMusic.includes("import StoreKit"), "iOS target does not import StoreKit");
 
 console.log("apple music config ok");

@@ -12,6 +12,24 @@ export function isValidSessionId(id: string) {
   return SESSION_ID.test(id);
 }
 
+/** Always server-side. Never return this payload to the Call UI. */
+export function logVoiceFallback(entry: {
+  reason: string;
+  source?: string;
+  sessionId?: string;
+  userId?: string;
+}) {
+  const reason = entry.reason.trim().slice(0, 500);
+  if (!reason) return;
+  console.info("[voice-fallback]", {
+    reason,
+    source: entry.source?.trim() || undefined,
+    sessionId: entry.sessionId?.trim() || undefined,
+    userId: entry.userId?.trim() || undefined,
+    ts: Date.now(),
+  });
+}
+
 export async function appendVoiceLog(
   sessionId: string,
   entries: Record<string, unknown>[],

@@ -26,12 +26,10 @@ const iosAudio = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/VoiceAudioEngine.swift", import.meta.url),
   "utf8",
 );
-expect(iosAudio.includes(".mixWithOthers"), "ios default mixes with apple music");
+expect(iosAudio.includes(".mixWithOthers"), "ios default mixes with other audio");
 expect(iosAudio.includes("allowBluetoothA2DP"), "ios default keeps a2dp music");
-expect(
-  /if partyChat \{[\s\S]*allowBluetoothHFP/.test(iosAudio),
-  "ios hfp only on party-chat path",
-);
+expect(!iosAudio.includes("partyChat"), "ios audio has no PS5 party-chat path");
+expect(!iosAudio.includes("routeThroughPS5PartyChat"), "ios audio has no PS5 routing flag");
 expect(iosAudio.includes("setVoiceProcessingEnabled(enabled)"), "ios voice processing is gated");
 
 const iosCamera = readFileSync(

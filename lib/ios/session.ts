@@ -10,7 +10,6 @@ import {
   recallForUser,
 } from "@/lib/memory/store";
 import { isAdminUserId, resolveUserId } from "@/lib/memory/user";
-import { APPLE_MUSIC_USER_COOKIE, isAppleMusicConfigured } from "@/lib/apple-music/config";
 import type { DeviceLocationState } from "@/lib/voice/location";
 import { ensureVerifiedEpicSession, isFortniteConfigured } from "@/lib/voice/fortnite";
 import { fortniteRealtimeTools } from "@/lib/voice/fortnite-tools";
@@ -32,9 +31,17 @@ import { IOS_REALTIME_URL, IOS_TARGET_RATE, IOS_VOICE, readXaiClientSecret } fro
 
 export { IOS_REALTIME_URL, IOS_TARGET_RATE, IOS_VOICE, readXaiClientSecret, mintXaiClientSecret };
 
-const PHONE_NOTE = `IOS PHONE
+const IOS_PHONE_NOTE = `IOS PHONE
 
-This turn is the native iPhone app, not the website tab. Hold the voice call here. There is no CarPlay scene. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not the user. Adults only: porn 18+, voice roleplay 21+, refuse minors.`;
+This turn is the native iPhone app, not the website tab. Hold the voice call here. There is no CarPlay scene. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not the user. Adults only: porn 18+, voice roleplay 21+, refuse minors.
+
+There is no Apple Music, MusicKit, or Connect Apple Music button on this phone app. Ignore any earlier Apple Music connect/love/library/playlist instructions. play_music only accepts a direct http(s) audio URL the user gave you. stop_music still works.`;
+
+const ANDROID_PHONE_NOTE = `ANDROID PHONE
+
+This turn is the native Android app, not the website tab. Hold the voice call here. Watch-together video, camera stills, and generated photos or clips can appear on the phone screen. Soundtrack from a watch-together video is not in the mic — on-screen voices are not the user. Adults only: porn 18+, voice roleplay 21+, refuse minors.
+
+There is no Apple Music and no PlayStation / Fortnite party chat on this phone app. Ignore any earlier Apple Music or PS5 party-chat instructions. play_music only accepts a direct http(s) audio URL the user gave you. stop_music still works.`;
 
 export function iosRealtimeTools(includeFortnite = false) {
   return [
@@ -70,14 +77,12 @@ export function iosRealtimeTools(includeFortnite = false) {
       type: "function",
       name: "play_music",
       description:
-        "Play background music on this same voice call. Direct http(s) audio URL or an Apple Music song/playlist query, song_id, or playlist_id. Empty query plays nothing. Does not open video. Voice stays up.",
+        "Play background music on this same voice call from a direct http(s) audio URL. Empty or missing URL plays nothing. Does not open video. Voice stays up. Apple Music is not available on the iPhone app.",
       parameters: {
         type: "object",
         properties: {
           url: { type: "string" },
           query: { type: "string" },
-          song_id: { type: "string" },
-          playlist_id: { type: "string" },
         },
       },
     },
@@ -86,43 +91,6 @@ export function iosRealtimeTools(includeFortnite = false) {
       name: "stop_music",
       description: "Stop background music. Does not hang up.",
       parameters: { type: "object", properties: {} },
-    },
-    {
-      type: "function",
-      name: "apple_music_connect",
-      description: "Connect the user's Apple Music with official MusicKit. They may need to authorize on the phone.",
-      parameters: { type: "object", properties: {} },
-    },
-    {
-      type: "function",
-      name: "apple_music_love",
-      description: "Love a song on connected Apple Music.",
-      parameters: {
-        type: "object",
-        properties: { query: { type: "string" }, song_id: { type: "string" } },
-      },
-    },
-    {
-      type: "function",
-      name: "apple_music_library",
-      description: "Add a song to the user's Apple Music library.",
-      parameters: {
-        type: "object",
-        properties: { query: { type: "string" }, song_id: { type: "string" } },
-      },
-    },
-    {
-      type: "function",
-      name: "apple_music_playlist",
-      description: "Add a song to an Apple Music playlist (default Lexi).",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          song_id: { type: "string" },
-          playlist: { type: "string" },
-        },
-      },
     },
     {
       type: "function",
@@ -223,10 +191,6 @@ export function iosSessionUpdatePayload(input: {
   };
 }
 
-export function appleMusicConnectedFromCookie(cookieHeader: string) {
-  return new RegExp(`(?:^|;\\s*)${APPLE_MUSIC_USER_COOKIE}=([^;]+)`).test(cookieHeader);
-}
-
 export async function buildIosSession(input: {
   request: Request;
   requestedUserId?: string | null;
@@ -237,6 +201,7 @@ export async function buildIosSession(input: {
   musicPlaying?: boolean;
   musicTitle?: string;
   musicSource?: MusicSessionState["source"];
+  client?: "ios" | "android";
 }) {
   const userId = resolveUserId(input.request, input.requestedUserId);
   let sessionId = parseSessionId(input.sessionId) ?? "";
@@ -264,16 +229,17 @@ export async function buildIosSession(input: {
       : sessionLine
     : memoryInstructions;
   const music: MusicSessionState = {
-    appleConfigured: isAppleMusicConfigured(),
-    appleConnected: appleMusicConnectedFromCookie(input.request.headers.get("cookie") ?? ""),
+    appleConfigured: false,
+    appleConnected: false,
     playing: Boolean(input.musicPlaying),
     title: input.musicTitle ?? "",
     source: input.musicSource ?? "none",
   };
+  const android = input.client === "android";
   const admin = isAdminUserId(userId);
   const configured = isFortniteConfigured();
   let epicHttpReady = false;
-  if (admin && configured) {
+  if (admin && configured && !android) {
     try {
       await ensureVerifiedEpicSession({ forceVerify: true });
       epicHttpReady = true;
@@ -281,7 +247,7 @@ export async function buildIosSession(input: {
       epicHttpReady = false;
     }
   }
-  const fortnite: FortniteSessionState = admin
+  const fortnite: FortniteSessionState = admin && !android
     ? {
         ...DEFAULT_FORTNITE_STATE,
         configured,
@@ -301,7 +267,7 @@ export async function buildIosSession(input: {
     input.location ?? null,
     music,
     userId,
-  )}\n\n${PHONE_NOTE}`;
+  )}\n\n${android ? ANDROID_PHONE_NOTE : IOS_PHONE_NOTE}`;
   return {
     userId,
     decayState,
@@ -309,6 +275,9 @@ export async function buildIosSession(input: {
     priorChat,
     sessionId: memorySessionId,
     instructions,
-    sessionUpdate: iosSessionUpdatePayload({ instructions, includeFortnite: admin }),
+    sessionUpdate: iosSessionUpdatePayload({
+      instructions,
+      includeFortnite: admin && !android,
+    }),
   };
 }

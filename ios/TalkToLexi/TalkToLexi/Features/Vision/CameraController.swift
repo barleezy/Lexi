@@ -28,17 +28,21 @@ final class CameraFramePump: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         lastSent = 0
     }
 
-    func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
-    ) {
+    func ingest(_ sampleBuffer: CMSampleBuffer) {
         if isPaused { return }
         let now = CACurrentMediaTime()
         guard now - lastSent >= minInterval else { return }
         guard let dataUrl = jpegDataURL(from: sampleBuffer) else { return }
         lastSent = now
         onJPEG?(dataUrl)
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        ingest(sampleBuffer)
     }
 
     private func jpegDataURL(from sampleBuffer: CMSampleBuffer) -> String? {

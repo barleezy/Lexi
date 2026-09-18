@@ -54,8 +54,8 @@ expect(
 
 const chrome = readFileSync(new URL("../components/site-chrome.tsx", import.meta.url), "utf8");
 expect(chrome.includes('pathname.startsWith("/ios/")'), "site chrome skips /ios auth");
-expect(chrome.includes("{isIosAuth ? null : <SiteFooter />}"), "ios sign-in has no website footer");
-expect(chrome.includes("isHome || isWatch || isIosAuth"), "ios sign-in has no website header");
+expect(chrome.includes("{isHome || isWatch || isIosAuth || isAndroidAuth ? null : <SiteFooter />}"), "home and native sign-in have no website footer");
+expect(chrome.includes("isHome || isWatch || isIosAuth || isAndroidAuth"), "ios and android sign-in have no website header");
 
 const signIn = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/SignInCoordinator.swift", import.meta.url),
@@ -100,6 +100,7 @@ expect(iosController.includes('openSitePath("/account")'), "iOS Manage account o
 expect(iosController.includes("account.apiHost"), "iOS site URLs use AccountStore.apiHost");
 expect(iosController.includes("UIApplication.shared.open"), "iOS opens Safari");
 expect(iosController.includes("refreshBilling"), "iOS refreshes minutes after return");
+expect(iosController.includes("scheduleLaunchWork"), "iOS defers billing/channels until after first frame");
 expect(!iosController.includes("openCheckout"), "iOS does not start in-app Stripe checkout");
 expect(!iosController.includes("Product.purchase"), "iOS does not call StoreKit IAP");
 
@@ -118,7 +119,35 @@ const musicSrc = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Music/MusicController.swift", import.meta.url),
   "utf8",
 );
-expect(musicSrc.includes("import StoreKit"), "StoreKit stays in the target via MusicController");
+expect(!musicSrc.includes("import StoreKit"), "iOS MusicController does not import StoreKit");
+expect(!musicSrc.includes("import MusicKit"), "iOS MusicController does not import MusicKit");
+expect(!musicSrc.includes("ApplicationMusicPlayer"), "iOS MusicController does not use MusicKit playback");
+
+const iosHome = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/VoiceHomeView.swift", import.meta.url),
+  "utf8",
+);
+expect(iosHome.includes("ComposerBar("), "iOS home always shows ComposerBar");
+expect(!iosHome.includes("WatchURLField"), "iOS home has no WatchURLField");
+expect(!iosHome.includes("paste a video URL"), "iOS home has no video URL paste field");
+expect(iosHome.includes("Share screen"), "iOS home has Share screen on the composer chrome");
+expect(iosController.includes("toggleScreenShare"), "iOS Share screen starts ReplayKit capture");
+const screenSrc = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Vision/ScreenCaptureController.swift", import.meta.url),
+  "utf8",
+);
+expect(screenSrc.includes("import ReplayKit"), "iOS screen share uses ReplayKit");
+expect(screenSrc.includes("RPScreenRecorder"), "iOS screen share starts RPScreenRecorder");
+expect(screenSrc.includes("sendVisionFrame") || iosController.includes('source: "screen"'), "screen frames go out on the voice socket");
+expect(!iosHome.includes("Connect Apple Music"), "iOS home has no Connect Apple Music pill");
+expect(!iosHome.includes("MusicBarView"), "iOS home has no Apple Music bar");
+expect(!iosHome.includes("routeThroughPS5PartyChat"), "iOS home has no PS5 party-chat status");
+expect(!iosSettings.includes("Route through PS5"), "settings has no PS5 party-chat toggle");
+expect(!iosSettings.includes("partyChat"), "settings has no party-chat card");
+expect(!iosSettings.includes("psnOnlineId"), "settings has no PSN account fields");
+expect(!iosController.includes("routeThroughPS5PartyChat"), "iOS controller has no PS5 routing");
+expect(!iosController.includes("psnOnlineId"), "iOS controller has no PSN identity");
+expect(iosController.includes("chatMode: ChatMode = .text"), "iOS defaults to text mode");
 
 const realtimeSwift = readFileSync(
   new URL("../ios/TalkToLexi/TalkToLexi/Features/Voice/RealtimeSession.swift", import.meta.url),
@@ -153,5 +182,27 @@ expect(
   voiceMintFailureMessage("An internal error occurred").includes("live inference key"),
   "maps xAI internal error to inference-key hint",
 );
+
+const sendTextFn = iosController.slice(
+  iosController.indexOf("func sendText("),
+  iosController.indexOf("private func sendTextChat("),
+);
+expect(sendTextFn.includes("sendTextChat"), "idle send uses text chat");
+expect(!sendTextFn.includes("connectCall()"), "text send does not start voice");
+expect(iosController.includes("enterTextModeSilently"), "voice failure falls back to text");
+expect(iosController.includes("lastError = \"\""), "fallback clears lastError");
+expect(!iosController.includes('lastError = "Voice link did not open."'), "no blocking voice-link copy");
+expect(!iosController.includes('lastError = "Out of minutes."'), "402 does not set lastError after fallback");
+expect(iosClient.includes("/api/chat"), "iOS text chat path");
+expect(iosClient.includes("logVoiceFailure"), "iOS logs voice fallback server-side");
+expect(!iosClient.includes("mintXaiClientSecret"), "iOS text chat does not mint realtime tokens");
+
+expect(iosController.includes("enum ChatMode"), "iOS has first-class text mode");
+expect(iosController.includes("sendTextChat"), "iOS text send uses the text path");
+expect(!iosController.includes('lastError = "Voice auth failed. Try Connect again."'), "iOS does not show auth connect errors");
+expect(iosClient.includes("func sendChat"), "iOS API client has sendChat");
+expect(iosClient.includes("/api/voice/log"), "iOS logs voice connect failures");
+expect(!realtimeSwift.includes("No reply from Lexi. Try again."), "iOS does not surface No reply from Lexi");
+expect(realtimeSwift.includes("func appendLocal") || iosController.includes("appendTextRow"), "iOS can append text-mode rows without a live socket");
 
 console.log("ios auth ok");

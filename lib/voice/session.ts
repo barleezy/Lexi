@@ -141,6 +141,7 @@ type SessionHandlers = {
   onTranscripts: (rows: TranscriptRow[]) => void;
   onCaption?: (text: string) => void;
   onError: (message: string) => void;
+  onConnectFail?: (message: string) => void;
   onSessionId?: (sessionId: string | null) => void;
   onToyControl?: (granted: boolean) => void;
   onToyControlRequest?: (pending: boolean) => void;
@@ -3612,6 +3613,8 @@ export class VoiceSession {
     // Keep the 402 copy exact for the Call UI.
     if (/^out of minutes\.?$/i.test(message.trim())) {
       this.handlers.onError("Out of minutes.");
+    } else if (this.handlers.onConnectFail) {
+      this.handlers.onConnectFail(message);
     } else {
       this.handlers.onError(`${message} (voice session ${this.id})`);
     }

@@ -17,10 +17,10 @@
 		A20000000000000000000008 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* ComposerBar.swift */; };
 		A20000000000000000000009 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000009 /* TranscriptView.swift */; };
 		A2000000000000000000000A /* MusicController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000A /* MusicController.swift */; };
-		A2000000000000000000000B /* MusicBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000B /* MusicBarView.swift */; };
 		A2000000000000000000000C /* WatchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000C /* WatchController.swift */; };
 		A2000000000000000000000D /* WatchPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000D /* WatchPlayerView.swift */; };
 		A2000000000000000000000E /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000E /* CameraController.swift */; };
+		A2000000000000000000001F /* ScreenCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000001F /* ScreenCaptureController.swift */; };
 		A2000000000000000000000F /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000F /* CameraPreviewView.swift */; };
 		A20000000000000000000010 /* LocationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000010 /* LocationController.swift */; };
 		A20000000000000000000011 /* GenerateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011 /* GenerateController.swift */; };
@@ -47,10 +47,10 @@
 		B20000000000000000000008 /* ComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerBar.swift; sourceTree = "<group>"; };
 		B20000000000000000000009 /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
 		B2000000000000000000000A /* MusicController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicController.swift; sourceTree = "<group>"; };
-		B2000000000000000000000B /* MusicBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicBarView.swift; sourceTree = "<group>"; };
 		B2000000000000000000000C /* WatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchController.swift; sourceTree = "<group>"; };
 		B2000000000000000000000D /* WatchPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPlayerView.swift; sourceTree = "<group>"; };
 		B2000000000000000000000E /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
+		B2000000000000000000001F /* ScreenCaptureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCaptureController.swift; sourceTree = "<group>"; };
 		B2000000000000000000000F /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
 		B20000000000000000000010 /* LocationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationController.swift; sourceTree = "<group>"; };
 		B20000000000000000000011 /* GenerateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateController.swift; sourceTree = "<group>"; };
@@ -175,7 +175,6 @@
 			isa = PBXGroup;
 			children = (
 				B2000000000000000000000A /* MusicController.swift */,
-				B2000000000000000000000B /* MusicBarView.swift */,
 			);
 			path = Music;
 			sourceTree = "<group>";
@@ -193,6 +192,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000000000000000000000E /* CameraController.swift */,
+				B2000000000000000000001F /* ScreenCaptureController.swift */,
 				B2000000000000000000000F /* CameraPreviewView.swift */,
 			);
 			path = Vision;
@@ -353,10 +353,10 @@
 				A20000000000000000000008 /* ComposerBar.swift in Sources */,
 				A20000000000000000000009 /* TranscriptView.swift in Sources */,
 				A2000000000000000000000A /* MusicController.swift in Sources */,
-				A2000000000000000000000B /* MusicBarView.swift in Sources */,
 				A2000000000000000000000C /* WatchController.swift in Sources */,
 				A2000000000000000000000D /* WatchPlayerView.swift in Sources */,
 				A2000000000000000000000E /* CameraController.swift in Sources */,
+				A2000000000000000000001F /* ScreenCaptureController.swift in Sources */,
 				A2000000000000000000000F /* CameraPreviewView.swift in Sources */,
 				A20000000000000000000010 /* LocationController.swift in Sources */,
 				A20000000000000000000011 /* GenerateController.swift in Sources */,

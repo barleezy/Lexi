@@ -5,10 +5,13 @@ import UIKit
 struct ComposerBar: View {
     @Binding var draft: String
     var live: Bool
+    var textMode: Bool = false
     var phase: VoicePhase
     var focused: FocusState<Bool>.Binding
     var onSubmit: () -> Void
     var onPhoto: (String) -> Void
+    var screenOn: Bool = false
+    var onShareScreen: (() -> Void)? = nil
 
     @State private var picked: PhotosPickerItem?
 
@@ -21,11 +24,21 @@ struct ComposerBar: View {
                     .foregroundStyle(.white)
             }
             .accessibilityLabel("Add photo")
+            if let onShareScreen {
+                Button(action: onShareScreen) {
+                    Image(systemName: screenOn ? "rectangle.on.rectangle" : "rectangle.dashed")
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 36, height: 36)
+                        .foregroundStyle(.white)
+                }
+                .accessibilityLabel(screenOn ? "Stop sharing screen" : "Share screen")
+            }
             TextField(placeholder, text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .foregroundStyle(.white)
                 .tint(.white)
                 .lineLimit(1...4)
+                .frame(minHeight: 28, alignment: .center)
                 .textInputAutocapitalization(.sentences)
                 .disableAutocorrection(false)
                 .focused(focused)
@@ -39,9 +52,13 @@ struct ComposerBar: View {
             .accessibilityLabel(hasText ? "Send to Lexi" : (live ? "Stop talking" : "Start talking"))
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
+        .frame(minHeight: 52)
         .background(LexiTheme.panel, in: Capsule())
         .overlay(Capsule().stroke(LexiTheme.stroke, lineWidth: 1))
+        .layoutPriority(1)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Message Lexi")
         .onChange(of: picked) { item in
             guard let item else { return }
             Task { await loadPhoto(item) }
@@ -53,7 +70,8 @@ struct ComposerBar: View {
     }
 
     private var placeholder: String {
-        live ? (LexiTheme.phaseHints[phase] ?? "Talk to Lexi") : "Talk to Lexi"
+        if live { return LexiTheme.phaseHints[phase] ?? "Talk to Lexi" }
+        return "Message Lexi"
     }
 
     @ViewBuilder
