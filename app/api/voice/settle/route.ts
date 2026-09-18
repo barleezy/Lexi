@@ -3,7 +3,8 @@ import { settleVoiceSession, sweepStaleVoiceSessions } from "@/lib/wallet/voice"
 
 export const maxDuration = 15;
 
-/** Hangup settle: used = min(elapsed, hold); refund unused hold. */
+/** Hangup settle: used = min(elapsed, hold); refund unused; zero reserved hold.
+ * Idempotent: a second POST for the same voiceSessionId returns alreadySettled. */
 export async function POST(request: Request) {
   let body: { voiceSessionId?: unknown; userId?: unknown } = {};
   try {

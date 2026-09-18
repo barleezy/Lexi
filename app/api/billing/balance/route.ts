@@ -3,7 +3,13 @@ import { requireAuthSessionUserId } from "@/lib/auth/session";
 import { buyPagePacks, publicPacks, isStripeConfigured } from "@/lib/wallet/packs";
 import { creditPaidCheckoutsForUser } from "@/lib/wallet/stripe";
 import { readAccountSubscribed } from "@/lib/wallet/subscription";
-import { formatVoiceMinutes, readVoiceSeconds, sweepStaleVoiceSessions } from "@/lib/wallet/voice";
+import {
+  clampVoiceSecondsToSoldPacks,
+  formatVoiceMinutes,
+  MAX_VOICE_PACK_SECONDS,
+  readVoiceSeconds,
+  sweepStaleVoiceSessions,
+} from "@/lib/wallet/voice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +25,15 @@ export async function GET(request: Request) {
   }
   await sweepStaleVoiceSessions(userId);
   await creditPaidCheckoutsForUser(userId);
-  const voiceSeconds = (await readVoiceSeconds(userId)) ?? 0;
+  const rawVoiceSeconds = (await readVoiceSeconds(userId)) ?? 0;
+  if (rawVoiceSeconds > MAX_VOICE_PACK_SECONDS) {
+    console.warn("[billing-balance] allotted seconds exceed largest sold pack", {
+      userId,
+      voiceSeconds: rawVoiceSeconds,
+      maxPackSeconds: MAX_VOICE_PACK_SECONDS,
+    });
+  }
+  const voiceSeconds = clampVoiceSecondsToSoldPacks(rawVoiceSeconds);
   const subscribed = await readAccountSubscribed(userId);
   return Response.json(
     {

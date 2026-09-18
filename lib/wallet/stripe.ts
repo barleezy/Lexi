@@ -397,6 +397,7 @@ export async function creditPaidCheckoutsForUser(
     const stripe = stripeClient(env);
     if (stripe) {
       const sessions = await listCompletedCheckoutsForUser(stripe, id);
+      sessions.sort((left, right) => (left.created ?? 0) - (right.created ?? 0));
       for (const session of sessions) {
         if (isSubscriptionCheckout(session)) continue;
         try {
@@ -491,6 +492,7 @@ async function creditCompletedCheckoutSession(input: {
     source: "stripe",
     stripeEventId: input.stripeEventId,
     stripeSessionId: session.id,
+    mode: "set",
   });
   if (!credited.ok) {
     console.error("[stripe-minutes] credit failed", credited.error, {

@@ -1,10 +1,43 @@
 import { neon } from "@neondatabase/serverless";
 import { findAccountRow, isAccountStoreConfigured } from "../auth/accounts";
 import { normalizeUserId } from "../memory/user";
+import {
+  SESSION_DURATION_MESSAGE,
+  SESSION_LIMIT_CODE,
+  voiceSessionLimitError,
+  voiceSessionRemainingSeconds,
+} from "../xai/realtime-model";
 import { SUBSCRIPTION_PLAN, VOICE_PACKS } from "./packs";
+
+export {
+  REALTIME_VOICE_MODEL,
+  REALTIME_VOICE_URL,
+  SESSION_DURATION_MESSAGE,
+  SESSION_LIMIT_CODE,
+  SESSION_SPEND_MESSAGE,
+  VOICE_MAX_SESSION_SECONDS,
+  VOICE_MAX_SESSION_SPEND_USD,
+  VOICE_USD_PER_AUDIO_MINUTE,
+  assertRealtimeVoiceModel,
+  estimateVoiceSessionSpendUsd,
+  voiceSessionLimitError,
+  voiceSessionRemainingSeconds,
+} from "../xai/realtime-model";
 
 const PACK_SECONDS: number[] = VOICE_PACKS.map((pack) => pack.seconds);
 const PACK_SECONDS_SQL = PACK_SECONDS.filter((seconds) => Number.isFinite(seconds) && seconds > 0).join(", ");
+
+/** Largest sold pack (Echo). Balance must never display leftover monthly above this. */
+export const MAX_VOICE_PACK_SECONDS = Math.max(0, ...PACK_SECONDS);
+
+export function isVoicePackSeconds(seconds: number) {
+  return PACK_SECONDS.includes(Math.max(0, Math.floor(Number(seconds) || 0)));
+}
+
+export function clampVoiceSecondsToSoldPacks(seconds: number) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  return Math.min(value, MAX_VOICE_PACK_SECONDS);
+}
 
 /** Minimum balance to start a Call. */
 export const VOICE_MIN_SECONDS = 30;
@@ -44,8 +77,8 @@ let ensured: Promise<void> | null = null;
 
 /**
  * accounts.voice_seconds on the user row + voice_sessions ledger.
- * Stripe webhook increments voice_seconds (packs and first subscription grant).
- * Subscribers are refilled TO 150 minutes when monthly_minutes_reset_at is due.
+ * Pack checkout SETS voice_seconds to that pack (never leftover monthly + pack).
+ * First subscription grant ADDs; subscribers refill TO 150 minutes when due.
  */
 export async function ensureVoiceWalletSchema() {
   const db = sql();
@@ -127,6 +160,11 @@ export async function ensureVoiceWalletSchema() {
     });
   }
   await ensured;
+  try {
+    await repairVoiceSecondsToPurchasedPacks(db);
+  } catch (error) {
+    console.error("[stripe-minutes] pack ledger repair failed", error);
+  }
   return db;
 }
 
@@ -151,6 +189,7 @@ export async function readVoiceSeconds(userId: string): Promise<number | null> {
 
 /**
  * Stripe webhook only in production. Idempotent on event id and checkout session id.
+ * Pack credits SET voice_seconds to the purchased pack. Subscription credits ADD.
  * Tests may call with source "test".
  */
 export async function creditVoiceSeconds(input: {
@@ -159,6 +198,8 @@ export async function creditVoiceSeconds(input: {
   source: "stripe" | "test";
   stripeEventId?: string | null;
   stripeSessionId?: string | null;
+  /** Packs SET the wallet. Subscription / explicit add still increment. */
+  mode?: "add" | "set";
 }): Promise<{ ok: true; voiceSeconds: number; credited: number } | { ok: false; error: string }> {
   const userId = normalizeUserId(input.userId);
   const seconds = Math.floor(Number(input.seconds));
@@ -209,9 +250,17 @@ export async function creditVoiceSeconds(input: {
     throw error;
   }
 
+  const setToPack = input.mode === "set" || (input.mode !== "add" && isVoicePackSeconds(seconds));
   const updated = asRows<{ voice_seconds?: number }>(
     await db.query(
-      `
+      setToPack
+        ? `
+      UPDATE accounts
+      SET voice_seconds = $1, updated_at = now()
+      WHERE user_id = $2
+      RETURNING voice_seconds
+    `
+        : `
       UPDATE accounts
       SET voice_seconds = voice_seconds + $1, updated_at = now()
       WHERE user_id = $2
@@ -402,8 +451,8 @@ async function loadPackCreditRows(
 }
 
 /**
- * If the wallet is higher than unspent pack minutes, snap it down.
- * Subscription leftover from a reloaded monthly grant does not stay on the page.
+ * Snap the wallet down to unique purchased packs (never raise).
+ * Monthly leftover above the pack ledger does not stay on the page.
  */
 export async function capAllottedMinutesToPacks(userId: string) {
   const id = normalizeUserId(userId);
@@ -458,6 +507,70 @@ export async function capAllottedMinutesToPacks(userId: string) {
   return { ok: true as const, voiceSeconds, packSeconds, capped: true };
 }
 
+/**
+ * One-time-safe ledger repair: SET voice_seconds to the SUM of unique pack
+ * credits (600 / 1800 / 3600), dropping leftover monthly grants that survived.
+ * Dedupes evt_ vs cs: for the same stripe_session_id. Snap-down only so a later
+ * pack SET (Whisper 600) is not raised back to older packs. Safe to run again.
+ */
+export async function repairVoiceSecondsToPurchasedPacks(
+  db?: NonNullable<Awaited<ReturnType<typeof ensureVoiceWalletSchema>>>,
+) {
+  const conn = db ?? (await ensureVoiceWalletSchema());
+  if (!conn) return { ok: true as const, repaired: 0 };
+
+  const rows = asRows<{
+    id?: string;
+    user_id?: string;
+    seconds?: number;
+    stripe_event_id?: string | null;
+    stripe_session_id?: string | null;
+  }>(
+    await conn.query(
+      `
+      SELECT id, user_id, seconds, stripe_event_id, stripe_session_id
+      FROM voice_credits
+      WHERE seconds IN (${PACK_SECONDS_SQL})
+    `,
+    ),
+  );
+
+  const byWallet = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const owner = normalizeUserId(row.user_id ?? "");
+    if (!owner) continue;
+    const list = byWallet.get(owner) ?? [];
+    list.push(row);
+    byWallet.set(owner, list);
+  }
+
+  let repaired = 0;
+  for (const [wallet, credits] of Array.from(byWallet.entries())) {
+    const packSeconds = uniquePackSeconds(credits);
+    const updated = asRows<{ voice_seconds?: number }>(
+      await conn.query(
+        `
+        UPDATE accounts
+        SET voice_seconds = $2, updated_at = now()
+        WHERE ${WALLET_USER_SQL}
+          AND voice_seconds > $2
+        RETURNING voice_seconds
+      `,
+        [wallet, packSeconds],
+      ),
+    );
+    if (updated[0]) {
+      repaired += 1;
+      console.info("[stripe-minutes] repaired allotted minutes to purchased packs", {
+        userId: wallet,
+        packSeconds,
+        voiceSeconds: Math.max(0, Math.floor(Number(updated[0].voice_seconds) || 0)),
+      });
+    }
+  }
+  return { ok: true as const, repaired };
+}
+
 /** checkout.session.completed for Lexi Pro: add 150 minutes and start the reset clock. */
 export async function creditSubscriptionCheckoutMinutes(input: {
   userId: string;
@@ -470,6 +583,7 @@ export async function creditSubscriptionCheckoutMinutes(input: {
     source: "stripe",
     stripeEventId: input.stripeEventId,
     stripeSessionId: input.stripeSessionId,
+    mode: "add",
   });
   if (!credited.ok) return credited;
   if (credited.credited > 0) {
@@ -524,7 +638,7 @@ export type VoiceHoldOk = {
 
 export type VoiceHoldFail = {
   ok: false;
-  code: typeof OUT_OF_MINUTES_CODE | "busy" | "no_account" | "not_configured";
+  code: typeof OUT_OF_MINUTES_CODE | typeof SESSION_LIMIT_CODE | "busy" | "no_account" | "not_configured";
   error: string;
 };
 
@@ -676,11 +790,22 @@ export async function extendVoiceHold(
     return { ok: false, code: "busy", error: "Voice session expired. Start a new Call." };
   }
 
+  const elapsed = elapsedSecondsSince(open[0].started_at);
+  const limited = sessionLimitFail(elapsed);
+  if (limited) return limited;
+
   const balance = (await readVoiceSeconds(accountId)) ?? 0;
   if (balance <= 0) {
     return { ok: false, code: OUT_OF_MINUTES_CODE, error: OUT_OF_MINUTES_MESSAGE };
   }
-  const addSeconds = Math.min(VOICE_HOLD_SECONDS, balance);
+  const addSeconds = Math.min(VOICE_HOLD_SECONDS, balance, voiceSessionRemainingSeconds(elapsed));
+  if (addSeconds <= 0) {
+    return {
+      ok: false,
+      code: SESSION_LIMIT_CODE,
+      error: voiceSessionLimitError(elapsed) ?? SESSION_DURATION_MESSAGE,
+    };
+  }
 
   const rows = asRows<{
     id?: string;
@@ -781,7 +906,7 @@ export async function releaseVoiceHold(userId: string, voiceSessionId: string) {
   await db.query(
     `
     UPDATE voice_sessions
-    SET settled_at = now(), used_seconds = 0
+    SET settled_at = now(), used_seconds = 0, hold_seconds = 0
     WHERE id = $1::uuid AND lower(user_id) = lower($2) AND settled_at IS NULL
   `,
     [voiceSessionId, id],
@@ -797,7 +922,7 @@ export type SettleResult = {
   alreadySettled: boolean;
 };
 
-/** Hangup settle: used = min(elapsed, hold); refund hold - used. */
+/** Hangup settle: used = min(elapsed, hold); refund unused; zero reserved hold. */
 export async function settleVoiceSession(
   userId: string,
   voiceSessionId: string,
@@ -806,6 +931,9 @@ export async function settleVoiceSession(
   if (!id || !voiceSessionId) return null;
   const db = await ensureVoiceWalletSchema();
   if (!db) return null;
+
+  const account = await findAccountRow(id);
+  const accountId = account?.user_id ?? id;
 
   const existing = asRows<{
     hold_seconds?: number;
@@ -816,66 +944,136 @@ export async function settleVoiceSession(
       `
       SELECT hold_seconds, settled_at, started_at
       FROM voice_sessions
-      WHERE id = $1::uuid AND lower(user_id) = lower($2)
+      WHERE id = $2::uuid AND ${WALLET_USER_SQL}
       LIMIT 1
     `,
-      [voiceSessionId, id],
+      [id, voiceSessionId],
     ),
   );
   const row = existing[0];
   if (!row) return null;
   const holdSeconds = Math.max(0, Math.floor(Number(row.hold_seconds) || 0));
   if (row.settled_at) {
+    if (holdSeconds > 0) {
+      await db.query(
+        `
+        UPDATE voice_sessions
+        SET hold_seconds = 0
+        WHERE id = $2::uuid AND ${WALLET_USER_SQL} AND settled_at IS NOT NULL
+      `,
+        [id, voiceSessionId],
+      );
+    }
     return {
       usedSeconds: 0,
       refundedSeconds: 0,
-      holdSeconds,
-      voiceSeconds: (await readVoiceSeconds(id)) ?? 0,
+      holdSeconds: 0,
+      voiceSeconds: (await readVoiceSeconds(accountId)) ?? 0,
       alreadySettled: true,
     };
   }
 
-  const timed = asRows<{ used?: number; refund?: number }>(
+  const settled = asRows<{ used?: number; refund?: number; voice_seconds?: number }>(
     await db.query(
       `
+      WITH open_session AS (
+        SELECT
+          id,
+          hold_seconds,
+          LEAST(
+            hold_seconds,
+            GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)))::int)
+          ) AS used
+        FROM voice_sessions
+        WHERE id = $2::uuid
+          AND ${WALLET_USER_SQL}
+          AND settled_at IS NULL
+      ),
+      refunded AS (
+        UPDATE accounts
+        SET
+          voice_seconds = voice_seconds + GREATEST(0, s.hold_seconds - s.used),
+          updated_at = now()
+        FROM open_session s
+        WHERE accounts.user_id = $3
+        RETURNING accounts.voice_seconds
+      ),
+      cleared AS (
+        UPDATE voice_sessions vs
+        SET
+          settled_at = now(),
+          used_seconds = s.used,
+          hold_seconds = 0
+        FROM open_session s
+        WHERE vs.id = s.id AND vs.settled_at IS NULL
+        RETURNING vs.used_seconds
+      )
       SELECT
-        LEAST(
-          hold_seconds,
-          GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)))::int)
-        ) AS used,
-        hold_seconds - LEAST(
-          hold_seconds,
-          GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)))::int)
-        ) AS refund
-      FROM voice_sessions
-      WHERE id = $1::uuid
+        s.used,
+        GREATEST(0, s.hold_seconds - s.used) AS refund,
+        r.voice_seconds
+      FROM open_session s
+      LEFT JOIN refunded r ON true
+      LEFT JOIN cleared c ON true
     `,
-      [voiceSessionId],
+      [id, voiceSessionId, accountId],
     ),
   );
-  const usedSeconds = Math.max(0, Math.floor(Number(timed[0]?.used) || 0));
-  const refundedSeconds = Math.max(0, Math.floor(Number(timed[0]?.refund) || 0));
 
-  if (refundedSeconds > 0) {
-    await db.query(
-      `UPDATE accounts SET voice_seconds = voice_seconds + $1, updated_at = now() WHERE lower(user_id) = lower($2)`,
-      [refundedSeconds, id],
+  if (!settled[0]) {
+    const timed = asRows<{ used?: number; refund?: number }>(
+      await db.query(
+        `
+        SELECT
+          LEAST(
+            hold_seconds,
+            GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)))::int)
+          ) AS used,
+          hold_seconds - LEAST(
+            hold_seconds,
+            GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)))::int)
+          ) AS refund
+        FROM voice_sessions
+        WHERE id = $2::uuid AND ${WALLET_USER_SQL}
+      `,
+        [id, voiceSessionId],
+      ),
     );
+    const usedSeconds = Math.max(0, Math.floor(Number(timed[0]?.used) || 0));
+    const refundedSeconds = Math.max(0, Math.floor(Number(timed[0]?.refund) || 0));
+    if (refundedSeconds > 0) {
+      await db.query(
+        `UPDATE accounts SET voice_seconds = voice_seconds + $2, updated_at = now() WHERE user_id = $1`,
+        [accountId, refundedSeconds],
+      );
+    }
+    await db.query(
+      `
+      UPDATE voice_sessions
+      SET settled_at = now(), used_seconds = $2, hold_seconds = 0
+      WHERE id = $3::uuid AND ${WALLET_USER_SQL} AND settled_at IS NULL
+    `,
+      [id, usedSeconds, voiceSessionId],
+    );
+    return {
+      usedSeconds,
+      refundedSeconds,
+      holdSeconds: 0,
+      voiceSeconds: (await readVoiceSeconds(accountId)) ?? 0,
+      alreadySettled: false,
+    };
   }
-  await db.query(
-    `
-    UPDATE voice_sessions
-    SET settled_at = now(), used_seconds = $1
-    WHERE id = $2::uuid AND lower(user_id) = lower($3) AND settled_at IS NULL
-  `,
-    [usedSeconds, voiceSessionId, id],
-  );
+
+  const usedSeconds = Math.max(0, Math.floor(Number(settled[0]?.used) || 0));
+  const refundedSeconds = Math.max(0, Math.floor(Number(settled[0]?.refund) || 0));
 
   return {
     usedSeconds,
     refundedSeconds,
-    holdSeconds,
-    voiceSeconds: (await readVoiceSeconds(id)) ?? 0,
+    holdSeconds: 0,
+    voiceSeconds:
+      Math.max(0, Math.floor(Number(settled[0]?.voice_seconds) || 0)) ||
+      ((await readVoiceSeconds(accountId)) ?? 0),
     alreadySettled: false,
   };
 }
@@ -950,7 +1148,8 @@ export async function readOpenVoiceSession(userId: string, voiceSessionId: strin
   const elapsed = Number.isFinite(startedMs)
     ? Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
     : 0;
-  const remaining = Math.max(0, holdSeconds - elapsed);
+  if (voiceSessionLimitError(elapsed)) return null;
+  const remaining = Math.max(0, Math.min(holdSeconds - elapsed, voiceSessionRemainingSeconds(elapsed)));
   if (remaining < 5) return null;
   return {
     voiceSessionId: String(row.id),
@@ -962,15 +1161,14 @@ export async function readOpenVoiceSession(userId: string, voiceSessionId: strin
   };
 }
 
-/** Realtime WebSocket must stay on voice. Never put a text model in this URL. */
-export const REALTIME_VOICE_MODEL = "grok-voice-latest";
-export const REALTIME_VOICE_URL = `wss://api.x.ai/v1/realtime?model=${REALTIME_VOICE_MODEL}`;
+function elapsedSecondsSince(startedAt?: string | null) {
+  const startedMs = Date.parse(String(startedAt ?? ""));
+  if (!Number.isFinite(startedMs)) return 0;
+  return Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+}
 
-export function assertRealtimeVoiceModel(url: string) {
-  if (!url.includes(`model=${REALTIME_VOICE_MODEL}`)) {
-    throw new Error(`Realtime URL must use model=${REALTIME_VOICE_MODEL}`);
-  }
-  if (/grok-4-1-fast|grok-4\.|chat\/completions/i.test(url)) {
-    throw new Error("Text models must not be used on the realtime WebSocket URL");
-  }
+function sessionLimitFail(elapsedSeconds: number): VoiceHoldFail | null {
+  const error = voiceSessionLimitError(elapsedSeconds);
+  if (!error) return null;
+  return { ok: false, code: SESSION_LIMIT_CODE, error };
 }

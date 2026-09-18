@@ -7,6 +7,17 @@ import { DEFAULT_CHAT_MODEL, chatModelFromEnv } from "../lib/channels/parse.ts";
 import { VIDEO_CONTEXT_MODEL, VIDEO_CONTEXT_MAX_TOKENS } from "../lib/voice/video-context.ts";
 import { IOS_REALTIME_URL } from "../lib/ios/config.ts";
 import {
+  REALTIME_VOICE_MODEL,
+  REALTIME_VOICE_URL,
+  VOICE_MAX_SESSION_SECONDS,
+  VOICE_MAX_SESSION_SPEND_USD,
+  VOICE_USD_PER_AUDIO_MINUTE,
+  assertRealtimeVoiceModel,
+  estimateVoiceSessionSpendUsd,
+  voiceSessionLimitReason,
+  voiceSessionRemainingSeconds,
+} from "../lib/xai/realtime-model.ts";
+import {
   clearCallContinuityStore,
   readPreviousSessionId,
   readVoiceSessionStore,
@@ -15,23 +26,20 @@ import {
   writeVoiceSessionStore,
 } from "../lib/voice/persist.ts";
 
-const REALTIME_VOICE_MODEL = "grok-voice-latest";
-const REALTIME_VOICE_URL = `wss://api.x.ai/v1/realtime?model=${REALTIME_VOICE_MODEL}`;
-
-function assertRealtimeVoiceModel(url) {
-  if (!url.includes(`model=${REALTIME_VOICE_MODEL}`)) {
-    throw new Error(`Realtime URL must use model=${REALTIME_VOICE_MODEL}`);
-  }
-  if (/grok-4-1-fast|grok-4\.|chat\/completions/i.test(url)) {
-    throw new Error("Text models must not be used on the realtime WebSocket URL");
-  }
-}
-
-assert.equal(REALTIME_VOICE_MODEL, "grok-voice-latest");
-assert.equal(REALTIME_VOICE_URL, "wss://api.x.ai/v1/realtime?model=grok-voice-latest");
-assert.equal(IOS_REALTIME_URL, "wss://api.x.ai/v1/realtime?model=grok-voice-latest");
+assert.equal(REALTIME_VOICE_MODEL, "grok-voice-think-fast-1.0");
+assert.equal(REALTIME_VOICE_URL, "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0");
+assert.equal(IOS_REALTIME_URL, REALTIME_VOICE_URL);
+assert.equal(VOICE_MAX_SESSION_SECONDS, 30 * 60);
+assert.equal(VOICE_MAX_SESSION_SPEND_USD, 5);
+assert.equal(VOICE_USD_PER_AUDIO_MINUTE, 0.08);
+assert.equal(estimateVoiceSessionSpendUsd(60), 0.08);
+assert.equal(voiceSessionLimitReason(30 * 60 - 1), null);
+assert.equal(voiceSessionLimitReason(30 * 60), "duration");
+assert.equal(estimateVoiceSessionSpendUsd((VOICE_MAX_SESSION_SPEND_USD / VOICE_USD_PER_AUDIO_MINUTE) * 60), 5);
+assert.ok(voiceSessionRemainingSeconds(0) <= VOICE_MAX_SESSION_SECONDS);
 assertRealtimeVoiceModel(REALTIME_VOICE_URL);
 assertRealtimeVoiceModel(IOS_REALTIME_URL);
+assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=grok-voice-latest"));
 assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=grok-4-1-fast-reasoning"));
 assert.throws(() => assertRealtimeVoiceModel("wss://api.x.ai/v1/realtime?model=grok-4.6"));
 
@@ -157,6 +165,9 @@ assert.ok(balanceSrc.includes("requireAuthSessionUserId"), "balance uses shared 
 assert.ok(balanceSrc.includes('force-dynamic'), "balance is not statically cached");
 assert.ok(balanceSrc.includes("await connection()"), "balance reads live env and cookies");
 assert.ok(balanceSrc.includes("creditPaidCheckoutsForUser"), "balance credits paid packs before showing minutes");
+assert.ok(balanceSrc.includes("clampVoiceSecondsToSoldPacks"), "balance clamps displayed minutes to the largest sold pack");
+assert.ok(balanceSrc.includes("MAX_VOICE_PACK_SECONDS"), "balance knows Echo 3600 is the display cap");
+assert.ok(balanceSrc.includes("allotted seconds exceed largest sold pack"), "balance warns when leftover monthly is above Echo");
 assert.ok(balanceSrc.includes("no-store"), "balance forbids HTTP cache");
 assert.ok(!balanceSrc.includes("searchParams.get(\"userId\")"), "balance does not require a claimed query userId");
 
@@ -238,6 +249,8 @@ assert.ok(voiceSrc.includes("voice_seconds"), "voice_seconds column");
 assert.ok(voiceSrc.includes("monthly_minutes_reset_at"), "monthly reset column");
 assert.ok(voiceSrc.includes("VOICE_HOLD_SECONDS = 90"), "hold 90");
 assert.ok(voiceSrc.includes("VOICE_MIN_SECONDS = 30"), "min 30");
+assert.ok(voiceSrc.includes("SESSION_LIMIT_CODE"), "session duration/spend limit code");
+assert.ok(voiceSrc.includes("voiceSessionRemainingSeconds"), "extend hold is clipped by duration/spend");
 assert.ok(voiceSrc.includes("export async function extendVoiceHold"), "extend hold while leftover remains");
 assert.ok(voiceSrc.includes("sweepStaleVoiceSessions"), "sweeper");
 assert.ok(voiceSrc.includes("stripe_event_id"), "idempotent stripe event");
@@ -245,6 +258,14 @@ assert.ok(voiceSrc.includes("voice_credits_stripe_session_uidx"), "idempotent st
 assert.ok(voiceSrc.includes("creditSubscriptionCheckoutMinutes"), "subscription checkout credits 150 minutes");
 assert.ok(voiceSrc.includes("reverseReconciledSubscriptionCredits"), "can undo a reloaded subscription grant");
 assert.ok(voiceSrc.includes("capAllottedMinutesToPacks"), "wallet can snap down to purchased packs");
+assert.ok(voiceSrc.includes("repairVoiceSecondsToPurchasedPacks"), "one-time pack ledger repair drops leftover monthly grants");
+assert.ok(voiceSrc.includes("pack ledger repair failed"), "schema ensure still logs if the pack repair throws");
+assert.ok(voiceSrc.includes("repaired allotted minutes to purchased packs"), "repair logs when it snaps a wallet down");
+assert.ok(voiceSrc.includes("setToPack"), "pack credit SETS voice_seconds to the purchased pack");
+assert.ok(voiceSrc.includes('mode?: "add" | "set"'), "creditVoiceSeconds distinguishes SET packs from ADD subscription");
+assert.ok(voiceSrc.includes("hold_seconds = 0"), "hangup settle zeros the reserved hold");
+assert.ok(voiceSrc.includes("MAX_VOICE_PACK_SECONDS"), "wallet exports Echo as the largest sold pack");
+assert.ok(voiceSrc.includes("clampVoiceSecondsToSoldPacks"), "wallet can clamp displayed minutes to Echo");
 assert.ok(voiceSrc.includes("seconds IN ("), "pack cap uses IN (600, 1800, 3600) instead of a JS int[] bind");
 assert.ok(voiceSrc.includes("lower(user_id) IN ('ian', 'barleezy')"), "pack cap sums Ian and Barleezy credit rows");
 assert.ok(!voiceSrc.includes("ANY($2::int[])"), "pack cap does not bind a JS array as int[]");
@@ -281,6 +302,9 @@ assert.ok(sessionClient.includes('handlers.onError("Out of minutes.")'), "web su
 assert.ok(sessionClient.includes("/^out of minutes"), "402 copy not wrapped in session id");
 assert.ok(sessionClient.includes("extendHoldAndRemint"), "web rolls hold instead of hanging up at 90s");
 assert.ok(sessionClient.includes("extend: extend") || sessionClient.includes("extend: true"), "web sends extend");
+assert.ok(sessionClient.includes("model=${REALTIME_VOICE_MODEL}"), "web WS pins the versioned voice model");
+assert.ok(sessionClient.includes("model: REALTIME_VOICE_MODEL"), "web session.update pins the model");
+assert.ok(sessionClient.includes("attempt(4)"), "web settle retries after a failed hangup post");
 assert.ok(homeSrc.includes("? error"), "Out of minutes is not hidden by rehearsal copy");
 assert.ok(homeSrc.includes("${callLeftSeconds}s left"), "live Call shows remaining time");
 
@@ -290,7 +314,37 @@ const iosClient = readFileSync(
 );
 assert.ok(iosClient.includes('"Out of minutes."'), "iOS surfaces Out of minutes.");
 assert.ok(iosClient.includes("extendRealtimeSession"), "iOS can extend the hold");
+assert.ok(iosClient.includes('static let model = "grok-voice-think-fast-1.0"'), "iOS hardcodes the pinned voice model");
+assert.ok(iosClient.includes("maxSpendUsd = 5"), "iOS spend guard is $5");
+assert.ok(iosClient.includes("maxDuration: TimeInterval = 30 * 60"), "iOS duration guard is 30 minutes");
+assert.ok(iosClient.includes("for attempt in 1...5"), "iOS settle retries on disconnect");
+assert.ok(iosClient.includes("alreadySettled"), "iOS settle treats a second post as success");
 assert.ok(realtimeSrc.includes("extendVoiceHold"), "web mint can extend");
+assert.ok(realtimeSrc.includes("SESSION_LIMIT_CODE"), "web extend honors the session limit");
+
+const mintSrc = readFileSync(new URL("../lib/xai/client-secret.ts", import.meta.url), "utf8");
+assert.ok(mintSrc.includes("REALTIME_VOICE_MODEL"), "mint binds the pinned voice model");
+assert.ok(mintSrc.includes('effort: "none"'), "mint pins reasoning off so the secret cannot default to high");
+
+const iosSessionSrc = readFileSync(new URL("../lib/ios/session.ts", import.meta.url), "utf8");
+assert.ok(iosSessionSrc.includes("model: REALTIME_VOICE_MODEL"), "iOS session.update pins the model");
+
+const iosController = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/App/LexiAppController.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(iosController.includes("VoiceRealtimeConfig.url"), "iOS connect ignores a server URL that could escalate");
+assert.ok(iosController.includes("pinnedSessionUpdate"), "iOS session start overwrites model");
+assert.ok(iosController.includes("settlePendingVoiceSessions"), "iOS settles leftover holds on launch and hangup");
+assert.ok(iosController.includes("applySessionLimits"), "iOS arms duration and spend guards");
+assert.ok(iosController.includes("realtimeDidDisconnect"), "iOS settles on socket death, not only End");
+assert.ok(!iosController.includes("grok-voice-latest"), "iOS controller does not fall back to the latest alias");
+
+const accountSrc = readFileSync(
+  new URL("../ios/TalkToLexi/TalkToLexi/Features/Auth/AccountStore.swift", import.meta.url),
+  "utf8",
+);
+assert.ok(accountSrc.includes("pendingVoiceSessionIds"), "iOS persists unsettled voice sessions across kills");
 
 const stripeSrc = readFileSync(new URL("../lib/wallet/stripe.ts", import.meta.url), "utf8");
 assert.ok(stripeSrc.includes("constructEvent"), "webhook verifies signature");
@@ -317,6 +371,8 @@ assert.ok(stripeSrc.includes("session.metadata?.pack"), "webhook reads metadata.
 assert.ok(stripeSrc.includes("resolveVoicePackFromCheckout"), "webhook falls back to Stripe price id");
 assert.ok(stripeSrc.includes("price_id: input.priceId"), "checkout stamps price_id metadata");
 assert.ok(stripeSrc.includes("creditPaidCheckoutsForUser"), "page load can credit paid Checkout sessions");
+assert.ok(stripeSrc.includes('mode: "set"'), "pack checkout SETS allotted minutes to the purchased pack");
+assert.ok(stripeSrc.includes("(left.created ?? 0) - (right.created ?? 0)"), "reconcile applies older packs before the latest SET");
 assert.ok(stripeSrc.includes("isSubscriptionCheckout(session)) continue"), "page load does not reload subscription minutes");
 assert.ok(stripeSrc.includes("reverseReconciledSubscriptionCredits"), "page load undoes a reloaded subscription grant");
 assert.ok(stripeSrc.includes("capAllottedMinutesToPacks"), "page load caps allotted minutes to purchased packs");
