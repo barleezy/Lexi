@@ -1,4 +1,5 @@
 import AVFoundation
+import ReplayKit
 import UIKit
 
 enum CameraFacing: String {
@@ -303,5 +304,108 @@ final class CameraController: NSObject, ObservableObject {
         default:
             return .portrait
         }
+    }
+}
+
+@MainActor
+final class ScreenShareController: ObservableObject {
+    @Published private(set) var isOn = false
+    @Published var hint: String?
+
+    var onFrame: ((String) -> Void)?
+    var onShareChange: ((Bool) -> Void)?
+
+    private let pump = ScreenFramePump()
+
+    func start() {
+        let recorder = RPScreenRecorder.shared()
+        guard recorder.isAvailable, recorder.isRecording == false else {
+            hint = recorder.isRecording ? "Screen recording is already running." : "Screen recording is not available."
+            return
+        }
+        hint = nil
+        pump.setHandler { [weak self] dataUrl in
+            Task { @MainActor in
+                self?.onFrame?(dataUrl)
+            }
+        }
+        recorder.startCapture(handler: { [pump] sample, type, error in
+            guard error == nil, type == .video else { return }
+            pump.consume(sample)
+        }, completionHandler: { [weak self] error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    self.isOn = false
+                    self.hint = error.localizedDescription
+                    self.pump.setHandler(nil)
+                    return
+                }
+                let wasOn = self.isOn
+                self.isOn = true
+                if !wasOn {
+                    self.onShareChange?(true)
+                }
+            }
+        })
+    }
+
+    func stop(notify: Bool = true) {
+        let wasOn = isOn
+        isOn = false
+        hint = nil
+        pump.setHandler(nil)
+        let recorder = RPScreenRecorder.shared()
+        guard recorder.isRecording else {
+            if wasOn && notify { onShareChange?(false) }
+            return
+        }
+        recorder.stopCapture { _ in }
+        if wasOn && notify {
+            onShareChange?(false)
+        }
+    }
+}
+
+private final class ScreenFramePump: @unchecked Sendable {
+    private var onJPEG: ((String) -> Void)?
+    private var lastSent: TimeInterval = 0
+    private let minInterval: TimeInterval = 0.25
+    private let maxEdge: CGFloat = 960
+    private let context = CIContext(options: [.useSoftwareRenderer: false])
+    private let lock = NSLock()
+
+    func setHandler(_ handler: ((String) -> Void)?) {
+        lock.lock()
+        onJPEG = handler
+        if handler == nil { lastSent = 0 }
+        lock.unlock()
+    }
+
+    func consume(_ sample: CMSampleBuffer) {
+        let now = CACurrentMediaTime()
+        lock.lock()
+        let due = now - lastSent >= minInterval
+        if due { lastSent = now }
+        let handler = onJPEG
+        lock.unlock()
+        guard due, let handler, let dataUrl = jpegDataURL(from: sample) else { return }
+        handler(dataUrl)
+    }
+
+    private func jpegDataURL(from sample: CMSampleBuffer) -> String? {
+        guard let pixel = CMSampleBufferGetImageBuffer(sample) else { return nil }
+        var image = CIImage(cvPixelBuffer: pixel)
+        let extent = image.extent
+        let longest = max(extent.width, extent.height)
+        guard longest > 0 else { return nil }
+        let scale = min(1, maxEdge / longest)
+        if scale < 1 {
+            image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+        let bounds = image.extent.integral
+        guard let cg = context.createCGImage(image, from: bounds) else { return nil }
+        guard let data = UIImage(cgImage: cg).jpegData(compressionQuality: 0.55) else { return nil }
+        return "data:image/jpeg;base64,\(data.base64EncodedString())"
     }
 }

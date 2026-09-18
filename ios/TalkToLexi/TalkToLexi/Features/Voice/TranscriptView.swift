@@ -4,18 +4,17 @@ struct TranscriptView: View {
     var rows: [TranscriptRow]
 
     var body: some View {
-        if rows.count > 1 {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    ForEach(rows.suffix(6)) { row in
-                        Text(row.role == "user" ? "You: \(row.text)" : row.text)
-                            .font(.system(size: 13))
-                            .foregroundStyle(row.role == "user" ? LexiTheme.muted : Color.white.opacity(0.86))
-                            .frame(maxWidth: .infinity, alignment: row.role == "user" ? .trailing : .leading)
-                    }
-                }
+        LazyVStack(alignment: .leading, spacing: 12) {
+            ForEach(rows) { row in
+                Text(row.text)
+                    .font(.system(size: 16))
+                    .foregroundStyle(row.role == "user" ? Color.white.opacity(0.92) : Color.white.opacity(0.86))
+                    .multilineTextAlignment(row.role == "user" ? .trailing : .leading)
+                    .frame(maxWidth: .infinity, alignment: row.role == "user" ? .trailing : .leading)
+                    .padding(.horizontal, 16)
+                    .id(row.id)
             }
-            .frame(maxHeight: 96)
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }

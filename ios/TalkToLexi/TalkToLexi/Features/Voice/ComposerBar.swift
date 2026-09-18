@@ -7,6 +7,7 @@ struct ComposerBar: View {
     var live: Bool
     var phase: VoicePhase
     var focused: FocusState<Bool>.Binding
+    var idlePlaceholder: String = "Message Lexi"
     var onSubmit: () -> Void
     var onPhoto: (String) -> Void
 
@@ -31,6 +32,7 @@ struct ComposerBar: View {
                 .focused(focused)
                 .submitLabel(hasText ? .send : .go)
                 .onSubmit(onSubmit)
+                .accessibilityLabel(idlePlaceholder)
             Button(action: onSubmit) {
                 composerGlyph
                     .frame(width: 36, height: 36)
@@ -40,8 +42,10 @@ struct ComposerBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(LexiTheme.panel, in: Capsule())
-        .overlay(Capsule().stroke(LexiTheme.stroke, lineWidth: 1))
+        .frame(minHeight: 52, maxHeight: 112, alignment: .center)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(LexiTheme.panel, in: boxShape)
+        .overlay(boxShape.stroke(LexiTheme.stroke, lineWidth: 1))
         .onChange(of: picked) { item in
             guard let item else { return }
             Task { await loadPhoto(item) }
@@ -52,8 +56,12 @@ struct ComposerBar: View {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var boxShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+    }
+
     private var placeholder: String {
-        live ? (LexiTheme.phaseHints[phase] ?? "Talk to Lexi") : "Talk to Lexi"
+        live ? (LexiTheme.phaseHints[phase] ?? idlePlaceholder) : idlePlaceholder
     }
 
     @ViewBuilder
