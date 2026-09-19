@@ -345,6 +345,20 @@ assert.ok(xaiTopupSrc.includes("constructEvent"), "xAI webhook verifies Stripe s
 assert.ok(xaiTopupSrc.includes("stripeWebhookSecret"), "xAI constructEvent uses shared Stripe signing secret");
 assert.ok(!xaiTopupSrc.includes("STRIPE_XAI_WEBHOOK_SECRET"), "xAI top-up does not use a separate secret name");
 
+const xaiTopupCli = readFileSync(new URL("../scripts/xai-prepaid-topup.py", import.meta.url), "utf8");
+assert.ok(xaiTopupCli.includes("XAI_MANAGEMENT_API_KEY"), "CLI reads management key env");
+assert.ok(xaiTopupCli.includes("XAI_TEAM_ID"), "CLI reads team id env");
+assert.ok(xaiTopupCli.includes("--top-up"), "CLI gates POST on --top-up");
+assert.ok(xaiTopupCli.includes("def convert("), "CLI converts remaining minutes");
+assert.ok(xaiTopupCli.includes("SCRIPT_USD_PER_MINUTE = 0.10"), "CLI rate is script-local 0.10");
+assert.ok(xaiTopupCli.includes('if __name__ == "__main__"'), "CLI is runnable");
+assert.ok(!/from secrets import/.test(xaiTopupCli), "CLI does not import a secrets module");
+assert.ok(!/Bearer ["']/.test(xaiTopupCli), "CLI does not hardcode a Bearer token");
+assert.ok(
+  !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(xaiTopupCli),
+  "CLI does not hardcode a team UUID",
+);
+
 const sessionSrc = readFileSync(new URL("../lib/auth/session.ts", import.meta.url), "utf8");
 assert.ok(sessionSrc.includes('export const LEXI_SESSION_COOKIE = "lexi_session"'), "session cookie");
 assert.ok(sessionSrc.includes("requireAuthSessionUserId"), "auth helper");
